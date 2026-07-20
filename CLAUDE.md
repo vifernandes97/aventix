@@ -53,7 +53,9 @@
 - **Termo:** aceite digital próprio (scroll-to-end + captura + e-mail). Sem plataforma externa.
 - **Notificações:** **e-mail via Resend no MVP.** WhatsApp (Evolution) pós go-live.
 - **Calendário:** **nativo** (visão do admin lida do Postgres). Google Calendar = espelho opcional pós go-live.
-- **Deploy:** Docker Compose no VPS Hostinger (4GB), atrás do proxy existente (ao lado de n8n/Evolution). Postgres em rede privada, nunca exposto.
+- **Deploy:** VPS Hostinger (4GB) gerenciado via **Easypanel** — build a partir do `Dockerfile` do repo (não `docker-compose.yml` em produção; esse arquivo serve só para desenvolvimento local). Easypanel administra Traefik, domínio e SSL (Let's Encrypt) automaticamente. Postgres como serviço isolado do Easypanel, sem porta pública — mesmo padrão já usado por n8n/Evolution na mesma VPS.
+
+> **Nota de deploy (Easypanel):** o Easypanel injeta sua própria variável `PORT` em runtime, que sobrescreve o `PORT=3000` do Dockerfile. O container roda de fato na porta que o Easypanel decidir (hoje: 80) — as rotas de domínio no Easypanel devem apontar para a porta real do log de boot do serviço, não para o valor fixado no Dockerfile.
 
 ### Fonte da verdade
 
