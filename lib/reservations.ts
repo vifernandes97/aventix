@@ -6,10 +6,11 @@
 // sem o UPDATE correspondente em `reservation_resources` deixa a vaga travada
 // (ou libera vaga que deveria estar travada) — overbooking silencioso.
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 
 import { db } from './db/client';
 import {
+  customers,
   reservationPayments,
   reservationPaymentState,
   reservationResources,
@@ -39,6 +40,31 @@ export class ReservationNotFoundError extends Error {
     super(`Reserva ${reservationId} nao encontrada no tenant ${tenantId}.`);
     this.name = 'ReservationNotFoundError';
     this.reservationId = reservationId;
+  }
+}
+
+export class InvalidPhoneError extends Error {
+  readonly raw: string;
+  readonly digits: string;
+
+  constructor(raw: string, digits: string) {
+    super(
+      `Telefone invalido: ${JSON.stringify(raw)} -> ${digits.length} digito(s) ` +
+        `(${JSON.stringify(digits)}). Esperado 10 (fixo: DDD + 8) ou 11 (celular: DDD + 9).`,
+    );
+    this.name = 'InvalidPhoneError';
+    this.raw = raw;
+    this.digits = digits;
+  }
+}
+
+export class InvalidCustomerDataError extends Error {
+  readonly field: string;
+
+  constructor(field: string, reason: string) {
+    super(`Dado invalido do cliente em '${field}': ${reason}.`);
+    this.name = 'InvalidCustomerDataError';
+    this.field = field;
   }
 }
 
@@ -304,4 +330,127 @@ async function applyRecalcReservationPayment(
     // GET /api/reservations/{id}/status (secao 7.1)
     balanceCents: Math.max(0, totalPriceCents - amountPaidCents),
   };
+}
+
+// -- findOrCreateCustomer ----------------------------------------------------
+
+export type Customer = typeof customers.$inferSelect;
+
+export type FindOrCreateCustomerInput = {
+  name: string;
+  phone: string;
+  email?: string | null;
+  cpf?: string | null;
+  birthdate?: string | null; // 'YYYY-MM-DD'
+};
+
+/**
+ * Normaliza um telefone brasileiro para a forma canonica de digitos.
+ *
+ * >>> TODO acesso a `customers.phone` — leitura OU escrita, aqui ou em qualquer
+ * >>> codigo futuro — tem que passar por esta funcao. <<<
+ * O telefone e a chave de identificacao do cliente (UNIQUE (tenant_id, phone),
+ * secao 4.4). Se a busca do admin consultar o que o usuario digitou sem
+ * normalizar, ela nao acha o cliente gravado normalizado; e se uma reserva
+ * gravar sem normalizar, a MESMA pessoa vira DOIS clientes e o historico se
+ * parte — sem erro nenhum aparecendo.
+ *
+ * Regras:
+ *  1. mantem so digitos;
+ *  2. remove o prefixo '55' de pais APENAS quando o resultado tem 12 ou 13
+ *     digitos. A checagem de comprimento nao e detalhe: 55 tambem e DDD valido
+ *     (Santa Maria/RS), e (55) 9999-8888 -> '5599998888' (10 digitos) precisa
+ *     sobreviver inteiro. Remover '55' incondicionalmente o transformaria em
+ *     '99998888', um numero diferente;
+ *  3. exige 10 digitos (fixo: DDD + 8) ou 11 (celular: DDD + 9);
+ *  4. NAO tenta adivinhar o nono digito — 10 digitos pode ser um fixo legitimo.
+ *
+ * @throws {InvalidPhoneError} comprimento fora de 10/11 digitos.
+ */
+export function normalizePhone(raw: string): string {
+  const digits = (raw ?? '').replace(/\D/g, '');
+
+  const withoutCountry =
+    (digits.length === 12 || digits.length === 13) && digits.startsWith('55')
+      ? digits.slice(2)
+      : digits;
+
+  if (withoutCountry.length !== 10 && withoutCountry.length !== 11) {
+    throw new InvalidPhoneError(raw, withoutCountry);
+  }
+
+  return withoutCountry;
+}
+
+/** trim + string vazia vira null (para o COALESCE preservar o valor gravado). */
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Find-or-create de cliente por (tenant_id, phone) — secao 4.6 e caso de borda 17.
+ *
+ * Usa UPSERT (ON CONFLICT), nao SELECT-depois-INSERT: dois pedidos simultaneos
+ * com o mesmo telefone passariam ambos por um SELECT sem encontrar nada e o
+ * segundo INSERT estouraria no UNIQUE. O upsert resolve numa statement so,
+ * atomicamente, sem tratamento de excecao.
+ *
+ * No conflito (cliente recorrente), `name` e sempre atualizado; `email`, `cpf` e
+ * `birthdate` so sao sobrescritos quando vem valor — COALESCE com precedencia
+ * do novo. Uma reserva que nao informou CPF NUNCA apaga o CPF ja cadastrado.
+ *
+ * @returns `created: true` se a linha foi inserida agora, `false` se ja existia.
+ * @throws {InvalidPhoneError} telefone fora de 10/11 digitos.
+ * @throws {InvalidCustomerDataError} nome vazio.
+ */
+export async function findOrCreateCustomer(
+  data: FindOrCreateCustomerInput,
+  tx?: Transaction,
+): Promise<{ customer: Customer; created: boolean }> {
+  if (tx) return applyFindOrCreateCustomer(tx, data);
+  return db.transaction((ownTx) => applyFindOrCreateCustomer(ownTx, data));
+}
+
+/**
+ * Corpo unico da operacao. Recebe SEMPRE um executor transacional.
+ */
+async function applyFindOrCreateCustomer(
+  tx: Transaction,
+  data: FindOrCreateCustomerInput,
+): Promise<{ customer: Customer; created: boolean }> {
+  const tenantId = getTenantId();
+
+  const name = data.name?.trim();
+  if (!name) throw new InvalidCustomerDataError('name', 'obrigatorio e nao pode ser vazio');
+
+  // Normaliza ANTES do upsert: e o valor normalizado que vai para o UNIQUE.
+  const phone = normalizePhone(data.phone);
+
+  const email = blankToNull(data.email);
+  const cpf = blankToNull(data.cpf);
+  const birthdate = blankToNull(data.birthdate);
+
+  // xmax = 0 distingue linha INSERIDA de linha ATUALIZADA no mesmo RETURNING:
+  // numa insercao o xmax da tupla e zero; quando o DO UPDATE dispara, ele
+  // carrega o id da transacao que a atualizou. Resolve sem SELECT extra e sem
+  // janela de corrida entre a leitura e a escrita.
+  const [row] = await tx
+    .insert(customers)
+    .values({ tenantId, name, phone, email, cpf, birthdate })
+    .onConflictDoUpdate({
+      target: [customers.tenantId, customers.phone],
+      set: {
+        name: sql`excluded.name`,
+        // precedencia do novo valor; se veio null, preserva o gravado
+        email: sql`coalesce(excluded.email, ${customers.email})`,
+        cpf: sql`coalesce(excluded.cpf, ${customers.cpf})`,
+        birthdate: sql`coalesce(excluded.birthdate, ${customers.birthdate})`,
+        // created_at NAO entra: a data de cadastro do cliente nao se reescreve
+      },
+    })
+    .returning({ ...getTableColumns(customers), created: sql<boolean>`(xmax = 0)` });
+
+  const { created, ...customer } = row;
+  return { customer, created };
 }
