@@ -144,6 +144,32 @@ export const blackouts = pgTable('blackouts', {
   createdAt: tstz('created_at').notNull().defaultNow(),
 });
 
+// Excecoes a grade recorrente para uma data especifica. Cobre liberar
+// (feriado em dia de semana: closed=false + horario) e bloquear (recesso:
+// closed=true) numa unica peca. Precedencia sobre operating_hours (secao 6).
+export const scheduleExceptions = pgTable(
+  'schedule_exceptions',
+  {
+    id: serial('id').primaryKey(),
+    tenantId: integer('tenant_id')
+      .notNull()
+      .default(1)
+      .references(() => tenants.id),
+    date: date('date').notNull(),
+    opens: time('opens'), // NULL se closed=true
+    closes: time('closes'), // NULL se closed=true
+    closed: boolean('closed').notNull().default(false),
+    reason: text('reason'), // "Recesso de fim de ano", "Feriado - abre"
+  },
+  (t) => [
+    unique('schedule_exceptions_tenant_date_unique').on(t.tenantId, t.date),
+    check(
+      'schedule_exceptions_closed_check',
+      sql`${t.closed} = true OR (${t.opens} IS NOT NULL AND ${t.closes} IS NOT NULL AND ${t.closes} > ${t.opens})`,
+    ),
+  ],
+);
+
 // -- 4.4 cliente, reserva, alocacao e participantes -------------------------
 
 export const customers = pgTable(
