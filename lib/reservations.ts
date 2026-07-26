@@ -9,11 +9,20 @@
 import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from './db/client';
-import { reservationResources, reservations, reservationStatus } from './db/schema';
+import {
+  reservationPayments,
+  reservationPaymentState,
+  reservationResources,
+  reservations,
+  reservationStatus,
+} from './db/schema';
 import { getTenantId } from './tenant';
 
 /** Status de reserva, derivado do enum do Drizzle — nunca string solta. */
 export type ReservationStatus = (typeof reservationStatus.enumValues)[number];
+
+/** Estado financeiro AGREGADO da reserva, derivado do enum do Drizzle. */
+export type ReservationPaymentState = (typeof reservationPaymentState.enumValues)[number];
 
 /**
  * Executor transacional do Drizzle. Extraido da assinatura de db.transaction
@@ -166,5 +175,133 @@ async function applyReservationStatus(
     previousStatus,
     status: newStatus,
     resourceRowsUpdated: updatedResources.length,
+  };
+}
+
+// -- recalcReservationPayment ------------------------------------------------
+
+export type RecalcReservationPaymentResult = {
+  reservationId: string;
+  amountPaidCents: number;
+  previousPaymentState: ReservationPaymentState;
+  paymentState: ReservationPaymentState;
+  totalPriceCents: number;
+  /** saldo em aberto: max(0, total - pago). Nunca negativo. */
+  balanceCents: number;
+};
+
+/**
+ * Classificacao do estado financeiro agregado (secao 4.6).
+ *
+ * O `>=` do 'settled' e proposital: pagamento a maior (troco, valor digitado
+ * errado no receiveInCash) e reserva quitada, nao um estado de erro. Quem
+ * precisa tratar excedente olha amountPaidCents contra totalPriceCents.
+ */
+function classifyPaymentState(
+  amountPaidCents: number,
+  totalPriceCents: number,
+): ReservationPaymentState {
+  if (amountPaidCents === 0) return 'pending';
+  if (amountPaidCents < totalPriceCents) return 'partial';
+  return 'settled';
+}
+
+/**
+ * Recalcula `amount_paid_cents` e `payment_state` da reserva a partir das linhas
+ * de `reservation_payments` (secao 4.6). Funcao irma de setReservationStatus:
+ * aquela governa a VAGA, esta governa o DINHEIRO.
+ *
+ * NAO altera `reservations.status`. Confirmar reserva e responsabilidade
+ * exclusiva de setReservationStatus; o webhook chama as duas em sequencia
+ * quando for o caso (secao 8.2, passo 6). Misturar as duas furaria a regra
+ * inviolavel da secao 4.6.
+ *
+ * Idempotente por construcao: recalcula a partir da verdade (as linhas de
+ * reservation_payments), nunca acumula sobre o valor anterior. Chamar duas
+ * vezes seguidas sem mudanca nos pagamentos da exatamente o mesmo resultado.
+ *
+ * @param tx  Executor transacional opcional. Passe SEMPRE quando ja estiver
+ *            dentro de uma transacao — o recalculo tem que acontecer na MESMA
+ *            transacao em que o pagamento mudou de estado (secao 4.6).
+ *
+ * @throws {ReservationNotFoundError} reserva inexistente (ou de outro tenant).
+ */
+export async function recalcReservationPayment(
+  reservationId: string,
+  tx?: Transaction,
+): Promise<RecalcReservationPaymentResult> {
+  if (tx) return applyRecalcReservationPayment(tx, reservationId);
+  return db.transaction((ownTx) => applyRecalcReservationPayment(ownTx, reservationId));
+}
+
+/**
+ * Corpo unico da operacao. Recebe SEMPRE um executor transacional.
+ */
+async function applyRecalcReservationPayment(
+  tx: Transaction,
+  reservationId: string,
+): Promise<RecalcReservationPaymentResult> {
+  const tenantId = getTenantId();
+
+  // 1. Trava a linha da reserva ate o fim da transacao.
+  //    O webhook (secao 8.2) e o job de reconciliacao (secao 8-B) podem
+  //    processar o mesmo pagamento ao mesmo tempo — o job existe justamente
+  //    para cobrir quando o webhook falha, entao sobreposicao e esperada, nao
+  //    acidente. Sem a trava, dois recalculos concorrentes gravariam valores
+  //    inconsistentes. Note que a leitura da soma vem DEPOIS da trava.
+  const [current] = await tx
+    .select({
+      id: reservations.id,
+      totalPriceCents: reservations.totalPriceCents,
+      paymentState: reservations.paymentState,
+    })
+    .from(reservations)
+    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, tenantId)))
+    .for('update');
+
+  // 2. Reserva inexistente: lanca, nunca retorna null.
+  if (!current) throw new ReservationNotFoundError(reservationId, tenantId);
+
+  // 3. Soma no BANCO, nao no Node: nao ha razao para trazer as linhas so para
+  //    somar. Somam apenas os pagamentos 'paid' — 'pending', 'cancelled' e
+  //    'refunded' ficam de fora. Os tres kinds ('full', 'deposit', 'balance')
+  //    contam igualmente quando pagos: dinheiro recebido e dinheiro recebido.
+  //    coalesce cobre "nenhuma linha paga" -> 0, nunca null.
+  //    O ::int evita o bigint que SUM() retorna (que o node-postgres entregaria
+  //    como STRING) — centavos continuam inteiros de ponta a ponta, sem float.
+  const [paid] = await tx
+    .select({
+      amountPaidCents: sql<number>`coalesce(sum(${reservationPayments.amountCents}), 0)::int`,
+    })
+    .from(reservationPayments)
+    .where(
+      and(
+        eq(reservationPayments.reservationId, reservationId),
+        eq(reservationPayments.state, 'paid'),
+      ),
+    );
+
+  const amountPaidCents = paid.amountPaidCents;
+  const totalPriceCents = current.totalPriceCents;
+  const previousPaymentState = current.paymentState;
+
+  // 4. Classifica contra o total da reserva (secao 4.6).
+  const paymentState = classifyPaymentState(amountPaidCents, totalPriceCents);
+
+  // 5. Grava o agregado. `status` NAO entra neste UPDATE — de proposito.
+  await tx
+    .update(reservations)
+    .set({ amountPaidCents, paymentState })
+    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, tenantId)));
+
+  return {
+    reservationId,
+    amountPaidCents,
+    previousPaymentState,
+    paymentState,
+    totalPriceCents,
+    // saldo em aberto do calendario do admin (secao 11.1) e do
+    // GET /api/reservations/{id}/status (secao 7.1)
+    balanceCents: Math.max(0, totalPriceCents - amountPaidCents),
   };
 }
