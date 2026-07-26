@@ -54,6 +54,26 @@ export const participantRole = pgEnum('participant_role', ['operator', 'passenge
 
 export const priceMode = pgEnum('price_mode', ['per_resource']); // 'per_person' NAO implementar
 
+// rev 6 — pagamento com sinal (secao 4.1)
+
+// Como a experiencia e vendida: 100% no ato, ou sinal agora + saldo no dia.
+export const paymentMode = pgEnum('payment_mode', ['full', 'deposit']);
+
+// Papel de cada cobranca dentro da reserva.
+// full = pagamento unico | deposit = sinal | balance = saldo cobrado no dia.
+export const paymentKind = pgEnum('payment_kind', ['full', 'deposit', 'balance']);
+
+// Estado de UMA cobranca (reservation_payments.state).
+export const paymentState = pgEnum('payment_state', ['pending', 'paid', 'cancelled', 'refunded']);
+
+// Estado financeiro AGREGADO da reserva (derivado de reservation_payments —
+// nunca escrito na mao; so via recalcReservationPayment, secao 4.6).
+export const reservationPaymentState = pgEnum('reservation_payment_state', [
+  'pending',
+  'partial',
+  'settled',
+]);
+
 // -- 4.2 tenant e configuracao ---------------------------------------------
 
 export const tenants = pgTable('tenants', {
@@ -105,12 +125,27 @@ export const experiences = pgTable(
     bufferMinutes: integer('buffer_minutes').notNull().default(15),
     priceMode: priceMode('price_mode').notNull().default('per_resource'),
     priceCents: integer('price_cents').notNull(), // por recurso
+
+    // rev 6: modo de pagamento por experiencia (secao 4.3).
+    // Valor do sinal e SEMPRE calculado no servidor (secao 4.6):
+    // deposit = round(total * deposit_percent/100) ou deposit_fixed_cents.
+    paymentMode: paymentMode('payment_mode').notNull().default('full'),
+    depositPercent: integer('deposit_percent'), // usado se payment_mode='deposit'
+    depositFixedCents: integer('deposit_fixed_cents'), // alternativa ao percentual
+
     active: boolean('active').notNull().default(true),
   },
   (t) => [
     check('experiences_duration_check', sql`${t.durationMinutes} > 0`),
     check('experiences_buffer_check', sql`${t.bufferMinutes} >= 0`),
     check('experiences_price_check', sql`${t.priceCents} >= 0`),
+    check('experiences_deposit_percent_check', sql`${t.depositPercent} BETWEEN 1 AND 99`),
+    check('experiences_deposit_fixed_check', sql`${t.depositFixedCents} > 0`),
+    // modo 'deposit' exige EXATAMENTE um dos dois (percentual XOR fixo)
+    check(
+      'experiences_deposit_mode_check',
+      sql`${t.paymentMode} = 'full' OR (${t.depositPercent} IS NOT NULL) <> (${t.depositFixedCents} IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -211,6 +246,13 @@ export const reservations = pgTable(
 
     channel: text('channel'), // origem da venda: NULL = direto; ex. 'aventurando'
 
+    // rev 6: estado financeiro AGREGADO. As cobrancas em si vivem em
+    // reservation_payments; estes dois campos sao DERIVADOS e so podem ser
+    // escritos por recalcReservationPayment, na mesma transacao (secao 4.6).
+    paymentMode: paymentMode('payment_mode').notNull(), // snapshot de como foi vendido; sem default
+    amountPaidCents: integer('amount_paid_cents').notNull().default(0),
+    paymentState: reservationPaymentState('payment_state').notNull().default('pending'),
+
     termoVersion: text('termo_version').notNull(),
     termoAcceptedAt: tstz('termo_accepted_at').notNull(),
     termoAcceptedIp: text('termo_accepted_ip'),
@@ -219,20 +261,12 @@ export const reservations = pgTable(
     status: reservationStatus('status').notNull().default('pending_payment'),
     holdExpiresAt: tstz('hold_expires_at'),
 
-    paymentMethod: paymentMethod('payment_method').notNull().default('pix'),
-    paymentId: text('payment_id'),
-    externalReference: text('external_reference'), // = reservations.id, enviado ao Asaas
-
     createdAt: tstz('created_at').notNull().defaultNow(),
     confirmedAt: tstz('confirmed_at'),
     cancelledAt: tstz('cancelled_at'),
   },
   (t) => [
     check('reservations_resources_needed_check', sql`${t.resourcesNeeded} >= 1`),
-    // idempotencia do webhook no banco (secao 4.6)
-    uniqueIndex('idx_reservations_payment')
-      .on(t.paymentId)
-      .where(sql`${t.paymentId} IS NOT NULL`),
     index('idx_reservations_status_hold').on(t.status, t.holdExpiresAt),
     index('idx_reservations_start').on(t.tenantId, t.startAt),
     index('idx_reservations_customer').on(t.customerId),
@@ -264,7 +298,49 @@ export const participants = pgTable('participants', {
   documentNumber: text('document_number'), // exigido p/ operator conforme settings (validacao no servidor)
 });
 
-// -- 4.5 agenda compartilhada (parceiros) -----------------------------------
+// -- 4.5 pagamentos da reserva (rev 6) --------------------------------------
+//
+// Uma reserva tem 1 pagamento (modo 'full') ou 2 (modo 'deposit': sinal + saldo).
+// O 'balance' tem ciclo proprio e NUNCA afeta reservations.status (secao 5.3):
+// a reserva confirma com o sinal pago; saldo em aberto nao bloqueia nem libera vaga.
+export const reservationPayments = pgTable(
+  'reservation_payments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reservationId: uuid('reservation_id')
+      .notNull()
+      .references(() => reservations.id, { onDelete: 'cascade' }),
+
+    kind: paymentKind('kind').notNull(), // full | deposit | balance
+    amountCents: integer('amount_cents').notNull(), // calculado no servidor (secao 4.6)
+    method: paymentMethod('method').notNull().default('pix'),
+    state: paymentState('state').notNull().default('pending'),
+
+    asaasPaymentId: text('asaas_payment_id'), // id da cobranca no Asaas (pay_...)
+    // "{reservation_id}:{kind}" — unico e deterministico. E o que permite
+    // reconciliar mesmo se o asaas_payment_id se perder (secao 4.6 / 8-B).
+    externalReference: text('external_reference').notNull(),
+    dueDate: date('due_date').notNull(),
+    paidAt: tstz('paid_at'),
+    receivedInCash: boolean('received_in_cash').notNull().default(false), // maquininha/dinheiro
+    createdAt: tstz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    check('reservation_payments_amount_check', sql`${t.amountCents} > 0`),
+    // idempotencia do webhook no banco (secao 8.2)
+    uniqueIndex('idx_rp_asaas')
+      .on(t.asaasPaymentId)
+      .where(sql`${t.asaasPaymentId} IS NOT NULL`),
+    uniqueIndex('idx_rp_extref').on(t.externalReference),
+    index('idx_rp_reservation').on(t.reservationId),
+    // varredura do job de reconciliacao a cada 10 min (secao 8-B)
+    index('idx_rp_open')
+      .on(t.state, t.dueDate)
+      .where(sql`${t.state} = 'pending'`),
+  ],
+);
+
+// -- agenda compartilhada (parceiros — secao 11.2) --------------------------
 
 export const sharedCalendarLinks = pgTable('shared_calendar_links', {
   id: uuid('id').primaryKey().defaultRandom(),
