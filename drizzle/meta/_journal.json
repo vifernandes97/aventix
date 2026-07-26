@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1784589095081,
-      "tag": "0000_brief_sumo",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1784596740144,
-      "tag": "0001_eminent_talos",
+      "when": 1785068755209,
+      "tag": "0000_oval_mandroid",
       "breakpoints": true
     }
   ]
