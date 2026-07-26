@@ -10,11 +10,7 @@ import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from './db/client';
 import { reservationResources, reservations, reservationStatus } from './db/schema';
-
-// Tenant fixo 1 no MVP (secao 3: multi-tenant-ready, tenant unico). Quando
-// /lib/tenant.ts existir, esta constante passa a vir de la — a assinatura
-// publica de setReservationStatus nao muda.
-const DEFAULT_TENANT_ID = 1;
+import { getTenantId } from './tenant';
 
 /** Status de reserva, derivado do enum do Drizzle — nunca string solta. */
 export type ReservationStatus = (typeof reservationStatus.enumValues)[number];
@@ -123,14 +119,16 @@ async function applyReservationStatus(
   //    'pending_payment' ao mesmo tempo e um sobrescrever o outro (o Pix cai
   //    exatamente quando o hold vence). Com FOR UPDATE, o segundo espera o
   //    commit do primeiro e revalida contra o estado ja atualizado.
+  const tenantId = getTenantId();
+
   const [current] = await tx
     .select({ id: reservations.id, status: reservations.status })
     .from(reservations)
-    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, DEFAULT_TENANT_ID)))
+    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, tenantId)))
     .for('update');
 
   // 2. Reserva inexistente: lanca, nunca retorna null.
-  if (!current) throw new ReservationNotFoundError(reservationId, DEFAULT_TENANT_ID);
+  if (!current) throw new ReservationNotFoundError(reservationId, tenantId);
 
   const previousStatus = current.status;
 
@@ -149,7 +147,7 @@ async function applyReservationStatus(
       ...(newStatus === 'confirmed' ? { confirmedAt: sql`now()` } : {}),
       ...(newStatus === 'cancelled' ? { cancelledAt: sql`now()` } : {}),
     })
-    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, DEFAULT_TENANT_ID)));
+    .where(and(eq(reservations.id, reservationId), eq(reservations.tenantId, tenantId)));
 
   // 5. reservation_resources: espelha o status em TODAS as linhas da reserva.
   //    E o que a exclusion constraint enxerga — sair de
