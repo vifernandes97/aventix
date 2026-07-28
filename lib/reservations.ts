@@ -8,16 +8,25 @@
 
 import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 
+import {
+  ExperienceNotFoundError,
+  InvalidResourcesNeededError,
+  getAvailability,
+} from './availability';
 import { db } from './db/client';
 import {
   customers,
+  experiences,
+  participants as participantsTable,
   reservationPayments,
   reservationPaymentState,
   reservationResources,
   reservations,
   reservationStatus,
+  resources,
 } from './db/schema';
-import { getTenantId } from './tenant';
+import { getBooleanSetting, getTenantId } from './tenant';
+import { todayLocalDate, utcToLocalDate } from './time';
 
 /** Status de reserva, derivado do enum do Drizzle — nunca string solta. */
 export type ReservationStatus = (typeof reservationStatus.enumValues)[number];
@@ -452,5 +461,431 @@ async function applyFindOrCreateCustomer(
     .returning({ ...getTableColumns(customers), created: sql<boolean>`(xmax = 0)` });
 
   const { created, ...customer } = row;
-  return { customer, created };
+
+  // O schema usa timestamp mode:'string', entao o driver devolve o TEXTO CRU do
+  // Postgres ("2026-07-27 23:09:14.518994-03"): espaco no lugar do T, offset sem
+  // minutos, microssegundos de 6 digitos. O V8 tolera esse formato, outros
+  // motores nao — e um Date invalido no cliente vira NaN silencioso. Todo
+  // timestamp que sai de lib/ para a camada de API vai em ISO 8601.
+  // (birthdate NAO entra aqui: e coluna `date`, ja sai como 'YYYY-MM-DD'.)
+  return {
+    customer: { ...customer, createdAt: new Date(customer.createdAt).toISOString() },
+    created,
+  };
+}
+
+// -- createReservation -------------------------------------------------------
+
+export type ParticipantRoleValue = 'operator' | 'passenger';
+
+export type CreateReservationInput = {
+  experienceId: number;
+  /** ISO/UTC — veio de getAvailability */
+  startAt: string;
+  resourcesNeeded: number;
+  customer: FindOrCreateCustomerInput;
+  participants: {
+    name: string;
+    birthdate?: string | null;
+    role: ParticipantRoleValue;
+    documentNumber?: string | null;
+  }[];
+  termo: { version: string; acceptedAt: string };
+  channel?: string | null;
+  /** capturados na rota — sao a prova juridica do aceite (secao 10) */
+  acceptance?: { ip?: string | null; userAgent?: string | null };
+};
+
+export type CreateReservationResult = {
+  reservationId: string;
+  status: ReservationStatus;
+  holdExpiresAt: string;
+  paymentMode: PaymentMode;
+  totalCents: number;
+  /** o que o cliente paga AGORA: total no modo full, sinal no modo deposit */
+  dueNowCents: number;
+  balanceCents: number;
+  allocatedResourceIds: number[];
+};
+
+export type PaymentMode = (typeof experiences.paymentMode.enumValues)[number];
+
+/** Violacao de regra de composicao/termo — a rota mapeia para 422. */
+export class InvalidCompositionError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Composicao invalida: ${reason}.`);
+    this.name = 'InvalidCompositionError';
+    this.reason = reason;
+  }
+}
+
+/** Horario indisponivel, recursos insuficientes ou corrida perdida — a rota mapeia para 409. */
+export class SlotUnavailableError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Horario indisponivel: ${reason}.`);
+    this.name = 'SlotUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/** `exclusion_violation` do Postgres: outro cliente ganhou a corrida no recurso. */
+function isExclusionViolation(error: unknown): boolean {
+  const code = (error as { cause?: { code?: string }; code?: string })?.cause?.code
+    ?? (error as { code?: string })?.code;
+  return code === '23P01';
+}
+
+/**
+ * Sanitiza `channel` (origem da venda, secao 4.4). Vem de querystring publica
+ * (`?canal=aventurando`), entao nao se confia no formato: lowercase, trim, so
+ * [a-z0-9_-], no maximo 40 chars. Vazio depois disso vira null.
+ */
+function sanitizeChannel(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+  return cleaned || null;
+}
+
+/**
+ * Cria a reserva inteira numa unica transacao (secao 5.2): cliente, reserva,
+ * alocacoes, participantes e cobrancas.
+ *
+ * @throws {ExperienceNotFoundError}     experiencia inexistente/inativa -> 404
+ * @throws {InvalidResourcesNeededError} resourcesNeeded fora de 1..ativos -> 400
+ * @throws {InvalidCompositionError}     operadores/capacidade/documento/termo -> 422
+ * @throws {SlotUnavailableError}        slot fora da grade, sem recursos, corrida -> 409
+ * @throws {InvalidPhoneError}           telefone do cliente malformado -> 400
+ */
+export async function createReservation(
+  input: CreateReservationInput,
+  tx?: Transaction,
+): Promise<CreateReservationResult> {
+  // Validacoes que nao dependem do banco ficam FORA da transacao: nao ha por que
+  // abrir transacao (e, no modo exclusivo, tomar advisory lock do tenant) para
+  // recusar um corpo que ja da para reprovar aqui.
+  const startInstant = new Date(input.startAt);
+  if (Number.isNaN(startInstant.getTime())) {
+    throw new InvalidCompositionError(`startAt invalido: ${JSON.stringify(input.startAt)}`);
+  }
+
+  // TODO(Fase 3): validar termo.version contra a versao VIGENTE do termo. Hoje
+  // nao existe onde guarda-la (nem tabela, nem chave em settings), entao aqui so
+  // se valida presenca/formato — a reserva registra o que o cliente aceitou.
+  if (!input.termo?.version?.trim()) {
+    throw new InvalidCompositionError('termo.version ausente');
+  }
+  const termoAcceptedAt = new Date(input.termo?.acceptedAt ?? '');
+  if (Number.isNaN(termoAcceptedAt.getTime())) {
+    throw new InvalidCompositionError(
+      `termo.acceptedAt ausente ou invalido: ${JSON.stringify(input.termo?.acceptedAt)}`,
+    );
+  }
+
+  if (!input.participants || input.participants.length === 0) {
+    throw new InvalidCompositionError('nenhum participante informado');
+  }
+
+  const operators = input.participants.filter((p) => p.role === 'operator');
+  if (operators.length < input.resourcesNeeded) {
+    throw new InvalidCompositionError(
+      `${operators.length} operador(es) para ${input.resourcesNeeded} recurso(s); ` +
+        'cada recurso alugado precisa de ao menos um habilitado a operar',
+    );
+  }
+
+  const channel = sanitizeChannel(input.channel);
+
+  if (tx) return applyCreateReservation(tx, input, { startInstant, termoAcceptedAt, channel });
+  return db.transaction((ownTx) =>
+    applyCreateReservation(ownTx, input, { startInstant, termoAcceptedAt, channel }),
+  );
+}
+
+type PreparedInput = {
+  startInstant: Date;
+  termoAcceptedAt: Date;
+  channel: string | null;
+};
+
+/**
+ * Corpo unico da operacao. Recebe SEMPRE um executor transacional.
+ */
+async function applyCreateReservation(
+  tx: Transaction,
+  input: CreateReservationInput,
+  prepared: PreparedInput,
+): Promise<CreateReservationResult> {
+  const tenantId = getTenantId();
+  const { startInstant, termoAcceptedAt, channel } = prepared;
+  const startIso = startInstant.toISOString();
+
+  // -- 1. ADVISORY LOCK ------------------------------------------------------
+  // PRIMEIRA statement da transacao quando o tenant opera em modo exclusivo
+  // (secao 5). Serializa a secao critica por tenant e fecha a corrida que a
+  // exclusion constraint NAO cobre: aquela enxerga conflito por RECURSO, e nao
+  // entre EXPERIENCIAS diferentes. Solto no commit/rollback.
+  const singleExperiencePerSlot = await getBooleanSetting('single_experience_per_slot');
+  if (singleExperiencePerSlot) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${tenantId})`);
+  }
+
+  // -- experiencia (snapshot de preco e modo de pagamento) -------------------
+  const [experience] = await tx
+    .select({
+      id: experiences.id,
+      durationMinutes: experiences.durationMinutes,
+      bufferMinutes: experiences.bufferMinutes,
+      priceCents: experiences.priceCents,
+      paymentMode: experiences.paymentMode,
+      depositPercent: experiences.depositPercent,
+      depositFixedCents: experiences.depositFixedCents,
+    })
+    .from(experiences)
+    .where(
+      and(
+        eq(experiences.id, input.experienceId),
+        eq(experiences.tenantId, tenantId),
+        eq(experiences.active, true),
+      ),
+    );
+
+  if (!experience) throw new ExperienceNotFoundError(input.experienceId, tenantId);
+
+  const [{ activeResources }] = await tx
+    .select({ activeResources: sql<number>`count(*)::int` })
+    .from(resources)
+    .where(and(eq(resources.tenantId, tenantId), eq(resources.active, true)));
+
+  if (
+    !Number.isInteger(input.resourcesNeeded) ||
+    input.resourcesNeeded < 1 ||
+    input.resourcesNeeded > activeResources
+  ) {
+    throw new InvalidResourcesNeededError(input.resourcesNeeded, activeResources);
+  }
+
+  // -- documento dos operadores (config do tenant, secao 1) ------------------
+  if (await getBooleanSetting('operator_document_required')) {
+    const missing = input.participants.filter(
+      (p) => p.role === 'operator' && !p.documentNumber?.trim(),
+    );
+    if (missing.length > 0) {
+      throw new InvalidCompositionError(
+        `${missing.length} operador(es) sem numero de documento, exigido por este tenant`,
+      );
+    }
+  }
+
+  // -- 2. RECHECK DE DISPONIBILIDADE -----------------------------------------
+  // Reusa o MOTOR, com o mesmo tx. Nao reimplementar: logica propria aqui
+  // poderia divergir do motor — a grade mostraria horario que o POST recusa, ou
+  // aceitaria um que a grade escondeu. De brinde, cobre lead time, blackouts,
+  // excecoes de agenda e exclusividade de experiencia sem duplicar nada.
+  const date = utcToLocalDate(startInstant);
+  const availability = await getAvailability(
+    { experienceId: input.experienceId, date, resourcesNeeded: input.resourcesNeeded },
+    tx,
+  );
+
+  const offered = availability.slots.some(
+    (slot) => new Date(slot.startAt).getTime() === startInstant.getTime(),
+  );
+  if (!offered) {
+    throw new SlotUnavailableError(
+      `${startIso} nao esta entre os horarios disponiveis de ${date} (dayState=${availability.dayState})`,
+    );
+  }
+
+  // -- 3. SELECIONAR OS RECURSOS A ALOCAR ------------------------------------
+  // Query da secao 6, agora DENTRO da transacao. Sobreposicao no operador && do
+  // Postgres — nunca em JS (mesma regra do motor).
+  const totalMinutes = experience.durationMinutes + experience.bufferMinutes;
+
+  const allocatable = await tx.execute<{ id: number; capacity: number }>(sql`
+    SELECT r.id, r.capacity
+    FROM resources r
+    WHERE r.tenant_id = ${tenantId}
+      AND r.active
+      AND NOT EXISTS (
+        SELECT 1
+        FROM reservation_resources rr
+        WHERE rr.resource_id = r.id
+          AND rr.status IN ('pending_payment', 'confirmed')
+          AND rr.period && tstzrange(
+            ${startIso}::timestamptz,
+            ${startIso}::timestamptz + make_interval(mins => ${totalMinutes})
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM blackouts bl
+        WHERE bl.tenant_id = ${tenantId}
+          AND (bl.resource_id = r.id OR bl.resource_id IS NULL)
+          AND bl.period && tstzrange(
+            ${startIso}::timestamptz,
+            ${startIso}::timestamptz + make_interval(mins => ${totalMinutes})
+          )
+      )
+    ORDER BY r.id
+    LIMIT ${input.resourcesNeeded}
+  `);
+
+  const allocated = allocatable.rows;
+  if (allocated.length < input.resourcesNeeded) {
+    // Caso de borda 2: ou aloca tudo, ou nada. Nunca reserva parcial.
+    throw new SlotUnavailableError(
+      `${allocated.length} recurso(s) livre(s) para ${input.resourcesNeeded} pedido(s)`,
+    );
+  }
+
+  // -- composicao: participantes x capacidade REAL dos recursos alocados -----
+  // Soma das capacities, nao capacity x resourcesNeeded: o schema permite
+  // capacity diferente por recurso. No caso uniforme da o mesmo numero, e
+  // continua correto quando houver um recurso de capacidade diferente.
+  const totalCapacity = allocated.reduce((sum, r) => sum + Number(r.capacity), 0);
+  if (input.participants.length > totalCapacity) {
+    throw new InvalidCompositionError(
+      `${input.participants.length} participantes para capacidade total ${totalCapacity}`,
+    );
+  }
+
+  // -- 4. find-or-create do cliente ------------------------------------------
+  const { customer } = await findOrCreateCustomer(input.customer, tx);
+
+  // -- 5. PRECO NO SERVIDOR (secao 4.6) --------------------------------------
+  // Inteiros de centavos de ponta a ponta. Nunca confie em valor do cliente.
+  const totalCents = experience.priceCents * input.resourcesNeeded;
+
+  let dueNowCents = totalCents;
+  let balanceCents = 0;
+
+  if (experience.paymentMode === 'deposit') {
+    const rawDeposit =
+      experience.depositFixedCents ??
+      Math.round((totalCents * (experience.depositPercent ?? 0)) / 100);
+
+    // Teto obrigatorio: sinal >= total vira total e NAO gera linha de balance.
+    // Sem isso, um deposit_fixed_cents maior que o preco produziria balance <= 0
+    // e o CHECK (amount_cents > 0) derrubaria a venda por erro de configuracao
+    // da experiencia. O piso de 1 centavo cobre o percentual que arredonda p/ 0.
+    dueNowCents = Math.min(Math.max(rawDeposit, 1), totalCents);
+    balanceCents = totalCents - dueNowCents;
+  }
+
+  // -- 6. INSERTS ------------------------------------------------------------
+
+  // a. reserva. hold_expires_at usa o relogio do BANCO, nao o do processo Node.
+  const [reservation] = await tx
+    .insert(reservations)
+    .values({
+      tenantId,
+      customerId: customer.id,
+      experienceId: experience.id,
+      resourcesNeeded: input.resourcesNeeded,
+      totalPriceCents: totalCents,
+      startAt: startIso,
+      channel,
+      paymentMode: experience.paymentMode, // SNAPSHOT de como foi vendido
+      termoVersion: input.termo.version.trim(),
+      termoAcceptedAt: termoAcceptedAt.toISOString(),
+      termoAcceptedIp: input.acceptance?.ip ?? null,
+      termoAcceptedUserAgent: input.acceptance?.userAgent ?? null,
+      status: 'pending_payment',
+      holdExpiresAt: sql`now() + interval '15 minutes'`,
+    })
+    .returning({
+      id: reservations.id,
+      status: reservations.status,
+      holdExpiresAt: reservations.holdExpiresAt,
+    });
+
+  // b. alocacoes. period INCLUI o buffer (secao 4.6); status espelha a reserva.
+  try {
+    await tx.insert(reservationResources).values(
+      allocated.map((resource) => ({
+        reservationId: reservation.id,
+        resourceId: Number(resource.id),
+        period: sql`tstzrange(
+          ${startIso}::timestamptz,
+          ${startIso}::timestamptz + make_interval(mins => ${totalMinutes})
+        )`,
+        status: 'pending_payment' as const,
+      })),
+    );
+  } catch (error) {
+    // 8. Caso de borda 1: outro cliente ganhou a corrida entre o SELECT e o
+    // INSERT. A transacao inteira ja esta abortada; so traduzimos o erro.
+    if (isExclusionViolation(error)) {
+      throw new SlotUnavailableError('outro cliente reservou este horario primeiro');
+    }
+    throw error;
+  }
+
+  // c. participantes
+  await tx.insert(participantsTable).values(
+    input.participants.map((p) => ({
+      reservationId: reservation.id,
+      name: p.name.trim(),
+      birthdate: p.birthdate?.trim() || null,
+      role: p.role,
+      documentNumber: p.documentNumber?.trim() || null,
+    })),
+  );
+
+  // d. cobrancas (secao 5.2 passo 3). Nascem com asaas_payment_id NULL.
+  //
+  // FASE 2 entra AQUI (secao 5.2 passo 5): FORA desta transacao, criar as
+  // cobrancas no Asaas e gravar os asaas_payment_id; falha na criacao marca a
+  // reserva 'expired' e libera a vaga.
+  //
+  // due_date e `date`: "hoje" e "data do passeio" sao datas de CALENDARIO em
+  // Sao Paulo. Uma reserva feita 23:50 em SP ja e o dia seguinte em UTC.
+  const dueToday = todayLocalDate();
+  const tripDate = date;
+
+  const paymentRows = [
+    {
+      reservationId: reservation.id,
+      kind: (experience.paymentMode === 'deposit' ? 'deposit' : 'full') as 'deposit' | 'full',
+      amountCents: dueNowCents,
+      dueDate: dueToday,
+    },
+    ...(balanceCents > 0
+      ? [
+          {
+            reservationId: reservation.id,
+            kind: 'balance' as const,
+            amountCents: balanceCents,
+            dueDate: tripDate,
+          },
+        ]
+      : []),
+  ];
+
+  await tx.insert(reservationPayments).values(
+    paymentRows.map((row) => ({
+      ...row,
+      method: 'pix' as const,
+      state: 'pending' as const,
+      // unico e deterministico (secao 4.6): reconcilia mesmo perdendo o id do Asaas
+      externalReference: `${reservation.id}:${row.kind}`,
+    })),
+  );
+
+  return {
+    reservationId: reservation.id,
+    status: reservation.status,
+    // ISO 8601, nao o texto cru do Postgres que o mode:'string' devolve — a tela
+    // de pagamento faz new Date(holdExpiresAt) para o contador de 15 minutos.
+    holdExpiresAt: new Date(reservation.holdExpiresAt!).toISOString(),
+    paymentMode: experience.paymentMode,
+    totalCents,
+    dueNowCents,
+    balanceCents,
+    allocatedResourceIds: allocated.map((r) => Number(r.id)),
+  };
 }
