@@ -5,6 +5,18 @@
 > Entradas abaixo de 2026-07-27 são registro retroativo das decisões tomadas
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
+## 2026-07-28 — server-only aliasado para stub vazio no Vitest
+
+O Vitest resolve `server-only` para `tests/stubs/server-only.ts`, um modulo vazio. **Por quê:** o Vitest roda em Node puro e o pacote real lanca ali. O marcador existe para barrar import a partir de Client Component, conceito de build do Next que nao se aplica ao Vitest, entao neutraliza-lo em teste nao afrouxa nenhuma protecao real: ela continua valendo no build, com o pacote de verdade. **Alternativa descartada:** ativar a condicao de exportacao `react-server` na config do Vitest. Ela resolveria, mas e global: qualquer pacote com export `react-server` (React inclusive) passaria a resolver por outro caminho nos testes, afastando o ambiente de teste do de producao em vez de aproximar. **Se fosse diferente:** um bug de resolucao de modulo apareceria so em producao, ou pior, um teste passaria contra uma versao de biblioteca que o app nunca carrega.
+
+## 2026-07-28 — Testes de integracao contra o Postgres real, com catalogo como pre-condicao
+
+A suite nao mocka banco: roda contra o Postgres local, com o catalogo do seed como pre-condicao que ela nunca apaga, e zera so as tabelas de movimento. **Por quê:** o nucleo do Aventix E o banco. Exclusion constraint, `tstzrange` com limites `[)`, `FOR UPDATE`, advisory lock e transacao com rollback nao existem fora dele; testar contra mock provaria que o mock funciona. **Consequencias assumidas:** `fileParallelism: false` na config, porque os arquivos compartilham o mesmo banco e se apagariam entre si; `schedule_exceptions` e `blackouts` entram na limpeza, ja que o seed as deixa vazias e os testes criam linhas nelas; e a suite exige `npm run db:seed` rodado antes. **Alternativa descartada:** banco efemero por arquivo de teste (container ou schema por worker). Daria paralelismo e isolamento total, ao custo de subir infraestrutura por rodada; com uma suite de 2 segundos, nao se paga.
+
+## 2026-07-28 — Cenario de teste montado por SQL cru, nao por createReservation
+
+Os helpers inserem reservas e alocacoes direto por SQL (`occupy()`), em vez de chamar `createReservation`. **Por quê:** se o cenario fosse montado pela funcao de criacao, um bug nela derrubaria tambem os testes de disponibilidade, e a suite apontaria para o lugar errado. Montando por fora, cada grupo falha pelo proprio motivo. **Custo:** os helpers conhecem o schema e precisam acompanhar mudancas de coluna, o que o typecheck nao pega porque e SQL cru em template string.
+
 ## 2026-07-28 — server-only resolve dentro do Next e lança fora dele
 
 `lib/tenant.ts` e `lib/availability.ts` declaram `import 'server-only'`. Comportamento MEDIDO em três contextos: dentro do Next (rotas, Server Components, `instrumentation.ts`) o import resolve normalmente; em processo Node cru (`tsx` avulso, Vitest) ele lança "This module cannot be imported from a Client Component module". A explicação provável é a condição de exportação `react-server`, que o Next aplica e o Node cru não; o mecanismo interno não foi aberto para conferência, só o comportamento. **Consequência prática:** `instrumentation.ts` usa import estático sem problema, `scripts/seed.ts` não pode importar `tenant.ts` (declara o tenant id localmente), e o Vitest precisa de tratamento explícito, ainda por decidir. **Alternativa descartada:** import dinâmico no `instrumentation.ts` como precaução. Ela não corrigia nada, porque nada quebrava, e o comentário que a justificava afirmava um perigo inexistente. **Lição de método registrada:** justificativa de código que não foi medida vira dívida, porque a próxima pessoa a lê como fato.
