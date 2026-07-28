@@ -9,7 +9,7 @@ import { getAvailability } from '@/lib/availability';
 import { SlotUnavailableError, createReservation } from '@/lib/reservations';
 
 import {
-  EXP_CURTA,
+  EXP,
   assertCatalogSeeded,
   makeBarrier,
   movementCounts,
@@ -41,7 +41,7 @@ describe('A — corridas', () => {
       await wipeMovement();
 
       const { slots } = await getAvailability({
-        experienceId: EXP_CURTA,
+        experienceId: EXP.curta,
         date: SAT,
         resourcesNeeded: 2,
       });
@@ -53,7 +53,7 @@ describe('A — corridas', () => {
       const disputar = async (phone: string) => {
         await largar();
         return createReservation(
-          reservationInput({ experienceId: EXP_CURTA, startAt, resourcesNeeded: 2, phone }),
+          reservationInput({ experienceId: EXP.curta, startAt, resourcesNeeded: 2, phone }),
         );
       };
 
@@ -103,7 +103,7 @@ describe('A — corridas', () => {
 
   it('2. pedir 2 recursos com 1 ja ocupado: rollback total, nenhuma linha criada', async () => {
     const { slots } = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 2,
     });
@@ -116,7 +116,7 @@ describe('A — corridas', () => {
 
     await expect(
       createReservation(
-        reservationInput({ experienceId: EXP_CURTA, startAt, resourcesNeeded: 2 }),
+        reservationInput({ experienceId: EXP.curta, startAt, resourcesNeeded: 2 }),
       ),
     ).rejects.toBeInstanceOf(SlotUnavailableError);
 
@@ -126,7 +126,7 @@ describe('A — corridas', () => {
 
   it('3. grade desatualizada: o slot some entre o getAvailability e o createReservation', async () => {
     const { slots } = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 1,
     });
@@ -141,7 +141,7 @@ describe('A — corridas', () => {
 
     await expect(
       createReservation(
-        reservationInput({ experienceId: EXP_CURTA, startAt, resourcesNeeded: 1 }),
+        reservationInput({ experienceId: EXP.curta, startAt, resourcesNeeded: 1 }),
       ),
     ).rejects.toBeInstanceOf(SlotUnavailableError);
 

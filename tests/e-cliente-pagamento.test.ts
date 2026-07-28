@@ -12,7 +12,7 @@ import {
 } from '@/lib/reservations';
 
 import {
-  EXP_CURTA,
+  EXP,
   EXP_DEPOSIT_FIXED,
   EXP_DEPOSIT_PCT,
   assertCatalogSeeded,
@@ -189,8 +189,8 @@ describe('E — pagamento', () => {
   it('18b. recalc NAO altera o status da reserva', async () => {
     const criada = await createReservation(
       reservationInput({
-        experienceId: EXP_CURTA,
-        startAt: await primeiroSlot(EXP_CURTA),
+        experienceId: EXP.curta,
+        startAt: await primeiroSlot(EXP.curta),
         resourcesNeeded: 1,
         phone: '11987650000',
       }),

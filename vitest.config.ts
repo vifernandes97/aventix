@@ -16,7 +16,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    // Carrega .env (DATABASE_URL) antes de qualquer teste.
+    // Roda UMA vez por rodada, antes de tudo: migra e semeia o banco. E o que
+    // faz `npm test` funcionar a partir de um banco vazio, sem `db:seed` manual.
+    globalSetup: ['tests/global-setup.ts'],
+    // Carrega .env (DATABASE_URL) antes de cada arquivo de teste.
     setupFiles: ['tests/setup.ts'],
     // OBRIGATORIO: todos os arquivos de teste compartilham o MESMO Postgres e
     // limpam as tabelas de movimento em beforeEach. Rodando em paralelo, um

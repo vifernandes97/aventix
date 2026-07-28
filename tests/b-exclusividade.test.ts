@@ -11,8 +11,7 @@ import { SlotUnavailableError, createReservation } from '@/lib/reservations';
 import { getBooleanSetting } from '@/lib/tenant';
 
 import {
-  EXP_CURTA,
-  EXP_LONGA,
+  EXP,
   assertCatalogSeeded,
   nextSaturday,
   occupy,
@@ -32,7 +31,7 @@ describe('B — exclusividade de experiencia', () => {
 
   it('4. reserva ativa da experiencia A bloqueia a experiencia B sobreposta', async () => {
     const { slots } = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 1,
     });
@@ -45,12 +44,12 @@ describe('B — exclusividade de experiencia', () => {
       startLocal: alvo.label,
       minutes: 105,
       resourceId: 1,
-      experienceId: EXP_LONGA,
+      experienceId: EXP.longa,
     });
 
     // O motor ja esconde o horario...
     const depois = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 1,
     });
@@ -60,7 +59,7 @@ describe('B — exclusividade de experiencia', () => {
     await expect(
       createReservation(
         reservationInput({
-          experienceId: EXP_CURTA,
+          experienceId: EXP.curta,
           startAt: alvo.startAt,
           resourcesNeeded: 1,
           phone: '11933330000',
@@ -71,7 +70,7 @@ describe('B — exclusividade de experiencia', () => {
 
   it('5. reserva ativa da MESMA experiencia nao bloqueia, se houver recurso livre', async () => {
     const { slots } = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 1,
     });
@@ -83,11 +82,11 @@ describe('B — exclusividade de experiencia', () => {
       startLocal: alvo.label,
       minutes: 75,
       resourceId: 1,
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
     });
 
     const depois = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: SAT,
       resourcesNeeded: 1,
     });
@@ -95,7 +94,7 @@ describe('B — exclusividade de experiencia', () => {
 
     const criada = await createReservation(
       reservationInput({
-        experienceId: EXP_CURTA,
+        experienceId: EXP.curta,
         startAt: alvo.startAt,
         resourcesNeeded: 1,
         phone: '11944440000',

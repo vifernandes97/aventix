@@ -16,14 +16,53 @@
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
+import { quadricicloTemplate } from '@/lib/templates/quadriciclo';
 import { invalidateSettingsCache } from '@/lib/tenant';
 import { localToUtc } from '@/lib/time';
 
 export const TENANT_ID = 1;
 
-/** Experiencias do seed (lib/templates/quadriciclo.ts). */
-export const EXP_CURTA = 1; // 60 min + 15 buffer, R$ 120,00
-export const EXP_LONGA = 2; // 90 min + 15 buffer, R$ 180,00
+// -- experiencias do seed ----------------------------------------------------
+//
+// ============================================================================
+// NAO VOLTE A FIXAR ID AQUI. Foi exatamente isso que quebrou a suite em 28/07.
+//
+// As constantes eram `EXP_CURTA = 1` e `EXP_LONGA = 2`, ids que o `serial`
+// produziu na primeira vez que o seed rodou. O commit ce3e4c6 renomeou as duas
+// trilhas no template; o seed reconcilia por NOME e nunca renomeia, entao elas
+// nasceram de novo como ids 3 e 4, e a contagem por id passou a dar zero.
+// Nenhuma linha de teste mudou: mudou o dado.
+//
+// Agora a suite le O MESMO TEMPLATE que o seed aplica e resolve os ids no
+// banco em tempo de execucao. Renomear, reordenar ou repreçar no template
+// passa a atravessar seed e testes junto, sem drift possivel.
+// ============================================================================
+
+/**
+ * As duas experiencias do template, ordenadas por duracao.
+ *
+ * A suite raciocina em "uma curta e uma longa" (grade, buffer, sobreposicao),
+ * nao em "Montanha e Fazenda". Derivar da DURACAO em vez da posicao no array
+ * mantem a semantica dos testes mesmo se o cliente inverter qual trilha e a
+ * mais longa — que ja aconteceu uma vez: ate ce3e4c6 a curta era a primeira do
+ * array, depois passou a ser a segunda.
+ */
+const porDuracao = [...quadricicloTemplate.experiences].sort(
+  (a, b) => a.durationMinutes - b.durationMinutes,
+);
+
+/** Linhas do template. Preco e duracao esperados saem daqui, nunca do banco. */
+export const TEMPLATE_EXP = {
+  curta: porDuracao[0],
+  longa: porDuracao[porDuracao.length - 1],
+};
+
+/**
+ * Ids reais no banco, resolvidos por assertCatalogSeeded (chamada no beforeAll
+ * de cada arquivo). Sao zero ate la, o que nao incomoda porque nenhum teste os
+ * le no topo do modulo, so dentro de caso ou de parametro default.
+ */
+export const EXP = { curta: 0, longa: 0 };
 
 /** Experiencias criadas pela propria suite, para cobrir o modo 'deposit'. */
 export const EXP_DEPOSIT_PCT = 900; // 34900c, deposit_percent 50
@@ -49,23 +88,71 @@ export async function wipeMovement(): Promise<void> {
 }
 
 /**
- * Falha alto e cedo se o catalogo nao estiver semeado, em vez de deixar 18
- * testes falharem com mensagens confusas.
+ * Verificacao de sanidade do catalogo, e resolucao dos ids das experiencias.
+ *
+ * Com o globalSetup (tests/global-setup.ts) migrando e semeando antes da suite,
+ * esta funcao deixou de ser a guarda contra "esqueci o db:seed" e passou a ser
+ * duas coisas: rede de seguranca (se o catalogo sumir no meio de uma rodada,
+ * falha aqui com mensagem util em vez de espalhar erro pelos testes) e o lugar
+ * que traduz template -> id real.
+ *
+ * TODA EXIGENCIA VEM DO TEMPLATE, nenhuma e numero solto. Era esse descompasso
+ * (a checagem exigia id 1 e 2; o seed gravava o que o template mandasse) que
+ * produzia o falso "catalogo nao semeado" com o catalogo intacto no banco.
  */
 export async function assertCatalogSeeded(): Promise<void> {
+  const esperado = {
+    resources: quadricicloTemplate.resources.filter((r) => r.active).length,
+    hours: quadricicloTemplate.operatingHours.length,
+    settings: Object.keys(quadricicloTemplate.settings).length,
+  };
+
   const [row] = (
-    await db.execute<{ resources: number; experiences: number; hours: number; settings: number }>(sql`
-      SELECT (SELECT count(*)::int FROM resources WHERE active) resources,
-             (SELECT count(*)::int FROM experiences WHERE id IN (${EXP_CURTA}, ${EXP_LONGA})) experiences,
-             (SELECT count(*)::int FROM operating_hours) hours,
-             (SELECT count(*)::int FROM settings) settings
+    await db.execute<{ resources: number; hours: number; settings: number }>(sql`
+      SELECT (SELECT count(*)::int FROM resources
+                WHERE tenant_id = ${TENANT_ID} AND active) resources,
+             (SELECT count(*)::int FROM operating_hours
+                WHERE tenant_id = ${TENANT_ID}) hours,
+             (SELECT count(*)::int FROM settings
+                WHERE tenant_id = ${TENANT_ID}) settings
     `)
   ).rows;
 
-  if (row.resources < 2 || row.experiences < 2 || row.hours < 2 || row.settings < 1) {
+  const faltando: string[] = [];
+  if (row.resources < esperado.resources) {
+    faltando.push(`resources ativos: ${row.resources} de ${esperado.resources}`);
+  }
+  if (row.hours < esperado.hours) {
+    faltando.push(`operating_hours: ${row.hours} de ${esperado.hours}`);
+  }
+  if (row.settings < esperado.settings) {
+    faltando.push(`settings: ${row.settings} de ${esperado.settings}`);
+  }
+
+  // Resolve as experiencias por NOME do template. Diz qual esta faltando, em
+  // vez de um "experiences=0" que nao ajuda ninguem a achar a causa.
+  for (const [papel, item] of [
+    ['curta', TEMPLATE_EXP.curta],
+    ['longa', TEMPLATE_EXP.longa],
+  ] as const) {
+    const [found] = (
+      await db.execute<{ id: number }>(sql`
+        SELECT id FROM experiences
+        WHERE tenant_id = ${TENANT_ID} AND name = ${item.name} AND active
+      `)
+    ).rows;
+
+    if (!found) {
+      faltando.push(`experiencia "${item.name}" (a ${papel}, ${item.durationMinutes} min)`);
+      continue;
+    }
+    EXP[papel] = found.id;
+  }
+
+  if (faltando.length > 0) {
     throw new Error(
-      `Catalogo nao semeado (resources=${row.resources} experiences=${row.experiences} ` +
-        `hours=${row.hours} settings=${row.settings}). Rode: npm run db:seed`,
+      `Catalogo incompleto no tenant ${TENANT_ID}: ${faltando.join('; ')}. ` +
+        'O globalSetup deveria ter semeado; rode `npm run db:seed` e investigue por que ele nao bastou.',
     );
   }
 }
@@ -125,7 +212,8 @@ export async function occupy(params: {
     startLocal,
     minutes,
     resourceId,
-    experienceId = EXP_CURTA,
+    // Avaliado a cada chamada, entao ja enxerga o id resolvido no beforeAll.
+    experienceId = EXP.curta,
     status = 'confirmed',
     holdExpiresAt = null,
   } = params;

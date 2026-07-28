@@ -8,7 +8,7 @@ import { db } from '@/lib/db/client';
 import { localToUtc } from '@/lib/time';
 
 import {
-  EXP_CURTA,
+  EXP,
   TENANT_ID,
   assertCatalogSeeded,
   getSettingRaw,
@@ -44,7 +44,7 @@ describe('C — disponibilidade', () => {
     await occupy({ date: SUN, startLocal: '10:00', minutes: 105, resourceId: 2 });
 
     const l = labels(
-      await getAvailability({ experienceId: EXP_CURTA, date: SUN, resourcesNeeded: 1 }),
+      await getAvailability({ experienceId: EXP.curta, date: SUN, resourcesNeeded: 1 }),
     );
 
     // Ponta FINAL: a reserva termina 11:45 e o candidato comeca 11:45. Tocam,
@@ -65,7 +65,7 @@ describe('C — disponibilidade', () => {
       VALUES (${TENANT_ID}, ${SAT}, true, 'recesso')
     `);
 
-    const r = await getAvailability({ experienceId: EXP_CURTA, date: SAT, resourcesNeeded: 1 });
+    const r = await getAvailability({ experienceId: EXP.curta, date: SAT, resourcesNeeded: 1 });
 
     expect(r.dayState).toBe('closed_exception');
     expect(r.slots).toEqual([]);
@@ -74,7 +74,7 @@ describe('C — disponibilidade', () => {
   it('8. schedule_exception closed=false abre uma terca, ignorando o weekday', async () => {
     // Sem excecao a terca nao opera (o seed so tem sabado e domingo).
     const fechada = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: TUE,
       resourcesNeeded: 1,
     });
@@ -87,7 +87,7 @@ describe('C — disponibilidade', () => {
     `);
 
     const aberta = await getAvailability({
-      experienceId: EXP_CURTA,
+      experienceId: EXP.curta,
       date: TUE,
       resourcesNeeded: 1,
     });
@@ -106,7 +106,7 @@ describe('C — disponibilidade', () => {
     `);
 
     const l = labels(
-      await getAvailability({ experienceId: EXP_CURTA, date: SAT, resourcesNeeded: 1 }),
+      await getAvailability({ experienceId: EXP.curta, date: SAT, resourcesNeeded: 1 }),
     );
 
     // 11:30 + 75 = 12:45, invade o blackout.
@@ -122,7 +122,7 @@ describe('C — disponibilidade', () => {
 
   it('11. o ultimo slot respeita a DURACAO contra closes, nao duracao + buffer', async () => {
     const l = labels(
-      await getAvailability({ experienceId: EXP_CURTA, date: SAT, resourcesNeeded: 1 }),
+      await getAvailability({ experienceId: EXP.curta, date: SAT, resourcesNeeded: 1 }),
     );
 
     // Experiencia 1: 60 min de duracao, 15 de buffer, grade fecha 18:00.
@@ -160,7 +160,7 @@ describe('C — lead time configuravel', () => {
 
   /** Primeiro slot da grade de hoje, em ms. */
   async function primeiroSlot(): Promise<number | null> {
-    const r = await getAvailability({ experienceId: EXP_CURTA, date: HOJE, resourcesNeeded: 1 });
+    const r = await getAvailability({ experienceId: EXP.curta, date: HOJE, resourcesNeeded: 1 });
     return r.slots[0] ? new Date(r.slots[0].startAt).getTime() : null;
   }
 
@@ -198,7 +198,7 @@ describe('C — lead time configuravel', () => {
     await setSetting('min_lead_minutes', 'abc');
     const corte = Date.now() + 60 * 60_000;
 
-    const r = await getAvailability({ experienceId: EXP_CURTA, date: HOJE, resourcesNeeded: 1 });
+    const r = await getAvailability({ experienceId: EXP.curta, date: HOJE, resourcesNeeded: 1 });
     const primeiro = new Date(r.slots[0]!.startAt).getTime();
 
     // NaN faria a comparacao ser sempre falsa e a grade sairia inteira (ou vazia).
