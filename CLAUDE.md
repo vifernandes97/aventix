@@ -75,6 +75,7 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 - **Multi-tenant-ready:** `tenant_id NOT NULL DEFAULT 1` em toda tabela de negócio; toda query filtra por tenant.
 - **Labels/textos de UI** sempre de `settings`, nunca hardcode.
 - **Segredos** em `.env`. **IDs** de negócio: UUID. **Código em inglês, UI em português.**
+- **Testes (`npm test`, Vitest em `/tests`):** rodam contra o Postgres local de verdade, não contra mock. O **catálogo semeado** (`npm run db:seed`) é pré-condição e nunca é apagado; as tabelas de **movimento** são zeradas antes de cada teste e ao fim da suíte. **Nunca mocke o relógio do Node** (`vi.useFakeTimers` é proibido): o sistema usa `now()` do banco de propósito, então lead time e expiração se testam manipulando dados (`hold_expires_at` no passado, `start_at` explícito). Setting alterada em teste exige `invalidateSettingsCache()` e restauração no teardown, por causa do TTL de 60s.
 - Entregue blocos de código completos, não diffs.
 
 ---
