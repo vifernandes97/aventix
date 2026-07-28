@@ -53,13 +53,13 @@ Regras invioláveis do modo `deposit`:
 
 ## 2. Stack
 
-- **Runtime:** Node.js + TypeScript. **Framework:** Next.js (App Router) — público, admin e API no mesmo repo.
+- **Runtime:** Node.js 22 LTS + TypeScript. **Framework:** Next.js 16 (App Router, Turbopack default) — público, admin e API no mesmo repo.
 - **Banco:** PostgreSQL (Docker no VPS). Requer `btree_gist`. **ORM:** Drizzle, migrations versionadas.
 - **Pagamento:** **Asaas**, **somente Pix no MVP** (cartão pós go-live). Conta do tenant. Atrás de `PaymentProvider`.
 - **Termo:** aceite digital próprio. Sem plataforma de assinatura externa.
 - **Notificações:** **e-mail via Resend no MVP.** WhatsApp (Evolution) pós go-live.
 - **Calendário:** **nativo**. Google Calendar = espelho opcional pós go-live.
-- **Deploy:** Docker Compose no VPS Hostinger (4GB), atrás do proxy existente. Postgres em rede privada.
+- **Deploy:** VPS Hostinger (4GB) gerenciado via **Easypanel** — build a partir do `Dockerfile` do repo (`docker-compose.dev.yml` serve só para desenvolvimento local; não há compose em produção). Easypanel administra Traefik, domínio e SSL automaticamente. Postgres como serviço isolado, sem porta pública. **O Easypanel injeta sua própria variável `PORT` em runtime, sobrescrevendo o Dockerfile** — as rotas de domínio devem apontar para a porta real do log de boot, não para o valor fixado no Dockerfile.
 
 ### Fonte da verdade
 
@@ -70,6 +70,7 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 ## 3. Convenções
 
 - **Timezone:** `America/Sao_Paulo` fixo. `timestamptz` (UTC) no banco; conversão só na grade e na exibição.
+- **Serialização de datas:** o schema usa `timestamp mode:'string'`, então o driver devolve o **texto cru do Postgres** (`2026-07-27 23:09:14.518994-03`): espaço no lugar do `T`, offset sem minutos, microssegundos. Toda função de `lib/` que devolva `timestamptz` para a camada de API converte para **ISO 8601** (`new Date(v).toISOString()`). O V8 tolera o formato cru, outros motores devolvem `NaN` — o sintoma aparece só no navegador do cliente. Colunas `date` (`birthdate`, `due_date`) já saem como `YYYY-MM-DD` e **não** passam por `new Date()`.
 - **Dinheiro:** inteiro em centavos. Nunca float. Nunca calcule preço no cliente.
 - **Multi-tenant-ready:** `tenant_id NOT NULL DEFAULT 1` em toda tabela de negócio; toda query filtra por tenant.
 - **Labels/textos de UI** sempre de `settings`, nunca hardcode.
@@ -108,6 +109,7 @@ CREATE TABLE tenants (
 -- operator_document_required, operator_document_label, meeting_point, what_to_bring,
 -- business_name, reply_to_email, deposit_policy_text
 --  single_experience_per_slot ("true"/"false", default "false"),
+--  min_lead_minutes (inteiro >= 0 como string, default "60") — antecedencia minima para reservar
 CREATE TABLE settings (
   tenant_id int NOT NULL REFERENCES tenants(id),
   key text NOT NULL,
@@ -277,6 +279,7 @@ CREATE INDEX idx_rp_open ON reservation_payments (state, due_date) WHERE state =
 - **Preço e valor do sinal são calculados no servidor.** `deposit = round(total × deposit_percent/100)` ou `deposit_fixed_cents`; `balance = total − deposit`. Nunca confie em valor vindo do cliente.
 - **`external_reference` é único e determinístico** (`"{uuid}:{kind}"`). É o que permite reconciliar mesmo se o `asaas_payment_id` se perder.
 - Find-or-create de `customers` por `(tenant_id, phone)`.
+- **Experiência gratuita não é suportada no MVP.** `price_cents = 0` produz `total = 0`, e a cobrança violaria `CHECK (amount_cents > 0)` na criação (erro 500); em `recalcReservationPayment` a reserva ficaria `pending` para sempre. O CRUD de experiências (Fase 3) deve recusar preço zero. O `CHECK (price_cents >= 0)` do schema fica como está — apertar para `> 0` exigiria migration e não se justifica antes do go-live.
 > **Regra de arquitetura inviolável:** a garantia do `FOR UPDATE` (trava de linha contra corrida entre cron e webhook) só existe enquanto **todo caminho de escrita de status passar por `setReservationStatus`**. Um `UPDATE reservations SET status` direto em qualquer outro lugar fura a trava e quebra a proteção contra double-booking silenciosamente. Nunca atualize `reservations.status` ou `reservation_resources.status` fora dessa função.
 
 ---
@@ -319,11 +322,16 @@ O `balance` tem ciclo próprio, independente do status da reserva:
 
 ## 6. Motor de disponibilidade
 
-Inalterado desde a rev 4. Dado `experienceId`, `date` e `resourcesNeeded`:
+Dado `experienceId`, `date` e `resourcesNeeded`:
 
-1. Grade: `operating_hours` do weekday, granularidade 30 min (`SLOT_GRANULARITY_MINUTES`), descarta `T + duration > closes`, descarta passado + `MIN_LEAD_MINUTES` (60).
-2. Disponível se **nº de recursos ativos livres** em `[T, T + duration + buffer)` **>= resourcesNeeded**:
-2b. **Exclusividade de experiência (só se `single_experience_per_slot` do tenant estiver ativo):** o candidato só está disponível se **não** houver reserva ativa de uma `experience_id` **diferente** com período sobreposto a `[T, T + duration + buffer)`. Reservas da **mesma** experiência não bloqueiam aqui (seguem governadas pela disponibilidade de recurso do passo 2).
+1. **Grade do dia — `schedule_exceptions` tem precedência sobre `operating_hours`:**
+   - Consulte `schedule_exceptions` para `(tenant, date)`. Se existir linha:
+     - `closed = true` → dia sem grade; zero slots (recesso, feriado fechado).
+     - `closed = false` → usa `opens`/`closes` da exceção, **ignorando** o `operating_hours` do weekday. É isto que permite abrir num dia da semana em que o tenant normalmente não opera (feriado numa terça).
+   - Se **não** existir exceção → usa `operating_hours` do weekday (pode haver mais de uma faixa por dia; considere todas).
+   - Sobre o horário resultante: granularidade 30 min (`SLOT_GRANULARITY_MINUTES`, constante de código), descarta `T + duration > closes` (o buffer pode extrapolar o fechamento; a duração não), descarta `T` anterior a `now() + antecedência mínima`.
+   - **Antecedência mínima é configurável por tenant:** `settings.min_lead_minutes` — inteiro em minutos, armazenado como string, default `"60"`. É o tempo de preparo que o tenant precisa entre a venda e a saída. `"0"` significa aceitar reserva até a hora do passeio. A leitura passa por acessor numérico tipado em `lib/tenant.ts`, com fallback ao default se a chave estiver ausente, vazia, negativa ou não-numérica — nunca `Number()` solto sobre o valor cru.
+   - `blackouts` continuam aplicando por cima (passo 2), inclusive sobre dias abertos por exceção.
 
 ```sql
 SELECT r.id
@@ -353,7 +361,8 @@ ORDER BY r.id;
 
 ### 7.1 Público
 
-**`GET /api/availability?experienceId=&date=&resourcesNeeded=`** → `{ slots: [{ startAt, label }] }`
+**`GET /api/availability?experienceId=&date=&resourcesNeeded=`** → `{ slots: [{ startAt, label }], dayState }`
+`dayState` ∈ `'open' | 'closed_exception' | 'closed_weekday'`. Distingue "o tenant não opera nesse dia" (fechado por grade semanal), "fechado por exceção" (recesso/feriado) e "opera, mas sem horários livres" — três situações que colapsariam numa lista vazia indistinguível e produziriam a mensagem errada na tela.
 
 **`GET /api/experiences`** → inclui `paymentMode`, `priceCents` e, quando `deposit`, `depositCents` e `balanceCents` **já calculados no servidor** para exibir no checkout.
 
@@ -486,7 +495,7 @@ A cada 1 minuto, via `setReservationStatus` (reserva + alocações na mesma tran
 
 ## 13. Autenticação do admin
 
-Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middleware protege `/admin/*` e `/api/admin/*`. Sem provider externo.
+Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middleware protege `/admin/*` e `/api/admin/*`. **Next 16:** o arquivo chama-se `proxy.ts` (export `proxy`, runtime Node) — `middleware.ts` está deprecado. Sem provider externo.
 
 ---
 
@@ -534,7 +543,7 @@ Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middle
   /auth.ts
   /time.ts
 /drizzle
-/middleware.ts                        # NAO pode redirecionar /api/webhooks/*
+/proxy.ts                             # NAO pode redirecionar /api/webhooks/*
 docker-compose.yml
 Dockerfile
 .env.example
@@ -609,7 +618,7 @@ Dockerfile
 ## 17. Ordem de implementação
 
 1. **Fase 0 — Fundação:** Git/GitHub, Next+TS, Drizzle, Docker, deploy no VPS, CLAUDE.md no repo. Marco: rota no ar.
-2. **Fase 1 — Núcleo:** schema (12 tabelas) + constraint + `setReservationStatus` + tenant/settings + find-or-create + disponibilidade + criação transacional + cron. Marco: reserva de 1 e 2 recursos trava as vagas certas, com cliente cadastrado.
+2. **Fase 1 — Núcleo:** schema (13 tabelas) + constraint + `setReservationStatus` + tenant/settings + find-or-create + disponibilidade + criação transacional + cron. Marco: reserva de 1 e 2 recursos trava as vagas certas, com cliente cadastrado.
 3. **Fase 2 — Pagamento:** `PaymentProvider`/Asaas Pix + `reservation_payments` + modo integral e sinal + webhook robusto + reconciliação + pagamento tardio. Marco: Pix de teste confirma sozinho, e uma reserva com sinal fica `partial` com saldo em aberto.
 4. **Fase 3 — Interfaces + termo:** formulário público (com sinal explícito), termo scroll-to-end, tela QR/polling, admin com calendário nativo, detalhe com **Cobrar saldo**/**Recebi por fora**, CRUDs, links compartilhados, cancelar-e-liberar. Marco: reserva ponta a ponta + saldo quitado pelos dois caminhos.
 5. **Fase 4 — Integrações + go-live:** e-mails Resend (assíncronos) + timezone + bordas + hardening + saúde da integração + checklist de produção. Marco: **GO-LIVE 24/08**.
