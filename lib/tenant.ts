@@ -7,8 +7,13 @@
 //
 // MODULO SERVER-ONLY: settings sao lidas do Postgres. Nao importe em Client
 // Component — se um valor precisa chegar ao cliente, um Server Component
-// passa como prop. O `import 'server-only'` abaixo faz o BUILD falhar nesse
-// caso, em vez de deixar o erro aparecer so quando o modulo for carregado.
+// passa como prop. E para isso que serve o `import 'server-only'` abaixo.
+//
+// Consequencia MEDIDA: em processo Node cru (script `tsx` avulso, sem a condicao
+// de exportacao `react-server`) este modulo LANCA no import — "This module cannot
+// be imported from a Client Component module". Por isso scripts/seed.ts nao o
+// importa e declara o tenant id localmente. Dentro do Next (rotas, Server
+// Components, instrumentation) o import resolve normalmente.
 
 import 'server-only';
 

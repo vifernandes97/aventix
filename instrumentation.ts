@@ -1,0 +1,64 @@
+// Aventix — bootstrap do processo Next (CLAUDE.md secao 12).
+//
+// O Next executa `register()` uma vez no boot do servidor. E o unico lugar do
+// app com ciclo de vida de PROCESSO (e nao de requisicao), entao e onde o cron
+// de expiracao de hold e agendado.
+//
+// Este arquivo SO AGENDA. A logica vive em lib/jobs/expire-holds.ts, testavel
+// isolada e reusavel pelo job de reconciliacao da Fase 2 (secao 8-B).
+//
+// Next 16: `instrumentation.ts` e estavel, na raiz do projeto, sem flag no
+// next.config (o antigo `experimental.instrumentationHook` foi removido).
+//
+// Sobre `server-only`: a cadeia importada abaixo (expire-holds -> reservations
+// -> tenant/availability) atravessa dois modulos que declaram `server-only`.
+// MEDIDO neste projeto: o import resolve normalmente aqui e o boot fica limpo,
+// porque o Next compila o instrumentation com a condicao de exportacao
+// `react-server` ativa. O mesmo import em processo Node CRU (um `tsx` avulso,
+// por exemplo) lanca "This module cannot be imported from a Client Component
+// module" — foi por isso que scripts/seed.ts nao importa lib/tenant.ts.
+
+import cron from 'node-cron';
+
+import { expireHolds } from './lib/jobs/expire-holds';
+
+/** Flag no globalThis, mesmo padrao de lib/db/client.ts. */
+const globalForCron = globalThis as unknown as { holdCronRegistered?: boolean };
+
+export async function register() {
+  // Agenda so no runtime Node. Nas execucoes deste projeto o instrumentation foi
+  // avaliado UMA vez, sempre com NEXT_RUNTIME='nodejs' — nao ha codigo edge aqui
+  // hoje. A guarda custa uma comparacao e evita agendar um timer com acesso a
+  // banco caso isso mude.
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+
+  // Precaucao contra registro duplicado. Nao observei duplicacao nas execucoes
+  // deste projeto (o log "agendado" saiu uma vez por boot), mas o modulo pode ser
+  // reavaliado em dev, e cada avaliacao registraria mais um timer.
+  if (globalForCron.holdCronRegistered) return;
+  globalForCron.holdCronRegistered = true;
+
+  cron.schedule('* * * * *', async () => {
+    // try/catch obrigatorio: excecao nao tratada dentro do callback de um timer
+    // derruba o processo Node inteiro. Um tick que falha nao pode tirar o site
+    // do ar — o proximo tick tenta de novo.
+    //
+    // O catch LOGA com console.error e o erro real (verificado injetando um
+    // throw em expireHolds: o tick imprime a mensagem e o stack completo).
+    // Falha de tick tem que gritar no log, nunca sumir.
+    try {
+      const { expiredCount, reservationIds } = await expireHolds();
+      if (expiredCount > 0) {
+        console.log(
+          `[cron:expire-holds] ${expiredCount} hold(s) expirado(s): ${reservationIds.join(', ')}`,
+        );
+      } else {
+        console.log('[cron:expire-holds] tick: nenhum hold vencido');
+      }
+    } catch (error) {
+      console.error('[cron:expire-holds] tick falhou:', error);
+    }
+  });
+
+  console.log('[cron:expire-holds] agendado (* * * * *, a cada minuto)');
+}
