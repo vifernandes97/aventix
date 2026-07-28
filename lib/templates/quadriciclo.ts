@@ -64,6 +64,17 @@ export const quadricicloTemplate: SegmentTemplate = {
 
   // -- experiencias (secao 4.3) ----------------------------------------------
   //
+  // >>> priceCents E O PRECO PIX. <<<
+  // O Quadri Club pratica preco por METODO de pagamento: o cartao sai cerca de
+  // 7% mais caro (Montanha R$ 349,99 / Fazenda R$ 249,99). O MVP so aceita Pix
+  // (secao 2), entao o unico preco que o sistema precisa conhecer e o do Pix, e
+  // e ele que esta aqui. Os precos de cartao NAO sao armazenados.
+  //
+  // NAO troque estes valores pelos de cartao "para ficar completo": o cliente
+  // que paga Pix veria 7% a mais do que o anunciado, em toda venda, sem erro
+  // nenhum aparecendo. Preco por metodo entra na v2 junto com o cartao (secao
+  // 16), e a modelagem (coluna extra ou tabela de precos) se decide la.
+  //
   // PAGAMENTO: as duas nascem em 'full' (cliente paga 100% no ato). O modo
   // 'deposit' esta implementado ponta a ponta, mas ainda NAO foi confirmado se o
   // Quadri Club vai usa-lo no lancamento.
@@ -80,20 +91,20 @@ export const quadricicloTemplate: SegmentTemplate = {
   // O saldo (total menos sinal) e cobrado no dia, presencialmente (secao 1).
   experiences: [
     {
-      name: 'Trilha Curta', // PROVISORIO (nome) — confirmar com o cliente
-      durationMinutes: 60, // PROVISORIO — confirmar com o cliente
-      bufferMinutes: 15, // PROVISORIO — confirmar com o cliente
+      name: 'Trilha da Montanha',
+      durationMinutes: 90,
+      bufferMinutes: 15, // confirmado pelo cliente em 2026-07-28
       priceMode: 'per_resource',
-      priceCents: 12000, // R$ 120,00 por quadriciclo // PROVISORIO — confirmar com o cliente
+      priceCents: 32549, // PIX R$ 325,49 por quadriciclo (cartao seria 34999; ver nota acima)
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
       active: true,
     },
     {
-      name: 'Trilha Longa', // PROVISORIO (nome) — confirmar com o cliente
-      durationMinutes: 90, // PROVISORIO — confirmar com o cliente
-      bufferMinutes: 15, // PROVISORIO — confirmar com o cliente
+      name: 'Trilha da Fazenda',
+      durationMinutes: 60,
+      bufferMinutes: 15, // confirmado pelo cliente em 2026-07-28
       priceMode: 'per_resource',
-      priceCents: 18000, // R$ 180,00 por quadriciclo // PROVISORIO — confirmar com o cliente
+      priceCents: 23249, // PIX R$ 232,49 por quadriciclo (cartao seria 24999; ver nota acima)
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
       active: true,
     },
