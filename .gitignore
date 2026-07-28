@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# EXCECAO: .env.example so tem placeholder e e a documentacao de quais variaveis
+# o app precisa. Sem esta linha o `.env*` acima o engolia, e quem clonasse o repo
+# nao teria de onde partir para montar o proprio .env.
+!.env.example
 
 # vercel
 .vercel

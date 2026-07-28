@@ -20,6 +20,7 @@
 
 import cron from 'node-cron';
 
+import { checkAuthConfig } from './lib/auth';
 import { expireHolds } from './lib/jobs/expire-holds';
 
 /** Flag no globalThis, mesmo padrao de lib/db/client.ts. */
@@ -31,6 +32,28 @@ export async function register() {
   // hoje. A guarda custa uma comparacao e evita agendar um timer com acesso a
   // banco caso isso mude.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+
+  // -- fail-fast da configuracao de autenticacao (CLAUDE.md secao 13) --------
+  //
+  // AQUI e nao no topo de lib/auth.ts: o Easypanel injeta as variaveis em
+  // RUNTIME, nao no build (secao 2), entao validar no import derrubaria o
+  // `next build` dentro do Docker, onde ADMIN_* legitimamente ainda nao existem.
+  // register() so roda quando o SERVIDOR sobe — que e o "boot" que interessa.
+  //
+  // AVISA E SEGUE, nao derruba o processo: o site publico de reservas nao
+  // depende de auth nenhuma, e tirar a venda do ar por causa de uma variavel do
+  // painel seria trocar um problema por um pior. O admin fica inoperante (toda
+  // tentativa de login responde 500) e o log diz exatamente o que falta.
+  const authConfig = checkAuthConfig();
+  if (authConfig.ok) {
+    console.log('[auth] configuracao do admin validada');
+  } else {
+    console.error('='.repeat(78));
+    console.error('[auth] CONFIGURACAO DO ADMIN INVALIDA — O PAINEL NAO VAI FUNCIONAR');
+    console.error(authConfig.message);
+    console.error('O site publico de reservas continua no ar normalmente.');
+    console.error('='.repeat(78));
+  }
 
   // Precaucao contra registro duplicado. Nao observei duplicacao nas execucoes
   // deste projeto (o log "agendado" saiu uma vez por boot), mas o modulo pode ser

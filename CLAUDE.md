@@ -499,7 +499,19 @@ A lógica de expiração vive em `lib/` (função testável, reusável pelo job 
 
 ## 13. Autenticação do admin
 
-Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middleware protege `/admin/*` e `/api/admin/*`. **Next 16:** o arquivo chama-se `proxy.ts` (export `proxy`, runtime Node) — `middleware.ts` está deprecado. Sem provider externo.
+Um único login (o dono). Sem provider externo.
+
+**Fronteira única: `lib/auth.ts`.** Consumidores (`proxy.ts`, rotas `/api/admin`, telas de admin) chamam `getCurrentUser()` / `getUserFromRequest()` / `verifyCredentials()` / `createSession()` / `destroySession()` / `isProtectedPath()` e **nunca leem cookie ou `.env` direto**. Mesmo padrão de `getTenantId()`.
+
+**MVP:** usuário único, credencial em `.env` — `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` (bcrypt custo 12), `SESSION_SECRET` (≥ 32 chars). Sessão via **iron-session**: cookie `aventix_admin_session`, httpOnly, assinado e cifrado, `sameSite=lax`, `secure` em produção, validade 8h. Senha comparada **exclusivamente** por `bcrypt.compare`, nunca `===`; `bcrypt.compare` roda mesmo com e-mail errado, para não vazar por tempo de resposta qual e-mail é o do dono. Hash gerado por `npm run auth:hash -- "senha"`; **a senha em texto nunca entra no `.env` nem no repo**.
+
+**Escala (v2):** `getCurrentUser()` passa a ler a tabela `admin_users` e retornar papel; **só a implementação de `lib/auth.ts` muda, não os consumidores**.
+
+**`proxy.ts`** (Next 16: export `proxy`, runtime Node; `middleware.ts` está deprecado) protege `/admin/*` e `/api/admin/*` — tela sem sessão redireciona para `/admin/login`, API responde `401`. **LIBERA** `/admin/login` e `/api/admin/login` (sem isso, logar é impossível), **`/api/webhooks/*`** (o webhook é chamado pelo Asaas, que não tem sessão — 401 ali significa pagamento não confirmado e fila interrompida, seção 8.1) e todas as rotas públicas. O `matcher` escopa só em `/admin` e `/api/admin`; `isProtectedPath` repete a regra como segunda barreira.
+
+**Armadilha do `.env`:** o hash bcrypt contém três `$` e o carregador de ambiente do Next expande variáveis. **Escape cada cifrão com `\`** (`ADMIN_PASSWORD_HASH=\$2b\$12\$...`) — medido: aspas simples e duplas **não** protegem, e o `dotenv` puro dos scripts lê certo mesmo sem escape, então o erro só aparece dentro do Next, com cara de "senha errada".
+
+**Fail-fast:** `instrumentation.ts` valida a configuração no boot do servidor e loga o que falta. Avisa e segue, não derruba o processo: o site público de reservas não depende de auth, e tirar a venda do ar por causa de variável do painel seria trocar um problema por outro pior. A validação é preguiçosa em `lib/auth.ts` (não no import) porque o Easypanel injeta env em runtime, e validar no import quebraria o `next build` dentro do Docker.
 
 ---
 
@@ -551,6 +563,7 @@ Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middle
   /time.ts
 /scripts
   /seed.ts                            # aplica o template ao tenant (npm run db:seed)
+  /hash-password.ts                   # gera o hash bcrypt do admin (npm run auth:hash)
 /tests                                # integracao contra o Postgres local (Vitest)
 /drizzle
 /instrumentation.ts                   # agenda o cron de hold no boot (secao 12)
