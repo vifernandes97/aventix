@@ -487,10 +487,13 @@ O seed do MVP deve ser escrito **no formato de template de segmento**: `/lib/tem
 
 ---
 
-## 12. Expiração de hold (cron)
+## 12. Expiração de hold
 
-A cada 1 minuto, via `setReservationStatus` (reserva + alocações na mesma transação): `pending_payment` com `hold_expires_at < now()` → `expired`. Os `reservation_payments` pendentes dessa reserva vão para `cancelled` e as cobranças correspondentes são removidas no Asaas. `pg_cron` (preferido) ou node-cron.
+Reservas `pending_payment` com `hold_expires_at` vencido são expiradas para liberar os recursos. A expiração passa **obrigatoriamente** por `setReservationStatus` (regra da seção 4.6) — nunca por `UPDATE` direto.
 
+**Mecanismo: `node-cron` no processo Next**, registrado uma única vez em `instrumentation.ts`, disparando a cada minuto. NÃO usar `pg_cron`: ele executa SQL dentro do Postgres e não consegue chamar `setReservationStatus`, e um `UPDATE` cru furaria a sincronização `reservations`/`reservation_resources` sob `FOR UPDATE` que protege contra double-booking.
+
+A lógica de expiração vive em `lib/` (função testável, reusável pelo job de reconciliação da Fase 2); `instrumentation.ts` apenas agenda. Idempotente: um tick que não encontra holds vencidos é no-op. Trade-off aceito: um restart do container pode pular um tick — o próximo o cobre, e um hold expirando 1-2 min atrasado não causa dano.
 ---
 
 ## 13. Autenticação do admin
@@ -532,9 +535,12 @@ Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middle
 /lib
   /db/schema.ts
   /db/client.ts
-  /tenant.ts                          # tenant atual + settings cacheadas
+  /tenant.ts                          # tenant atual + settings cacheadas (SERVER-ONLY)
   /reservations.ts                    # find-or-create, criacao transacional, setReservationStatus, recalcReservationPayment
-  /availability.ts
+  /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
+  /jobs/expire-holds.ts               # expiracao de hold (secao 12); vizinho do reconcile na Fase 2
+  /templates/types.ts                 # forma de um template de segmento
+  /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
   /payments/provider.ts               # interface PaymentProvider
   /payments/asaas.ts                  # criar cobranca, QR, consultar, receiveInCash, remover, verify webhook
   /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao
@@ -542,12 +548,21 @@ Um único login (o dono). Cookie httpOnly assinado, credencial em `.env`. Middle
   /notifications.ts                   # Resend (assincrono)
   /auth.ts
   /time.ts
+/scripts
+  /seed.ts                            # aplica o template ao tenant (npm run db:seed)
+/tests                                # integracao contra o Postgres local (Vitest)
 /drizzle
+/instrumentation.ts                   # agenda o cron de hold no boot (secao 12)
 /proxy.ts                             # NAO pode redirecionar /api/webhooks/*
-docker-compose.yml
+docker-compose.dev.yml                # SO Postgres local; producao e Easypanel (secao 2)
 Dockerfile
+vitest.config.ts
 .env.example
 ```
+
+**`/lib` e biblioteca, `/scripts` e executavel.** Modulo em `/lib` pode ser importado por qualquer caminho do app sem efeito colateral; arquivo em `/scripts` roda ao ser carregado e escreve no banco. Um seed dentro de `/lib` viraria escrita acidental no primeiro import distraido.
+
+**Marcador `server-only`:** `tenant.ts` e `availability.ts` declaram `import 'server-only'`. Consequencia medida: dentro do Next (rotas, Server Components, `instrumentation.ts`) o import resolve normal; em **processo Node cru** (script `tsx`, Vitest) ele **lanca**. Por isso `scripts/seed.ts` nao importa `tenant.ts` e declara o tenant id localmente.
 
 ---
 
