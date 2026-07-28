@@ -53,13 +53,20 @@ export type SettingKey =
   | 'business_name'
   | 'reply_to_email'
   | 'deposit_policy_text'
-  | 'single_experience_per_slot';
+  | 'single_experience_per_slot'
+  | 'min_lead_minutes';
 
 /**
  * Subconjunto booleano. Tipar isto separado impede, em tempo de compilacao,
  * chamar getBooleanSetting com uma chave de texto (ex.: 'business_name').
  */
 export type BooleanSettingKey = 'operator_document_required' | 'single_experience_per_slot';
+
+/**
+ * Subconjunto numerico. Mesmo proposito do BooleanSettingKey: impede em tempo de
+ * compilacao chamar getNumberSetting com uma chave de texto.
+ */
+export type NumberSettingKey = 'min_lead_minutes';
 
 /**
  * Defaults para chave ausente. A tabela settings comeca vazia (o seed e tarefa
@@ -85,6 +92,9 @@ const SETTING_DEFAULTS: Record<SettingKey, string> = {
   deposit_policy_text: '',
   // default explicito do CLAUDE.md secao 4.2
   single_experience_per_slot: 'false',
+  // antecedencia minima entre agora e o inicio do passeio (secao 6).
+  // '0' e valido e significa "aceito reserva ate a hora do passeio".
+  min_lead_minutes: '60',
 };
 
 const SETTING_KEYS = Object.keys(SETTING_DEFAULTS) as SettingKey[];
@@ -211,4 +221,33 @@ export async function getSetting(key: SettingKey): Promise<string> {
  */
 export async function getBooleanSetting(key: BooleanSettingKey): Promise<boolean> {
   return (await getSetting(key)).trim().toLowerCase() === 'true';
+}
+
+/**
+ * Setting numerica (inteiro) do tenant atual.
+ *
+ * OBRIGATORIO usar isto em vez de `Number(valor)` no ponto de uso. `settings.value`
+ * e text — a mesma armadilha do getBooleanSetting em outra roupa: `"60" + 30` da
+ * `"6030"`, e um valor corrompido no banco vira NaN silencioso que faz o motor de
+ * disponibilidade descartar todos os candidatos ou nenhum, sem erro aparecendo.
+ * A conversao e a validacao moram num lugar so.
+ *
+ * Valor ausente, vazio, nao-numerico ou negativo cai no default da chave, com
+ * warn identificando a chave e o valor cru. ZERO E VALIDO: min_lead_minutes '0'
+ * significa "aceito reserva ate a hora do passeio" — nao e ausencia.
+ */
+export async function getNumberSetting(key: NumberSettingKey): Promise<number> {
+  const raw = await getSetting(key);
+  const parsed = Number.parseInt(raw.trim(), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    const fallback = Number.parseInt(SETTING_DEFAULTS[key], 10);
+    console.warn(
+      `[tenant ${getTenantId()}] setting '${key}' invalida: ${JSON.stringify(raw)} ` +
+        `nao e inteiro >= 0. Usando default ${fallback}.`,
+    );
+    return fallback;
+  }
+
+  return parsed;
 }
