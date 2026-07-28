@@ -73,6 +73,18 @@ A VPS roda Easypanel, que gerencia Traefik, domínio e SSL. O `docker-compose.ym
 
 Repasse automático ao Aventurando via `walletId` do Asaas vai para a v2. **Por quê:** depende de o parceiro ter conta Asaas e fornecer o walletId — dependência externa que pode travar o go-live. O modelo atual (venda pelo parceiro com `?canal=aventurando`, comissão acertada por fora) já resolve o caso comercial. **Reabrir se:** o Aventurando exigir repasse automático como condição para vender.
 
+## 2026-07-27 — Conversão de timezone em JS com date-fns-tz, não no Postgres
+
+`lib/time.ts` usa `date-fns-tz` (base IANA) para converter America/Sao_Paulo ↔ UTC. **Alternativa descartada:** fazer tudo no Postgres com `AT TIME ZONE`, que seria zero dependência e usaria a mesma tzdata do banco. **Por quê assim:** a geração de candidatos da grade é aritmética de calendário e fica mais legível em JS; o SQL guarda o que é dele, que é sobreposição. **Consequência:** duas bases de tzdata no sistema (Node e Postgres). Os instantes trafegam como `timestamptz`, então uma divergência de regra de DST entre elas só apareceria numa data futura já convertida. **Reabrir se:** aparecer tenant fora de SP ou o Brasil voltar a ter horário de verão. `lib/time.ts` é o único arquivo a trocar.
+
+## 2026-07-27 — A query de disponibilidade devolve índice, não timestamp
+
+A query dos passos 2/2b usa `unnest(...) WITH ORDINALITY` e retorna a posição do candidato; o JS mapeia de volta para o `Date` que ele mesmo calculou. **Por quê:** o Drizzle sobrescreve o parser de `timestamptz` do node-postgres e entrega texto cru em `db.execute`. Reparsear esse texto para `Date` introduziria uma chance de divergir do instante original, e uma divergência de fuso é silenciosa. **Consequência:** o SQL decide quais candidatos passam, nunca o valor deles.
+
+## 2026-07-27 — xmax = 0 distingue insert de update no upsert de cliente
+
+`findOrCreateCustomer` devolve `created` lendo `(xmax = 0)` no mesmo `RETURNING`. **Alternativa descartada:** `SELECT` prévio dentro da transação. **Por quê:** o `SELECT` custa uma query a mais e abre janela entre leitura e escrita. Validado sob concorrência real: duas chamadas simultâneas com o mesmo telefone retornaram o mesmo id, uma com `created=true` e outra com `false`. **Limitação conhecida:** se a mesma transação chamar a função duas vezes para o mesmo telefone, a segunda reporta `created=false`, correto para a linha mas não para a transação.
+
 ## 2026-07-27 — Faturas do cliente vêm do banco local, não do Asaas ao vivo
 
 A tela de cliente no admin mostra status de pagamento do banco local (mantido pelo webhook) e um link para a fatura no Asaas (`invoiceUrl` persistido na criação). **Por quê:** o webhook já mantém o status sincronizado; buscar ao vivo seria redundante e acoplaria a tela admin à disponibilidade do Asaas.

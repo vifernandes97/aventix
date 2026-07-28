@@ -24,6 +24,8 @@ Todo o núcleo de agendamento em `lib/` está pronto e testado contra o banco. F
 - `lib/availability.ts` — motor completo: precedência de `schedule_exceptions`, grade, buffer, blackouts, exclusividade de experiência, antecedência configurável
 - `app/api/reservations/route.ts` — POST funcionando, validado via curl (201)
 
+**Dependências adicionadas nesta fase:** `date-fns-tz` (timezone em `lib/time.ts`), `zod` (validação do corpo da rota; era transitiva, foi promovida a declarada), `server-only`.
+
 ## Falta na Fase 1
 
 1. **Seed como template de segmento** (`lib/templates/quadriciclo.ts`) — destrava o teste ponta a ponta; o banco está vazio hoje
@@ -53,6 +55,7 @@ Depois dele: rota `GET /api/availability`, e então o teste ponta a ponta via cu
 - **`mode:'string'` no schema:** toda nova função que retorne `timestamptz` reintroduz o problema de formato não-ISO. Duas já foram corrigidas (`holdExpiresAt`, `customer.createdAt`). Regra registrada na seção 3 do CLAUDE.md
 - **`operating_hours` permite faixas sobrepostas** no mesmo weekday. O motor deduplica como defesa; a correção de origem é validar no CRUD de horários (Fase 3)
 - **Experiência gratuita** (`price_cents = 0`) não é suportada — registrado na seção 4.6
+- **Não existe suíte de testes automatizada.** Toda a validação da Fase 1 foi manual, por scripts descartáveis rodados contra o banco local e conferidos por `psql`. Os resultados foram bons (adjacência de `[)`, corridas com 1 sucesso e 1 conflito em 12 tentativas, rollback total, ISO nas datas), mas nada disso guarda regressão: qualquer refatoração futura passa sem alarme. Montar a suíte é o item 4 da lista acima e vale antes da Fase 3, que mexe em tudo
 
 ## Prazo
 
