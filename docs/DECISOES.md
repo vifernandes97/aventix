@@ -5,6 +5,22 @@
 > Entradas abaixo de 2026-07-27 são registro retroativo das decisões tomadas
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
+## 2026-07-28 — server-only resolve dentro do Next e lança fora dele
+
+`lib/tenant.ts` e `lib/availability.ts` declaram `import 'server-only'`. Comportamento MEDIDO em três contextos: dentro do Next (rotas, Server Components, `instrumentation.ts`) o import resolve normalmente; em processo Node cru (`tsx` avulso, Vitest) ele lança "This module cannot be imported from a Client Component module". A explicação provável é a condição de exportação `react-server`, que o Next aplica e o Node cru não; o mecanismo interno não foi aberto para conferência, só o comportamento. **Consequência prática:** `instrumentation.ts` usa import estático sem problema, `scripts/seed.ts` não pode importar `tenant.ts` (declara o tenant id localmente), e o Vitest precisa de tratamento explícito, ainda por decidir. **Alternativa descartada:** import dinâmico no `instrumentation.ts` como precaução. Ela não corrigia nada, porque nada quebrava, e o comentário que a justificava afirmava um perigo inexistente. **Lição de método registrada:** justificativa de código que não foi medida vira dívida, porque a próxima pessoa a lê como fato.
+
+## 2026-07-28 — Seed reconcilia catálogo por nome e nunca apaga
+
+`scripts/seed.ts` casa recursos e experiências por `(tenant_id, name)`, e faixas de horário pela tupla inteira `(weekday, opens, closes)`. **Por quê:** essas tabelas usam `id serial` e não têm chave natural no schema; o nome é o único identificador estável que o template oferece. **Consequência assumida:** renomear um item no template cria um NOVO registro em vez de renomear o antigo, e o antigo é reportado como órfão. É o comportamento seguro, porque o registro antigo pode ter reservas apontando para ele. **O que o seed nunca faz:** apagar. Nem movimento, que ele sequer toca, nem catálogo ausente do template. Sincronizar a grade removendo faixas antigas quebraria FK de reservas gravadas; desativar catálogo obsoleto é operação do admin, com `active = false`.
+
+## 2026-07-28 — /lib é biblioteca, /scripts é executável
+
+Seed e futuros utilitários de linha de comando vivem em `/scripts`, não em `/lib`. **Por quê:** um arquivo em `/lib` pode ser importado por qualquer caminho do app, e o seed chama `main()` ao ser carregado e escreve no banco; um import distraído dispararia escrita. **Alternativa descartada:** `lib/templates/seed.ts`, que ficaria colado ao template que ele aplica. **Custo aceito:** `/scripts` não estava na árvore da seção 14 do CLAUDE.md e foi acrescentado lá. A regra também decide onde entra o job de reconciliação da Fase 2: a lógica em `/lib` (testável, reusável), o entrypoint agendado fora dela.
+
+## 2026-07-28 — Cron de hold via node-cron, não pg_cron
+
+Expiração de hold roda com node-cron no processo Next (instrumentation.ts), não pg_cron. **Por quê:** pg_cron executa SQL dentro do Postgres e não consegue chamar setReservationStatus; SQL cru mexendo em status furaria a regra do FOR UPDATE (seção 4.6) e a proteção contra double-booking. **Alternativa descartada:** rota protegida chamada por agendador externo (Easypanel/serviço) — desacoplada e resistente a restart, mas adiciona infraestrutura e um segredo a gerenciar, sem ganho real num setup de container único. **Reabrir se:** escalar para múltiplos containers ou migrar para serverless, onde o cron in-process roda duplicado ou não roda.
+
 ## 2026-07-27 — CLAUDE.md é especificação, docs/ é estado e histórico
 
 CLAUDE.md descreve como o sistema é, no presente, e é lido por inteiro toda sessão. Estado e histórico vão para `docs/`. **Alternativa descartada:** um `sessions.md` acumulando diário de sessões. Logs crescem sem limite, ninguém relê o meio deles e viram uma terceira fonte de verdade que diverge das outras. **Se fosse diferente:** o bloco "Revisão 4/5/5.1/6" no topo do CLAUDE.md é o exemplo vivo do fracasso — histórico dentro da especificação, com uma regra viva (a regra de marca) enterrada no meio.
