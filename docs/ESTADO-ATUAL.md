@@ -5,9 +5,11 @@
 
 ## Onde estamos
 
-**Fase 1 (Núcleo) COMPLETA, 10 de 10 tarefas.** Go-live: 24/08/2026.
+**Fase 1 (Núcleo) COMPLETA, 10 de 10 tarefas. Em curso: Fase 3 (interfaces), por inversão de ordem.** Go-live: 24/08/2026.
 
-O núcleo funciona ponta a ponta pela API e está coberto por suíte automatizada verde. A próxima fase é a 2 (pagamento), que depende de pré-requisitos do cliente ainda não entregues.
+O núcleo funciona ponta a ponta pela API e está coberto por suíte automatizada verde.
+
+**A ordem das fases foi invertida** (decisão de 28/07 em `docs/DECISOES.md`): os pré-requisitos do Asaas atrasaram e travam a Fase 2 inteira, então construímos primeiro as telas de **admin** da Fase 3 que não dependem de pagamento — auth, calendário nativo, CRUDs de catálogo, configurações, clientes (sem faturas), agenda compartilhada. A Fase 2 e o miolo do fluxo público de compra (tela de pagamento Pix, criação de cobrança) ficam para depois.
 
 ## Pronto
 
@@ -36,11 +38,13 @@ Isolamento: `fileParallelism: false` (os arquivos compartilham o mesmo banco), c
 
 ## PRÓXIMO PASSO
 
-**Cobrar do Terra Trilha os pré-requisitos do Asaas (CLAUDE.md seção 18)**, que travam a Fase 2 inteira e não dependem de código: conta aprovada com prova de vida, chave Pix cadastrada, API keys de produção e sandbox, webhook com token próprio, régua de notificações ajustada.
+**Fase 3 — autenticação do admin (porta de entrada das telas de admin).** CLAUDE.md seção 13: login único do dono, cookie httpOnly assinado, credencial em `.env`, `proxy.ts` (Next 16, export `proxy`, runtime Node) protegendo `/admin/*` e `/api/admin/*`. Sem provider externo.
 
-Junto disso, a decisão de negócio que muda o desenho da Fase 2: **lançamento com pagamento integral ou com sinal?** As duas experiências estão em `payment_mode: 'full'` no template. O modo `deposit` está implementado e testado; trocar são dois campos e rodar o seed.
+É o primeiro passo porque toda tela de admin depende dele. Não toca o banco — credencial e segredo vivem no `.env` —, então não depende do Postgres local nem do Docker.
 
-Enquanto os pré-requisitos não chegam, o trabalho disponível é o começo da Fase 3 (interfaces), que não depende do Asaas: formulário público derivado da configuração, termo com scroll-to-end, calendário nativo do admin.
+**Decisão de segurança pendente, a ser tomada ANTES da implementação:** como a senha é guardada e como o cookie é assinado.
+
+Depois da auth, na ordem: calendário nativo do admin, CRUDs de catálogo (experiências, recursos, horários, bloqueios), configurações, termo, clientes (sem a parte de faturas), agenda compartilhada por link secreto.
 
 ## Migrations
 
@@ -56,8 +60,8 @@ Catálogo semeado e íntegro: 1 tenant, 13 settings, 2 recursos, 2 experiências
 
 ## Pendências e dívidas conhecidas
 
-- **Pré-requisitos do Asaas travam a Fase 2** e dependem do cliente (seção 18)
-- **18 valores PROVISÓRIOS** no template, em `lib/templates/quadriciclo.ts`, localizáveis por `grep -n "PROVISORIO"`. O `reply_to_email` está como `contato@aventix.com.br` e aparece para o cliente final, onde a regra de marca manda aparecer o tenant
+- **DEPENDÊNCIA DA FASE 2 (não é o próximo passo):** os pré-requisitos do Asaas (CLAUDE.md seção 18) dependem do cliente e travam a Fase 2 inteira — conta aprovada com prova de vida, chave Pix cadastrada, API keys de produção e sandbox, webhook com token próprio, régua de notificações ajustada. **A Fase 2 é retomada quando as telas de admin estiverem prontas E a conta estiver aprovada.** Junto vem a decisão de negócio que muda o desenho dela: **lançamento com pagamento integral ou com sinal?** As duas experiências estão em `payment_mode: 'full'` no template; o modo `deposit` está implementado e testado, trocar são dois campos e rodar o seed
+- **11 valores PROVISÓRIOS** no template, em `lib/templates/quadriciclo.ts`, localizáveis por `grep -n "PROVISORIO"`. Nomes e preços das trilhas já foram confirmados (Montanha 90min / R$ 325,49 Pix; Fazenda 60min / R$ 232,49 Pix). Seguem provisórios: `min_lead_minutes`, ponto de encontro, o que levar, política de sinal, nomes dos recursos, grade de horários, os dois `paymentMode`, e o `reply_to_email` — que está como `contato@aventix.com.br` e aparece para o cliente final, onde a regra de marca manda aparecer o tenant
 - **A exclusion constraint não é exercitada pela suíte.** Com `single_experience_per_slot=true` (config do Quadri Club), a criação toma advisory lock e serializa as transações, então o perdedor da corrida sempre cai no recheck de disponibilidade. Medido na suíte: 0 via constraint, 10 via recheck. A constraint foi verificada manualmente com o flag desligado (11 de 12 perdedores caíam nela), mas não há teste automatizado dela. Cobrir exigiria um caso que desliga o flag, roda a corrida e restaura
 - **Reserva expirada mantém `reservation_payments` em `pending`.** A seção 12 não pede o cancelamento na expiração. O job de reconciliação da Fase 2 vai encontrar essas linhas; o filtro da seção 8-B provavelmente precisa excluir `expired`, não só `cancelled`
 - **Sem proteção contra duplo clique** em `POST /api/reservations`. Defesa natural é desabilitar o botão na Fase 3
@@ -70,4 +74,4 @@ Catálogo semeado e íntegro: 1 tenant, 13 settings, 2 recursos, 2 experiências
 
 ## Prazo
 
-Go-live 24/08. Faltam as Fases 2 (pagamento), 3 (interfaces, a mais pesada) e 4 (integrações e hardening). Ritmo de ~2h/dia. Candidatos a corte se apertar: agenda compartilhada por link secreto, seed como template (virar seed simples).
+Go-live 24/08. Faltam a Fase 3 (interfaces, a mais pesada — em curso, começando pelo admin), a Fase 2 (pagamento, à espera do Asaas) e a Fase 4 (integrações e hardening). Ritmo de ~2h/dia. **Custo aceito da inversão:** Fases 2 e 3 serão costuradas no fim em vez de sequenciais, com mais troca de contexto. Candidatos a corte se apertar: agenda compartilhada por link secreto, seed como template (virar seed simples).
