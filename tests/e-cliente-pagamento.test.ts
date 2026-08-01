@@ -12,6 +12,8 @@ import {
 } from '@/lib/reservations';
 
 import {
+  DEPOSIT_FIXED_FIXTURE,
+  DEPOSIT_PCT_FIXTURE,
   EXP,
   EXP_DEPOSIT_FIXED,
   EXP_DEPOSIT_PCT,
@@ -24,6 +26,20 @@ import {
 } from './helpers/db';
 
 const SAT = nextSaturday();
+
+// O teste faz a PROPRIA conta a partir dos parametros do fixture. Nao e
+// circular: o fixture da o insumo (preco e percentual), a aritmetica esperada e
+// feita aqui, e o resultado se compara com o que createReservation calculou por
+// outro caminho. Comparar com o retorno do app seria a versao circular; cravar
+// 34900/17450 seria a versao que envelhece calada quando o fixture mudar.
+// Regra da secao 4.6: deposit = round(total x deposit_percent / 100).
+const TOTAL_PCT = DEPOSIT_PCT_FIXTURE.priceCents;
+const SINAL_PCT = Math.round((TOTAL_PCT * DEPOSIT_PCT_FIXTURE.depositPercent) / 100);
+const SALDO_PCT = TOTAL_PCT - SINAL_PCT;
+
+// Aqui deposit_fixed_cents e MAIOR que o preco, entao o teto da secao 4.6 faz o
+// sinal virar o total e nenhuma linha de saldo existir.
+const TOTAL_FIXED = DEPOSIT_FIXED_FIXTURE.priceCents;
 
 async function primeiroSlot(experienceId: number, resourcesNeeded = 1): Promise<string> {
   const { slots } = await getAvailability({ experienceId, date: SAT, resourcesNeeded });
@@ -93,9 +109,9 @@ describe('E — pagamento', () => {
     );
 
     expect(criada.paymentMode).toBe('deposit');
-    expect(criada.totalCents).toBe(34900);
-    expect(criada.dueNowCents).toBe(17450);
-    expect(criada.balanceCents).toBe(17450);
+    expect(criada.totalCents).toBe(TOTAL_PCT);
+    expect(criada.dueNowCents).toBe(SINAL_PCT);
+    expect(criada.balanceCents).toBe(SALDO_PCT);
 
     const linhas = await pagamentos(criada.reservationId);
     expect(linhas.map((l) => l.kind)).toEqual(['balance', 'deposit']);
@@ -120,14 +136,14 @@ describe('E — pagamento', () => {
 
     // Sem o teto, o saldo seria negativo e o CHECK (amount_cents > 0) derrubaria
     // a venda por erro de configuracao da experiencia.
-    expect(criada.totalCents).toBe(17450);
-    expect(criada.dueNowCents).toBe(17450);
+    expect(criada.totalCents).toBe(TOTAL_FIXED);
+    expect(criada.dueNowCents).toBe(TOTAL_FIXED);
     expect(criada.balanceCents).toBe(0);
 
     const linhas = await pagamentos(criada.reservationId);
     expect(linhas).toHaveLength(1);
     expect(linhas[0].kind).toBe('deposit');
-    expect(Number(linhas[0].amount_cents)).toBe(17450);
+    expect(Number(linhas[0].amount_cents)).toBe(TOTAL_FIXED);
   });
 
   it('18. recalcReservationPayment soma so o que esta pago e classifica certo', async () => {
@@ -145,20 +161,20 @@ describe('E — pagamento', () => {
     let r = await recalcReservationPayment(id);
     expect(r.amountPaidCents).toBe(0);
     expect(r.paymentState).toBe('pending');
-    expect(r.balanceCents).toBe(34900);
+    expect(r.balanceCents).toBe(TOTAL_PCT);
 
     // Sinal pago -> parcial.
     await setPaymentState(id, 'deposit', 'paid');
     r = await recalcReservationPayment(id);
-    expect(r.amountPaidCents).toBe(17450);
+    expect(r.amountPaidCents).toBe(SINAL_PCT);
     expect(r.paymentState).toBe('partial');
-    expect(r.balanceCents).toBe(17450);
+    expect(r.balanceCents).toBe(SALDO_PCT);
 
     // Saldo pago -> quitado. previousPaymentState = 'partial' e o que autoriza o
     // e-mail de "saldo quitado" a sair uma vez so (secao 9).
     await setPaymentState(id, 'balance', 'paid');
     r = await recalcReservationPayment(id);
-    expect(r.amountPaidCents).toBe(34900);
+    expect(r.amountPaidCents).toBe(TOTAL_PCT);
     expect(r.paymentState).toBe('settled');
     expect(r.previousPaymentState).toBe('partial');
     expect(r.balanceCents).toBe(0);
@@ -166,14 +182,14 @@ describe('E — pagamento', () => {
     // Idempotencia: sem mudanca nos pagamentos, o resultado nao se move, e
     // previous passa a igualar o atual (nada a notificar).
     const denovo = await recalcReservationPayment(id);
-    expect(denovo.amountPaidCents).toBe(34900);
+    expect(denovo.amountPaidCents).toBe(TOTAL_PCT);
     expect(denovo.paymentState).toBe('settled');
     expect(denovo.previousPaymentState).toBe('settled');
 
     // 'cancelled' sai da soma.
     await setPaymentState(id, 'balance', 'cancelled');
     r = await recalcReservationPayment(id);
-    expect(r.amountPaidCents).toBe(17450);
+    expect(r.amountPaidCents).toBe(SINAL_PCT);
     expect(r.paymentState).toBe('partial');
 
     // 'refunded' tambem sai.

@@ -65,8 +65,23 @@ export const TEMPLATE_EXP = {
 export const EXP = { curta: 0, longa: 0 };
 
 /** Experiencias criadas pela propria suite, para cobrir o modo 'deposit'. */
-export const EXP_DEPOSIT_PCT = 900; // 34900c, deposit_percent 50
-export const EXP_DEPOSIT_FIXED = 901; // 17450c, deposit_fixed_cents 99900 (> total)
+export const EXP_DEPOSIT_PCT = 900;
+export const EXP_DEPOSIT_FIXED = 901;
+
+/**
+ * Parametros das duas experiencias acima. FONTE UNICA: o INSERT de
+ * ensureDepositExperiences() le daqui, e os testes derivam daqui o valor
+ * esperado do sinal e do saldo.
+ *
+ * Estes numeros NAO sao o catalogo do Quadri Club — sao fixture da suite, e e
+ * por isso que nao saem do template. O catalogo real tem as duas experiencias
+ * em payment_mode 'full', entao o modo 'deposit' nao teria como ser exercitado
+ * contra ele. Nomear os dois 17450 separadamente importa: um e o preco de uma
+ * experiencia, o outro e metade do preco da outra, e a coincidencia numerica
+ * escondia isso.
+ */
+export const DEPOSIT_PCT_FIXTURE = { priceCents: 34900, depositPercent: 50 };
+export const DEPOSIT_FIXED_FIXTURE = { priceCents: 17450, depositFixedCents: 99900 };
 
 const MOVEMENT_TABLES = [
   'reservation_payments',
@@ -311,9 +326,11 @@ export async function ensureDepositExperiences(): Promise<void> {
        payment_mode, deposit_percent, deposit_fixed_cents, active)
     VALUES
       (${EXP_DEPOSIT_PCT}, ${TENANT_ID}, 'TESTE deposit percentual', 60, 15,
-       'per_resource'::price_mode, 34900, 'deposit'::payment_mode, 50, NULL, true),
+       'per_resource'::price_mode, ${DEPOSIT_PCT_FIXTURE.priceCents}, 'deposit'::payment_mode,
+       ${DEPOSIT_PCT_FIXTURE.depositPercent}, NULL, true),
       (${EXP_DEPOSIT_FIXED}, ${TENANT_ID}, 'TESTE deposit fixo maior que o total', 60, 15,
-       'per_resource'::price_mode, 17450, 'deposit'::payment_mode, NULL, 99900, true)
+       'per_resource'::price_mode, ${DEPOSIT_FIXED_FIXTURE.priceCents}, 'deposit'::payment_mode,
+       NULL, ${DEPOSIT_FIXED_FIXTURE.depositFixedCents}, true)
   `);
 }
 
