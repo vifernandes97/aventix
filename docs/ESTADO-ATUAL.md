@@ -1,15 +1,17 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-07-28
+> Última atualização: 2026-08-01
 
 ## Onde estamos
 
-**Fase 3 (interfaces), 1 de 8 tarefas de admin.** Fase 1 (Núcleo) completa, 10 de 10. Go-live: 24/08/2026.
+**Fase 3 (interfaces), 1 de 8 tarefas de admin.** Fase 1 (Núcleo) completa. Go-live: 24/08/2026.
 
-A ordem das fases está invertida por decisão de 28/07 (`docs/DECISOES.md`): os pré-requisitos do Asaas atrasaram e travam a Fase 2 inteira, então as telas de admin que não dependem de pagamento vêm primeiro. A autenticação, porta de entrada de todas elas, ficou pronta nesta sessão.
+A ordem das fases está invertida por decisão de 28/07 (`docs/DECISOES.md`): os pré-requisitos do Asaas atrasaram e travam a Fase 2 inteira, então as telas de admin que não dependem de pagamento vêm primeiro.
 
-Tarefas de admin da Fase 3, na ordem prevista: **auth (pronta)**, calendário nativo, CRUD de experiências, CRUD de recursos, horários e bloqueios, configurações, termo, clientes sem faturas, agenda compartilhada por link secreto.
+Tarefas de admin da Fase 3, na ordem prevista: **auth (pronta)**, calendário nativo (fatiado em grade de visualização e depois painel de detalhes/cancelamento), CRUD de experiências, CRUD de recursos, horários e bloqueios, configurações, termo, clientes sem faturas, agenda compartilhada por link secreto.
+
+Esta sessão não avançou tarefa nova: foi recuperação de trabalho validado que um `rebase --abort` havia descartado.
 
 ## Pronto
 
@@ -23,59 +25,58 @@ Tarefas de admin da Fase 3, na ordem prevista: **auth (pronta)**, calendário na
 - `lib/time.ts`: conversões America/Sao_Paulo, UTC, validação de data de calendário
 - `lib/reservations.ts`: `setReservationStatus`, `recalcReservationPayment`, `findOrCreateCustomer`, `createReservation`
 - `lib/availability.ts`: motor completo (exceções de agenda, buffer, blackouts, exclusividade, lead time)
-- `lib/templates/` + `scripts/seed.ts`: template de segmento do Quadri Club, seed idempotente
+- `lib/templates/` + `lib/seed.ts` + `scripts/seed.ts`: template de segmento do Quadri Club, seed idempotente
 - `lib/jobs/expire-holds.ts` + `instrumentation.ts`: cron de expiração de hold, a cada minuto
 - `app/api/reservations/route.ts` (POST) e `app/api/availability/route.ts` (GET)
-- `tests/`: 25 casos em 5 arquivos. **ATENÇÃO: vermelhos hoje, ver pendências**
+- `tests/`: 30 casos em 6 arquivos, com `tests/global-setup.ts` migrando e semeando sozinho
 
 **Fase 3, tarefa 1: autenticação do admin (completa, commit `709cf4d`)**
-- `lib/auth.ts`: fronteira única. `verifyCredentials`, `getCurrentUser`, `getUserFromRequest`, `createSession`, `destroySession`, `isProtectedPath`, `checkAuthConfig`. Nenhum consumidor lê cookie ou `.env` direto
-- `proxy.ts`: protege `/admin/*` e `/api/admin/*`; libera login, `/api/webhooks/*` e as rotas públicas
-- `app/(admin)/admin/login/page.tsx` (Client Component) e `app/(admin)/admin/page.tsx` (placeholder do painel)
-- `app/api/admin/login/route.ts` e `app/api/admin/logout/route.ts`
-- `scripts/hash-password.ts` + script `npm run auth:hash`
-- `tests/f-auth.test.ts`: 5 casos de política de rotas, verdes (não tocam o banco)
-- `.env.example` passou a ser versionado, com `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`
+- `lib/auth.ts` como fronteira única, `proxy.ts` protegendo `/admin/*` e `/api/admin/*`
+- Telas de login e placeholder do painel, rotas de login/logout, `npm run auth:hash`
+- `tests/f-auth.test.ts`: 5 casos de política de rotas, verdes, sem tocar o banco
 
-Dependências novas: `bcrypt`, `iron-session`, `@types/bcrypt` (dev).
+## O que esta sessão fez
 
-## Como a auth foi verificada
+Recuperação de `d037245`, commit que ficou órfão depois de um `rebase --abort` seguido de `pull`. O reflog mostrava o commit íntegro no object database, então a recuperação foi por `git cherry-pick` (aplicou limpo), não por reescrita à mão, para não arriscar produzir algo diferente do que já tinha sido validado.
 
-Prova por curl contra `npm run dev`, com os 8 casos pedidos: `/admin` sem cookie devolve 307 para `/admin/login`; `/api/admin/*` sem cookie devolve 401 JSON; credencial errada devolve 401 com mensagem genérica idêntica para email errado e senha errada; credencial certa devolve 200 com `Set-Cookie` HttpOnly, SameSite lax, Max-Age 28800; `/admin` com cookie devolve 200; logout devolve 303 zerando o cookie e `/admin` volta a redirecionar.
+Commitado e pushed (`origin/main` = `c60fa66`):
+- `b7674e1` (cherry-pick): `tests/global-setup.ts` ligado no `vitest.config.ts`, `lib/seed.ts` com `seedTenant()` chamável, `assertCatalogSeeded` resolvendo experiências por nome a partir do template, testes 15 e 15b ancorados em `TEMPLATE_EXP.*.priceCents`
+- `c60fa66`: valores do modo `deposit` em `e-cliente-pagamento` derivam de `DEPOSIT_PCT_FIXTURE` e `DEPOSIT_FIXED_FIXTURE` em vez de doze literais repetidos
 
-O caso do webhook foi provado criando `app/api/webhooks/asaas/route.ts` temporário (GET e POST devolveram 200 sem cookie) e **apagando o arquivo em seguida**. Um 404 não provaria nada, porque poderia vir do proxy ou da rota inexistente.
+Verificado: `npx tsc --noEmit` limpo; `docker compose down -v` seguido de `npm test` roda a partir de banco VAZIO, sem `db:seed` manual, imprimindo `[global-setup] catalogo semeado (19 registro(s) criado(s))`; segunda rodada dá placar idêntico com o setup em silêncio.
 
-Enumeração de usuário medida em 3 rodadas: email errado 0,258 / 0,255 / 0,253s; email certo com senha errada 0,255 / 0,255 / 0,256s. Indistinguível, porque `bcrypt.compare` roda mesmo quando o email já falhou.
+Placar das duas rodadas: `1 failed | 29 passed (30)`. A falha é a pendência de prioridade máxima abaixo.
 
 ## PRÓXIMO PASSO
 
-**Consertar a suíte de testes da Fase 1, que está vermelha desde `ce3e4c6`.** Detalhe na primeira pendência abaixo. Vem antes do calendário porque toda tela nova da Fase 3 vai mexer em dados que só essa suíte protege, e construir sobre rede de segurança desligada é como o projeto perde tempo. É trabalho pequeno, com o diagnóstico já fechado.
+**Decidir e aplicar o conserto do teste `10c` de `tests/c-disponibilidade.test.ts`**, que falha por hora do dia. Diagnóstico fechado, decisão em aberto (três opções na pendência abaixo). É trabalho pequeno e vem antes do calendário porque uma suíte que fica vermelha toda noite treina a equipe a ignorar vermelho, que foi exatamente como a suíte passou dias quebrada sem ninguém notar.
 
-**Depois:** calendário nativo do admin (CLAUDE.md seções 11.1 e 14), a segunda tarefa da Fase 3. Visão do dia com uma coluna por recurso ativo, blocos com cliente, experiência e status, buffers visíveis, seletor de data e faixa semanal. Tela usada no celular, em campo: priorizar legibilidade e toque. O marcador de saldo em aberto e os botões de cobrança dependem da Fase 2 e ficam para a costura final.
+**Depois:** calendário nativo do admin, fatiado em duas tarefas conforme decisão de 28/07: primeiro a **grade de visualização** (CSS Grid puro, três views, eixo recurso, filtro por experiência via chips, rolagem horizontal para escala) e depois o **painel de detalhes + cancelamento**. Tela usada no celular, em campo: priorizar legibilidade e toque. Marcador de saldo e botões de cobrança dependem da Fase 2 e ficam para a costura final.
 
 ## Migrations
 
 - **Uma migration:** `drizzle/0000_oval_mandroid.sql` (colapsada, schema rev 6 completo)
-- **Local:** aplicada. `drizzle.__drizzle_migrations` tem 1 linha, 13 tabelas em `public`
+- **Local:** aplicada. `drizzle.__drizzle_migrations` tem 1 linha, 13 tabelas em `public` (conferido nesta sessão)
 - **Produção:** NUNCA migrou. Banco vazio. Primeira migration em produção entra no checklist de go-live
 - `npm run db:generate` responde "No schema changes, nothing to migrate" (verificado no fim desta sessão)
 - `btree_gist` e a exclusion constraint são SQL manual dentro da migration
 
 ## Banco local
 
-Container `aventix-db-dev` (postgres:17-alpine) no ar. Catálogo: 1 tenant, 13 settings, 2 recursos, 2 experiências, 2 faixas de horário. Movimento vazio.
+Container `aventix-db-dev` (postgres:17-alpine) no ar, **recriado do zero nesta sessão** (`down -v`). Catálogo: 1 tenant, 13 settings, 2 recursos, 2 experiências, 2 faixas de horário. Movimento vazio.
 
-**As experiências têm id 3 e 4, não 1 e 2.** Trilha da Montanha (id 3, 90 min, 32549 centavos) e Trilha da Fazenda (id 4, 60 min, 23249). É a causa da suíte vermelha.
+As experiências voltaram a ter **id 1 e 2** (Trilha da Montanha 90 min 32549c, Trilha da Fazenda 60 min 23249c, ambas `payment_mode = 'full'`). Isso deixou de importar: a suíte resolve experiência por nome a partir do template, não por id fixo.
 
 ## Pendências e dívidas conhecidas
 
-- **SUÍTE VERMELHA, prioridade máxima.** `npm test` dá `5 failed | 1 passed`, com os 25 casos da Fase 1 em *skipped* (não falhos) porque `assertCatalogSeeded` lança em `beforeAll`. Causa: `tests/helpers/db.ts:25-26` fixa `EXP_CURTA = 1` e `EXP_LONGA = 2`, mas o commit `ce3e4c6` renomeou as trilhas no template e o seed reconcilia por nome sem renomear, então elas nasceram como id 3 e 4. Complicação para um conserto mecânico: **as durações inverteram**, antes `EXP_CURTA` era 60 min e agora o id 3 tem 90 min, então trocar 1 por 3 e 2 por 4 inverte a semântica dos testes que dependem de duração. Decisão a tomar: manter ids fixos ou resolver a experiência por nome uma vez em `beforeAll`. Os comentários das linhas 25-26 também estão obsoletos
-- **`ce3e4c6` tem mensagem que não bate com o conteúdo.** Diz "test: verificação de preço independente" e não toca `tests/`; o diff é 100% `lib/templates/quadriciclo.ts`, trocando nomes, durações e preços provisórios pelos reais. Quem procurar a confirmação dos preços pelo assunto do commit não acha. Já está em `origin`, nada a fazer além de saber
-- **Sem rate limiting no login.** `POST /api/admin/login` aceita tentativas ilimitadas. O custo do bcrypt (cerca de 250ms) atrasa, mas não é defesa. Marcado como TODO no arquivo, previsto para o hardening da Fase 4
-- **Sessão sem revogação.** O estado vive no cookie (iron-session), não no banco. Cookie roubado vale até expirar, 8h. A única forma de invalidar sessões abertas é trocar `SESSION_SECRET`, o que derruba todas de uma vez. Aceito no MVP de usuário único; some quando entrar o segundo usuário
-- **DEPENDÊNCIA DA FASE 2 (não é o próximo passo):** pré-requisitos do Asaas (CLAUDE.md seção 18) dependem do cliente e travam a Fase 2 inteira: conta aprovada com prova de vida, chave Pix cadastrada, API keys de produção e sandbox, webhook com token próprio, régua de notificações ajustada. A Fase 2 é retomada quando as telas de admin estiverem prontas E a conta aprovada. Junto vem a decisão de negócio que muda o desenho dela: **lançamento com pagamento integral ou com sinal?** As duas experiências estão em `payment_mode: 'full'`; o modo `deposit` está implementado e testado, trocar são dois campos e rodar o seed
+- **TESTE `10c` VERMELHO POR HORA DO DIA, prioridade máxima.** `tests/c-disponibilidade.test.ts:188` falha quando rodado depois das 19:30. Mecânica: `EXP.curta` dura 60 min e a grade do teste fecha 23:30, então o último slot possível começa 22:30; com `min_lead_minutes` 180 o corte é `agora + 3h`, e passadas as 19:30 nenhum slot sobrevive. `primeiroSlot()` devolve `null` e `toBeGreaterThanOrEqual(null)` estoura com `received "object"`. O mesmo mecanismo derruba `10b` e `10d` depois das 20:30. É pré-existente, não foi introduzido nesta sessão, e o commit original passou porque foi rodado às 16:50. Conserto NÃO aplicado por ser decisão de design, com a regra do projeto proibindo mockar relógio e a grade não atravessando meia-noite. Opções levantadas: (a) `closes` para 23:59, que só move a fronteira para 19:59; (b) semear grade para hoje e amanhã e consultar a data onde o corte cai, que perto da meia-noite degenera a asserção do "30 min antes"; (c) o teste calcular o último início viável e só afirmar quando o cenário for construível, honesto e sem flake, ao custo de não exercitar nada tarde da noite. Recomendação registrada: (c), com log quando o cenário não for construível, para não virar teste que passa sem testar
+- **`docs/DECISOES.md` afirma algo que o CLAUDE.md não reflete.** A entrada "Views do calendário" diz que o contrato de dados de `GET /api/admin/calendar` foi "registrado na seção 11.1 do CLAUDE.md", mas a seção 11.1 atual não contém contrato de dados nenhum, só a descrição visual da tela. Provável perda do mesmo `rebase --abort`. Resolver antes de construir o calendário, que é justamente quem consome esse contrato. O texto do contrato não foi reconstruído aqui porque seria invenção, não recuperação
+- **Sem rate limiting no login.** `POST /api/admin/login` aceita tentativas ilimitadas. O custo do bcrypt (cerca de 250ms) atrasa, mas não é defesa. TODO no arquivo, previsto para o hardening da Fase 4
+- **Sessão sem revogação.** O estado vive no cookie (iron-session), não no banco. Cookie roubado vale até expirar, 8h. Única forma de invalidar sessões abertas é trocar `SESSION_SECRET`. Aceito no MVP de usuário único
+- **DEPENDÊNCIA DA FASE 2 (não é o próximo passo):** pré-requisitos do Asaas (CLAUDE.md seção 18) dependem do cliente e travam a Fase 2 inteira: conta aprovada com prova de vida, chave Pix cadastrada, API keys de produção e sandbox, webhook com token próprio, régua de notificações ajustada. Junto vem a decisão de negócio que muda o desenho dela: **lançamento com pagamento integral ou com sinal?** As duas experiências estão em `payment_mode: 'full'`; o modo `deposit` está implementado e testado (contra fixtures da própria suíte, já que o catálogo real não tem experiência `deposit`), trocar são dois campos e rodar o seed
 - **11 valores PROVISÓRIOS** em `lib/templates/quadriciclo.ts`, localizáveis por `grep -n "PROVISORIO"`. Nomes, durações e preços das trilhas já foram confirmados. Seguem provisórios: `min_lead_minutes`, ponto de encontro, o que levar, política de sinal, nomes dos recursos, grade de horários, os dois `paymentMode`, e o `reply_to_email`, que está como `contato@aventix.com.br` e aparece para o cliente final, onde a regra de marca manda aparecer o tenant
-- **`app/` não usa o route group `(public)`** que a seção 14 especifica. A home e as rotas públicas estão na raiz de `app/`; só o admin ganhou `(admin)` nesta sessão. Divergência cosmética, sem efeito em URL, a resolver quando o formulário público for construído
+- **`ce3e4c6` tem mensagem que não bate com o conteúdo.** Diz "test: verificação de preço independente" e não toca `tests/`; o diff é 100% `lib/templates/quadriciclo.ts`. Já está em `origin`, nada a fazer além de saber
+- **`app/` não usa o route group `(public)`** que a seção 14 especifica. A home e as rotas públicas estão na raiz de `app/`; só o admin ganhou `(admin)`. Divergência cosmética, a resolver quando o formulário público for construído
 - **Layout raiz ainda é o do `create-next-app`:** `lang="en"` e título "Create Next App" em `app/layout.tsx`, servindo telas em português. Corrigir junto com a primeira tela de verdade
 - **A exclusion constraint não é exercitada pela suíte.** Com `single_experience_per_slot=true` a criação toma advisory lock e serializa, então o perdedor sempre cai no recheck. Medido: 0 via constraint, 10 via recheck. Verificada manualmente com o flag desligado
 - **Reserva expirada mantém `reservation_payments` em `pending`.** O job de reconciliação da Fase 2 vai encontrar essas linhas; o filtro da seção 8-B provavelmente precisa excluir `expired`, não só `cancelled`
