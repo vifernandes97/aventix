@@ -12,6 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
+    "db:seed:demo": "tsx --conditions=react-server scripts/seed-demo-reservations.ts",
     "auth:hash": "tsx scripts/hash-password.ts",
     "test": "vitest run",
     "test:watch": "vitest"
