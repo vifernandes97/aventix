@@ -17,8 +17,10 @@
 // fina sobre lib/availability.ts, e o servidor chama a lib. A ROTA existe e
 // atende ao contrato para os consumidores externos a este processo.
 //
-// SOMENTE LEITURA: nenhuma escrita nesta tela. O painel de detalhes e o
-// cancelamento sao a proxima tarefa.
+// A UNICA ESCRITA desta tela e o cancelamento, e ela nao acontece aqui: o painel
+// de detalhes (Client Component) chama POST /api/admin/reservations/{id}/cancel,
+// que por sua vez chama setReservationStatus (secao 4.6). Este Server Component
+// continua so lendo.
 
 import { getCurrentUser } from '@/lib/auth';
 import {
@@ -110,6 +112,15 @@ export default async function AdminCalendarPage({ searchParams }: { searchParams
         experiences={experiences}
         dayGrid={dayGrid}
         resourceLabelPlural={settings.resource_label_plural}
+        // Rotulos do TENANT para o painel (secao 3: texto de UI vem de
+        // settings). Resolvidos aqui porque lib/tenant.ts e server-only; o
+        // painel e Client Component e nao pode le-los sozinho.
+        panelLabels={{
+          operator: settings.operator_label,
+          passenger: settings.passenger_label,
+          document: settings.operator_document_label,
+          resourcePlural: settings.resource_label_plural,
+        }}
       />
     </main>
   );

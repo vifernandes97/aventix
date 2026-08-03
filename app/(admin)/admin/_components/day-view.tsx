@@ -34,6 +34,12 @@ type Props = {
   resources: CalendarResourceRef[];
   dayGrid: DayGrid;
   resourceLabelPlural: string;
+  /**
+   * Abre o painel de detalhes. Recebe o ID DA RESERVA, nunca o do recurso: uma
+   * reserva multi-recurso vira N blocos (um por corrida contigua de colunas), e
+   * todos eles sao a MESMA reserva. Clicar em qualquer um abre o mesmo painel.
+   */
+  onSelect: (reservationId: string) => void;
 };
 
 /** Agrupa indices de coluna em corridas contiguas: [0,1,3] -> [{start:0,len:2},{start:3,len:1}]. */
@@ -57,6 +63,7 @@ export function DayView({
   resources,
   dayGrid,
   resourceLabelPlural,
+  onSelect,
 }: Props) {
   const columnOf = new Map(resources.map((r, i) => [r.id, i]));
 
@@ -203,14 +210,15 @@ export function DayView({
                   }}
                 >
                   {/*
-                    TODO(proxima tarefa — painel de detalhes): este botao e o
-                    ponto de entrada. O onClick abre o painel lateral com
-                    participantes, documentos, saldo e a acao de cancelar. Por
-                    ora e so foco/hover: a tarefa atual e LEITURA.
+                    Ponto de entrada do painel. `reservation.id` e o argumento —
+                    NAO o recurso da corrida: os dois blocos de uma reserva de
+                    dois quadris abrem a mesma reserva, e o mesmo vale quando os
+                    recursos nao sao adjacentes e viram blocos separados.
                   */}
                   <button
                     type="button"
-                    aria-label={`${timeLabel(reservation.startAt)} ${reservation.experience.name}, ${reservation.customerName}`}
+                    onClick={() => onSelect(reservation.id)}
+                    aria-label={`Ver reserva de ${timeLabel(reservation.startAt)}, ${reservation.experience.name}, ${reservation.customerName}`}
                     className={`flex-1 overflow-hidden rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${STATUS_BLOCK[reservation.status]}`}
                     style={{ minHeight: `${(rows * 1.25).toFixed(2)}rem` }}
                   >

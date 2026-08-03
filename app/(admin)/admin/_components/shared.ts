@@ -81,6 +81,41 @@ export const STATUS_DOT: Record<CalendarStatus, string> = {
   pending_payment: 'bg-amber-500',
 };
 
+/**
+ * Status COMPLETO, para o painel de detalhes — que abre tambem em reserva
+ * cancelada ou expirada, ao contrario da grade (secao 11.1), que so desenha as
+ * ativas. Separado de STATUS_LABEL de proposito: aquele mapeia so os dois
+ * status que a grade conhece, e o compilador garante que continue assim.
+ */
+export const DETAIL_STATUS_LABEL: Record<
+  'pending_payment' | 'confirmed' | 'cancelled' | 'expired',
+  string
+> = {
+  confirmed: 'Confirmada',
+  pending_payment: 'Aguardando pagamento',
+  cancelled: 'Cancelada',
+  expired: 'Expirada',
+};
+
+export const DETAIL_STATUS_BADGE: Record<keyof typeof DETAIL_STATUS_LABEL, string> = {
+  confirmed: 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100',
+  pending_payment: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-100',
+  cancelled: 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
+  expired: 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
+};
+
+// -- dinheiro ----------------------------------------------------------------
+
+/**
+ * Centavos (inteiro, secao 3) -> 'R$ 349,00'.
+ *
+ * A divisao por 100 acontece SO AQUI, na borda de exibicao. Todo o resto do
+ * sistema trafega inteiro; um float subindo de volta para calculo seria a porta
+ * de entrada do centavo perdido.
+ */
+const MONEY = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+export const moneyLabel = (cents: number) => MONEY.format(cents / 100);
+
 // -- rotulos de data em portugues -------------------------------------------
 //
 // Intl nativo em vez de locale de biblioteca: zero dependencia nova e zero
@@ -114,6 +149,25 @@ export const monthYearLabel = (date: string) => capitalize(MONTH_YEAR.format(asU
 /** Numero do dia, sem zero a esquerda. */
 export const dayNumber = (date: string) => String(asUtc(date).getUTCDate());
 
+/**
+ * Data de CALENDARIO de Sao Paulo de um instante ISO ('YYYY-MM-DD').
+ *
+ * Nunca `iso.slice(0, 10)`: as 22:00 de Sao Paulo ja sao o dia seguinte em UTC,
+ * e a reserva apareceria um dia adiante. 'en-CA' porque e o locale cujo formato
+ * numerico ja e ISO.
+ */
+const LOCAL_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
+export const localDateOf = (iso: string) => LOCAL_DATE.format(new Date(iso));
+
+/** 'Quarta-feira, 05 de agosto de 2026' a partir de um INSTANTE. */
+export const fullDateLabelOf = (iso: string) => fullDateLabel(localDateOf(iso));
+
+/** '05/08/2026 09:00' — usado nos carimbos (criada em, cancelada em). */
+export function stampLabel(iso: string): string {
+  const [y, m, d] = localDateOf(iso).split('-');
+  return `${d}/${m}/${y} ${timeLabel(iso)}`;
+}
+
 /** Agrupa reservas por data de calendario de Sao Paulo, para as views de semana e mes. */
 export function groupByDate<T extends CalendarReservationSummary>(
   reservations: T[],
@@ -122,13 +176,8 @@ export function groupByDate<T extends CalendarReservationSummary>(
   const byDate = new Map<string, T[]>(dates.map((d) => [d, []]));
 
   for (const reservation of reservations) {
-    // A data vem do rotulo local, nao de `startAt.slice(0,10)`: as 22:00 de Sao
-    // Paulo ja sao o dia seguinte em UTC, e a reserva apareceria um dia adiante.
-    const date = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-    }).format(new Date(reservation.startAt));
-
-    byDate.get(date)?.push(reservation);
+    // A data vem do rotulo local, nao de `startAt.slice(0,10)` — ver localDateOf.
+    byDate.get(localDateOf(reservation.startAt))?.push(reservation);
   }
 
   return byDate;

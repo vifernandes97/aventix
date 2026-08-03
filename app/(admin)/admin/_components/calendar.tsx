@@ -11,11 +11,13 @@
 // aquele modulo e server-only e um import de valor quebraria o build. Tudo que e
 // calculo de periodo chega pronto, por prop, do Server Component.
 
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import type { CalendarReservationDetail, CalendarResourceRef, CalendarView, DayGrid } from '@/lib/calendar';
 import { DayView } from './day-view';
 import { MonthView } from './month-view';
+import { ReservationPanel, type PanelLabels } from './reservation-panel';
 import { STATUS_DOT, STATUS_LABEL } from './shared';
 import { WeekView } from './week-view';
 
@@ -38,6 +40,8 @@ type Props = {
   /** Só na view de dia. */
   dayGrid: DayGrid | null;
   resourceLabelPlural: string;
+  /** Rotulos do tenant para o painel (secao 3), resolvidos no servidor. */
+  panelLabels: PanelLabels;
 };
 
 const VIEW_LABEL: Record<CalendarView, string> = {
@@ -48,6 +52,13 @@ const VIEW_LABEL: Record<CalendarView, string> = {
 
 export function Calendar(props: Props) {
   const { view, date, today, dates, reservations, experiences } = props;
+
+  const router = useRouter();
+
+  // Reserva aberta no painel. Guarda o ID, nao o objeto: o painel busca o
+  // detalhe completo por conta propria, e um objeto guardado aqui ficaria velho
+  // no instante em que o estado da reserva mudasse.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Filtro por experiencia: TODAS marcadas por padrao. Um calendario que abre
   // escondendo reserva seria uma armadilha operacional.
@@ -168,11 +179,18 @@ export function Calendar(props: Props) {
           resources={props.resources}
           dayGrid={props.dayGrid}
           resourceLabelPlural={props.resourceLabelPlural}
+          onSelect={setSelectedId}
         />
       )}
 
       {view === 'week' && (
-        <WeekView dates={dates} reservations={visible} today={today} buildHref={(d) => props.dayHrefs[d]} />
+        <WeekView
+          dates={dates}
+          reservations={visible}
+          today={today}
+          buildHref={(d) => props.dayHrefs[d]}
+          onSelect={setSelectedId}
+        />
       )}
 
       {view === 'month' && (
@@ -186,9 +204,31 @@ export function Calendar(props: Props) {
       )}
 
       <p className="text-[11px] text-neutral-400">
-        {visible.length} reserva(s) ativa(s) no período. Cancelar e ver detalhes entram na próxima
-        tarefa.
+        {visible.length} reserva(s) ativa(s) no período. Toque num bloco para ver o detalhe.
       </p>
+
+      {selectedId && (
+        <ReservationPanel
+          // `key` remonta o painel ao trocar de reserva: sem ela, o React
+          // reaproveitaria a instancia e o passo de confirmacao ja digitado
+          // sobreviveria para a proxima reserva aberta — o clique acidental que
+          // a confirmacao existe para evitar.
+          key={selectedId}
+          reservationId={selectedId}
+          labels={props.panelLabels}
+          onClose={() => setSelectedId(null)}
+          // POR QUE router.refresh() E NAO REMOVER O BLOCO NO FRONT:
+          // a pagina e Server Component com force-dynamic, entao o refresh
+          // re-executa o render no servidor e a grade volta da MESMA unica query
+          // do periodo (secao 11.1) — do banco, que e a fonte da verdade. Tirar
+          // o bloco na mao exigiria reimplementar no cliente a regra "so reserva
+          // ativa aparece" e deixaria a tela divergir de qualquer outra mudanca
+          // ocorrida no meio tempo (um hold que expirou, um cancelamento feito
+          // no celular). Custa uma ida ao servidor; paga com uma tela que nunca
+          // mente sobre a agenda.
+          onCancelled={() => router.refresh()}
+        />
+      )}
     </section>
   );
 }

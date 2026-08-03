@@ -22,9 +22,11 @@ type Props = {
   reservations: CalendarReservationDetail[];
   today: string;
   buildHref: (date: string) => string;
+  /** Abre o painel de detalhes. Recebe o ID DA RESERVA — ver a nota em DayView. */
+  onSelect: (reservationId: string) => void;
 };
 
-export function WeekView({ dates, reservations, today, buildHref }: Props) {
+export function WeekView({ dates, reservations, today, buildHref, onSelect }: Props) {
   const byDate = groupByDate(reservations, dates);
 
   return (
@@ -58,9 +60,11 @@ export function WeekView({ dates, reservations, today, buildHref }: Props) {
                   <button
                     key={reservation.id}
                     type="button"
-                    // TODO(proxima tarefa — painel de detalhes): mesmo ponto de
-                    // entrada da view de dia. Leitura por ora.
-                    aria-label={`${timeLabel(reservation.startAt)} ${reservation.experience.name}, ${reservation.customerName}`}
+                    // Mesmo ponto de entrada da view de dia, mesmo argumento: o
+                    // id da RESERVA. Aqui a reserva ja e um card so, mesmo
+                    // ocupando varios recursos.
+                    onClick={() => onSelect(reservation.id)}
+                    aria-label={`Ver reserva de ${timeLabel(reservation.startAt)}, ${reservation.experience.name}, ${reservation.customerName}`}
                     className={`rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 ${STATUS_BLOCK[reservation.status]}`}
                   >
                     <span className="flex items-baseline justify-between gap-1">
