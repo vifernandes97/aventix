@@ -19,7 +19,18 @@ import {
 
 type Props = {
   date: string;
+  /** O que e DESENHADO: ja passou pelo filtro de experiencia. */
   reservations: CalendarReservationDetail[];
+  /**
+   * O que DIMENSIONA o eixo vertical: a lista SEM filtro.
+   *
+   * Separado de `reservations` de proposito. Se o eixo saisse da lista
+   * filtrada, desligar um chip encolheria a grade — e no caso extremo (dia sem
+   * grade cadastrada, com todas as reservas filtradas) a tela trocaria a grade
+   * pela mensagem "o tenant nao opera neste dia", que e falsa. Filtrar esconde
+   * bloco; nunca mexe na regua.
+   */
+  axisReservations: CalendarReservationDetail[];
   resources: CalendarResourceRef[];
   dayGrid: DayGrid;
   resourceLabelPlural: string;
@@ -39,7 +50,14 @@ function contiguousRuns(indices: number[]): { start: number; len: number }[] {
   return runs;
 }
 
-export function DayView({ date, reservations, resources, dayGrid, resourceLabelPlural }: Props) {
+export function DayView({
+  date,
+  reservations,
+  axisReservations,
+  resources,
+  dayGrid,
+  resourceLabelPlural,
+}: Props) {
   const columnOf = new Map(resources.map((r, i) => [r.id, i]));
 
   // -- eixo vertical ---------------------------------------------------------
@@ -51,7 +69,9 @@ export function DayView({ date, reservations, resources, dayGrid, resourceLabelP
   // passeio que vai acontecer — o pior defeito possivel nesta tela.
   const marks = [
     ...dayGrid.ranges.flatMap((r) => [r.opensMinutes, r.closesMinutes]),
-    ...reservations.flatMap((r) => [
+    // SEM filtro: ver a nota em `axisReservations`. A regua do dia nao pode
+    // depender de quais chips estao ligados.
+    ...axisReservations.flatMap((r) => [
       minutesFromMidnight(r.startAt, date),
       minutesFromMidnight(r.bufferEndAt, date),
     ]),
@@ -120,12 +140,25 @@ export function DayView({ date, reservations, resources, dayGrid, resourceLabelP
             />
           ))}
 
-          {/* separadores verticais entre recursos */}
+          {/*
+            Separadores verticais entre recursos.
+
+            DESENHADOS ACIMA DOS BLOCOS (z-20 contra o z-10 do bloco), e por um
+            motivo de leitura, nao de estetica: um bloco multi-recurso e UMA peca
+            contigua atravessando N colunas, e sem a divisoria ele vira uma
+            mancha larga cuja unica marcacao — borda colorida e texto — fica toda
+            na primeira coluna. A coluna seguinte parece VAZIA, que e exatamente
+            a leitura errada: ali o recurso esta tomado. Com a divisoria por
+            cima, le-se "uma reserva ocupando estas duas celulas".
+
+            pointer-events-none para nao roubar o clique do bloco quando o painel
+            de detalhes entrar.
+          */}
           {resources.map((resource, index) => (
             <div
               key={`col-${resource.id}`}
               aria-hidden
-              className="border-r border-neutral-200 dark:border-neutral-800"
+              className="pointer-events-none z-20 border-r border-neutral-200 dark:border-neutral-800"
               style={{ gridColumn: 2 + index, gridRow: `2 / span ${rowCount}` }}
             />
           ))}

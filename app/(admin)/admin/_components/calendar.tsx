@@ -162,6 +162,9 @@ export function Calendar(props: Props) {
         <DayView
           date={date}
           reservations={visible}
+          // Sem filtro: o eixo de horarios nao pode encolher quando um chip
+          // desliga. Ver a nota em DayView.axisReservations.
+          axisReservations={reservations}
           resources={props.resources}
           dayGrid={props.dayGrid}
           resourceLabelPlural={props.resourceLabelPlural}
