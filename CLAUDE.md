@@ -472,6 +472,8 @@ Inalterado: exibe o termo completo; botão ativa só após **rolar até o fim**;
 ### 11.1 Calendário do admin
 Visão do dia com uma coluna por recurso ativo, blocos com cliente/experiência/status, buffers visíveis, seletor de data e faixa semanal com contagem. **Rev 6:** blocos com saldo em aberto recebem marcador visual (ex. "Saldo R$175"), e o detalhe da reserva traz os botões **Cobrar saldo** (QR na hora) e **Recebi por fora**. Essa tela é usada **no celular, em campo** — priorize legibilidade e toque.
 
+**Dados — uma query por render:** a tela lê de `GET /api/admin/calendar?from=&to=`, que devolve, para o período, todas as reservas ativas com recursos alocados, cliente (só nome), experiência e estado de pagamento — em UMA consulta. O front posiciona; nunca busca por reserva ou por recurso separadamente. A granularidade do payload acompanha a view: dia/semana trazem o detalhe de render (nome, trilha, buffer, pago/aguardando); mês traz só resumo (horário + trilha + status).
+
 ### 11.2 Agenda compartilhada (parceiro, ex. Aventurando)
 Página pública `agenda/{token}`, **somente leitura**, exibindo apenas ocupado/livre por recurso e horário. **Nunca** exibir nome, telefone, documento, e-mail **ou informação financeira**. Token opaco (nanoid ≥ 32), `noindex`, rate-limit, revogável no admin. Nível 1 apenas; API autenticada de parceiro é pós go-live.
 
