@@ -394,6 +394,7 @@ No modo `deposit`, a tela **deve** deixar explícito: "Você paga agora R$X e o 
 
 - CRUD: `experiences` (incl. `payment_mode`, `deposit_percent`/`deposit_fixed_cents`), `resources`, `operating_hours`, `blackouts`, `settings`, termo, `shared_calendar_links`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
+- **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF ou número de documento:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas.
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
 - `GET /api/admin/customers` — clientes + histórico.
 - **`GET /api/admin/reservations/{id}/balance`** — retorna o saldo pendente e, sob demanda, o **QR Code Pix atual** da cobrança de saldo (buscado no Asaas **na hora**, nunca cacheado — QR expira).
@@ -472,6 +473,8 @@ Inalterado: exibe o termo completo; botão ativa só após **rolar até o fim**;
 ### 11.1 Calendário do admin
 Visão do dia com uma coluna por recurso ativo, blocos com cliente/experiência/status, buffers visíveis, seletor de data e faixa semanal com contagem. **Rev 6:** blocos com saldo em aberto recebem marcador visual (ex. "Saldo R$175"), e o detalhe da reserva traz os botões **Cobrar saldo** (QR na hora) e **Recebi por fora**. Essa tela é usada **no celular, em campo** — priorize legibilidade e toque.
 
+**Detalhe e cancelamento são um painel sobreposto, não uma página.** Clicar num bloco abre um overlay sobre o calendário, que fecha por X, clique fora e Esc — o dono está olhando a agenda do dia e precisa continuar exatamente onde estava depois de cancelar. O clique carrega o **id da reserva**, nunca o do recurso: uma reserva multi-recurso vira um bloco por corrida contígua de colunas, então recursos não adjacentes produzem blocos separados, e todos abrem a mesma reserva. O detalhe é buscado **sob demanda, no clique** — isso não fere a regra da query única abaixo, que governa o render do período. Cancelar exige digitar `CANCELAR` (exato, maiúsculas) e não pede motivo.
+
 **Dados — uma query por render:** a tela lê de `GET /api/admin/calendar?from=&to=`, que devolve, para o período, todas as reservas ativas com recursos alocados, cliente (só nome), experiência e estado de pagamento — em UMA consulta. O front posiciona; nunca busca por reserva ou por recurso separadamente. A granularidade do payload acompanha a view: dia/semana trazem o detalhe de render (nome, trilha, buffer, pago/aguardando); mês traz só resumo (horário + trilha + status).
 
 ### 11.2 Agenda compartilhada (parceiro, ex. Aventurando)
@@ -530,8 +533,8 @@ Um único login (o dono). Sem provider externo.
   /(admin)
     /admin/login/page.tsx
     /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto)
-    /admin/_components/               # grade do calendario (dia/semana/mes); `_` = pasta privada, nao vira rota
-    /admin/reservas/[id]/page.tsx     # detalhe + Cobrar saldo / Recebi por fora
+    /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento; `_` = pasta privada, nao vira rota
+    /admin/reservas/[id]/page.tsx     # detalhe como PAGINA, para link direto. O painel sobreposto (11.1) ja cobre o uso do dia a dia
     /admin/clientes/page.tsx
     /admin/experiencias/page.tsx      # incl. modo de pagamento e sinal
     /admin/recursos/page.tsx
