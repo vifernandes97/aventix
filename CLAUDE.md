@@ -511,7 +511,9 @@ Um único login (o dono). Sem provider externo.
 
 **`proxy.ts`** (Next 16: export `proxy`, runtime Node; `middleware.ts` está deprecado) protege `/admin/*` e `/api/admin/*` — tela sem sessão redireciona para `/admin/login`, API responde `401`. **LIBERA** `/admin/login` e `/api/admin/login` (sem isso, logar é impossível), **`/api/webhooks/*`** (o webhook é chamado pelo Asaas, que não tem sessão — 401 ali significa pagamento não confirmado e fila interrompida, seção 8.1) e todas as rotas públicas. O `matcher` escopa só em `/admin` e `/api/admin`; `isProtectedPath` repete a regra como segunda barreira.
 
-**Armadilha do `.env`:** o hash bcrypt contém três `$` e o carregador de ambiente do Next expande variáveis. **Escape cada cifrão com `\`** (`ADMIN_PASSWORD_HASH=\$2b\$12\$...`) — medido: aspas simples e duplas **não** protegem, e o `dotenv` puro dos scripts lê certo mesmo sem escape, então o erro só aparece dentro do Next, com cara de "senha errada".
+**Armadilha do `$` no ambiente:** o hash bcrypt contém três `$` e o carregador de ambiente do Next expande variáveis. **Escape cada cifrão com `\`** (`ADMIN_PASSWORD_HASH=\$2b\$12\$...`) — medido: aspas simples e duplas **não** protegem, e o `dotenv` puro dos scripts lê certo mesmo sem escape, então o erro só aparece dentro do Next, com cara de "senha errada".
+
+**A expansão não é exclusiva do arquivo `.env`.** Medido: uma variável exportada no ambiente do processo, com os 60 caracteres confirmados em Node puro, chega ao `lib/auth.ts` com **52** dentro do Next; com os cifrões escapados, o login passa. Consequência operacional para o go-live: **no Easypanel, que injeta env em runtime, o hash vai escapado igual**, e o sintoma de esquecer é o painel respondendo "senha errada" com a senha certa.
 
 **Fail-fast:** `instrumentation.ts` valida a configuração no boot do servidor e loga o que falta. Avisa e segue, não derruba o processo: o site público de reservas não depende de auth, e tirar a venda do ar por causa de variável do painel seria trocar um problema por outro pior. A validação é preguiçosa em `lib/auth.ts` (não no import) porque o Easypanel injeta env em runtime, e validar no import quebraria o `next build` dentro do Docker.
 
@@ -528,6 +530,7 @@ Um único login (o dono). Sem provider externo.
   /(admin)
     /admin/login/page.tsx
     /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto)
+    /admin/_components/               # grade do calendario (dia/semana/mes); `_` = pasta privada, nao vira rota
     /admin/reservas/[id]/page.tsx     # detalhe + Cobrar saldo / Recebi por fora
     /admin/clientes/page.tsx
     /admin/experiencias/page.tsx      # incl. modo de pagamento e sinal
@@ -553,6 +556,7 @@ Um único login (o dono). Sem provider externo.
   /tenant.ts                          # tenant atual + settings cacheadas (SERVER-ONLY)
   /reservations.ts                    # find-or-create, criacao transacional, setReservationStatus, recalcReservationPayment
   /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
+  /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
   /jobs/expire-holds.ts               # expiracao de hold (secao 12); vizinho do reconcile na Fase 2
   /templates/types.ts                 # forma de um template de segmento
   /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
@@ -566,6 +570,7 @@ Um único login (o dono). Sem provider externo.
 /scripts
   /seed.ts                            # aplica o template ao tenant (npm run db:seed)
   /hash-password.ts                   # gera o hash bcrypt do admin (npm run auth:hash)
+  /seed-demo-reservations.ts          # movimento FALSO p/ ver o admin (npm run db:seed:demo) — NUNCA em producao
 /tests                                # integracao contra o Postgres local (Vitest)
 /drizzle
 /instrumentation.ts                   # agenda o cron de hold no boot (secao 12)
