@@ -40,6 +40,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# ferramenta local (Claude Code)
+# Linha ESPECIFICA, e nao `.claude/`: as skills de sessao em .claude/skills/ sao
+# do projeto e continuam versionadas. Um ignore da pasta inteira nao desrastrearia
+# as que ja estao no repo, mas engoliria calada qualquer skill nova.
+.claude/launch.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
