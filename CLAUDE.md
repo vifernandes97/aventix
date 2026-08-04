@@ -196,6 +196,11 @@ CREATE TABLE reservations (
   start_at timestamptz NOT NULL,
   channel text,                          -- origem: NULL=direto; ex. 'aventurando'
 
+  -- SNAPSHOT da venda, junto com total_price_cents e payment_mode.
+  -- Congelam na criacao e NUNCA acompanham edicao posterior da experiencia.
+  duration_minutes int NOT NULL CHECK (duration_minutes > 0),
+  buffer_minutes int NOT NULL CHECK (buffer_minutes >= 0),
+
   -- rev 6: estado financeiro agregado (os pagamentos vivem em reservation_payments)
   payment_mode payment_mode NOT NULL,    -- snapshot de como foi vendido
   amount_paid_cents int NOT NULL DEFAULT 0,
@@ -276,6 +281,7 @@ CREATE INDEX idx_rp_open ON reservation_payments (state, due_date) WHERE state =
   - soma dos pagamentos `paid` → `amount_paid_cents`;
   - `0` → `pending`; `> 0 e < total` → `partial`; `>= total` → `settled`.
 - **`period` inclui o buffer.** Fim exibido ao cliente = `start_at + duration`.
+- **A reserva congela o que foi vendido.** `total_price_cents`, `payment_mode`, `duration_minutes` e `buffer_minutes` são gravados na criação a partir da experiência e **nunca** são relidos dela depois. Toda leitura de duração ou buffer de uma reserva existente (calendário, painel, e-mail, recibo) sai de `reservations`, **jamais de um JOIN com `experiences`** — ler do JOIN faz uma edição de catálogo redesenhar retroativamente reserva já vendida. A vaga ocupada (`reservation_resources.period`) já era congelada, então o erro não produz overbooking: produz tela mentindo, nas duas direções. Quem lê da experiência **atual** e está certo assim: `lib/availability.ts` e o cálculo do `period` em `createReservation`, porque reserva **nova** usa a duração vigente.
 - **`resources_needed` é escolha do cliente**; teto = recursos ativos (validação no app, não em CHECK).
 - **Preço e valor do sinal são calculados no servidor.** `deposit = round(total × deposit_percent/100)` ou `deposit_fixed_cents`; `balance = total − deposit`. Nunca confie em valor vindo do cliente.
 - **`external_reference` é único e determinístico** (`"{uuid}:{kind}"`). É o que permite reconciliar mesmo se o `asaas_payment_id` se perder.
@@ -392,7 +398,9 @@ No modo `deposit`, a tela **deve** deixar explícito: "Você paga agora R$X e o 
 
 ### 7.2 Admin (sessão)
 
-- CRUD: `experiences` (incl. `payment_mode`, `deposit_percent`/`deposit_fixed_cents`), `resources`, `operating_hours`, `blackouts`, `settings`, termo, `shared_calendar_links`.
+- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, termo, `shared_calendar_links`.
+- **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
+  **Sinal fora do CRUD por ora:** `payment_mode` só aceita `full`, e `deposit_percent`/`deposit_fixed_cents` não são expostos. `deposit` responde 422 em vez de gravar experiência que ninguém consegue vender — gravar o modo sem os campos de sinal violaria `experiences_deposit_mode_check` e viraria 500. Reabre com a Fase 2 e a decisão de negócio sobre o sinal; o ponto único a mudar é `ACCEPTED_PAYMENT_MODES` em `lib/experiences.ts`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
 - **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF ou número de documento:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas.
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
@@ -546,7 +554,7 @@ Um único login (o dono). Sem provider externo.
     /admin/integracao/page.tsx        # saude do webhook / reconciliacao
   /api
     /availability/route.ts
-    /experiences/route.ts
+    /experiences/route.ts             # catalogo PUBLICO: so ativas, sem `active` nem buffer_minutes
     /termo/route.ts
     /reservations/route.ts
     /reservations/[id]/status/route.ts
@@ -560,6 +568,9 @@ Um único login (o dono). Sem provider externo.
   /reservations.ts                    # find-or-create, criacao transacional, setReservationStatus, recalcReservationPayment
   /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
   /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
+  /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento
+  /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
+  /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
   /jobs/expire-holds.ts               # expiracao de hold (secao 12); vizinho do reconcile na Fase 2
   /templates/types.ts                 # forma de um template de segmento
   /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
