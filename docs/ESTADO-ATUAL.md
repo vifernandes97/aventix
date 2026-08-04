@@ -1,115 +1,113 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-03 (segunda sessão do dia)
+> Última atualização: 2026-08-04
 
 ## Onde estamos
 
-**Fase 3 (interfaces), 3 de 8 tarefas de admin.** Fases 0 e 1 completas. Go-live: 24/08/2026.
+**Fase 3 (interfaces), 5 de 9 tarefas.** Fases 0 e 1 completas. Go-live: 24/08/2026.
 
-A ordem das fases está invertida por decisão de 28/07 (`docs/DECISOES.md`): os pré-requisitos do Asaas atrasaram e travam a Fase 2 inteira, então as telas de admin que não dependem de pagamento vêm primeiro.
+A ordem das fases está invertida por decisão de 28/07 (`docs/DECISOES.md`): os pré-requisitos do Asaas travam a Fase 2 inteira, então as telas que não dependem de pagamento vêm primeiro.
 
-Tarefas de admin da Fase 3: **auth (pronta)**, **calendário — grade de visualização (pronta)**, **calendário — painel de detalhes e cancelamento (pronta)**, CRUD de experiências, CRUD de recursos, horários e bloqueios, configurações, termo, clientes sem faturas, agenda compartilhada por link secreto.
+Tarefas da Fase 3: **auth (pronta)**, **calendário — grade (pronta)**, **calendário — painel de detalhes e cancelamento (pronta)**, **CRUD de experiências (pronta)**, **formulário público (pronta, com termo e pagamento em placeholder)**, CRUD de recursos, horários e bloqueios, configurações, termo real, clientes sem faturas, agenda compartilhada.
 
-O admin agora **escreve**: cancelar reserva é a primeira operação de escrita da interface, e ela passa por `setReservationStatus`.
+O sistema agora **vende de ponta a ponta**: um cliente entra em `aventix.com.br`, escolhe, preenche e a reserva nasce `pending_payment` com hold de 15 min. Falta cobrar (Fase 2).
 
 ## Pronto
 
-**Fase 0 (completa)**
-- Repo GitHub, Next.js 16 + TypeScript, Drizzle, Postgres local via Docker
-- Deploy no VPS Hostinger via Easypanel: `aventix.com.br` no ar com HTTPS
+**Fase 0 e 1 (completas)** — schema de 13 tabelas com exclusion constraint, tenant/settings, motor de disponibilidade, criação transacional, cron de expiração de hold, seed como template de segmento, `POST /api/reservations` e `GET /api/availability`.
 
-**Fase 1 (completa)**
-- `lib/db/schema.ts`: 13 tabelas, 8 enums, `btree_gist`, exclusion constraint anti-overbooking
-- `lib/tenant.ts`: tenant + settings cacheadas (TTL 60s), acessores tipados booleano e numérico
-- `lib/time.ts`: conversões America/Sao_Paulo, UTC, validação de data de calendário
-- `lib/reservations.ts`: `setReservationStatus`, `recalcReservationPayment`, `findOrCreateCustomer`, `createReservation`
-- `lib/availability.ts`: motor completo (exceções de agenda, buffer, blackouts, exclusividade, lead time)
-- `lib/templates/` + `lib/seed.ts` + `scripts/seed.ts`: template de segmento do Quadri Club, seed idempotente
-- `lib/jobs/expire-holds.ts` + `instrumentation.ts`: cron de expiração de hold, a cada minuto
-- `app/api/reservations/route.ts` (POST) e `app/api/availability/route.ts` (GET)
-- `tests/`: 30 casos em 6 arquivos, `tests/global-setup.ts` migrando e semeando sozinho
+**Fase 3, tarefas 1 a 3** — `lib/auth.ts` + `proxy.ts`; calendário nativo (dia/semana/mês) em UMA query; painel sobreposto de detalhe + cancelamento sobre `setReservationStatus`.
 
-**Fase 3, tarefa 1: autenticação do admin (completa, `709cf4d`)**
-- `lib/auth.ts` como fronteira única, `proxy.ts` protegendo `/admin/*` e `/api/admin/*`
-- Telas de login e logout, `npm run auth:hash`, `tests/f-auth.test.ts` com 5 casos
+**Congelamento da venda (`fa8d213` + `9051eb3`)**
+- Migration `0001`: `reservations.duration_minutes` e `buffer_minutes`, NOT NULL, com backfill
+- `createReservation` grava o snapshot; `lib/calendar.ts` e `lib/reservation-detail.ts` passaram a ler dele em vez do JOIN com `experiences`
+- `tests/g-congelamento.test.ts`: 4 casos, validados contra a versão antiga antes de entrar
 
-**Fase 3, tarefa 2: calendário nativo, grade de visualização (completa, `0820dcf` + `70dfade`)**
-- `lib/calendar.ts`: período em UMA query, sobreposição com `&&` sobre `tstzrange`, datas em ISO
-- `app/api/admin/calendar/route.ts`: `from`/`to`/`view`, 400 tipado, teto de 62 dias, projeção de resumo no mês
-- `app/(admin)/admin/page.tsx` + `_components/` com as três views em CSS Grid puro
-- `scripts/seed-demo-reservations.ts` (`npm run db:seed:demo`): 6 reservas marcadas com `channel='demo'`
+**Fase 3, tarefa 4: CRUD de experiências (`4b08d95`)**
+- `lib/experiences.ts` + `GET|POST /api/admin/experiences` + `PATCH /{id}`, sem DELETE
+- `app/(admin)/admin/experiencias/`: lista com inativas esmaecidas, form com preço em reais, confirmação leve para desativar
+- Validação no servidor: preço > 0, duração > 0, buffer >= 0, nome não vazio, `deposit` recusado com 422
 
-**Fase 3, tarefa 3: painel de detalhes e cancelamento (completa, `a59c340` + `ae43593` + `26a8831`)**
-- `lib/reservation-detail.ts` + `GET /api/admin/reservations/{id}`: detalhe completo em UMA query, com os três conjuntos um-para-muitos em subconsultas escalares agregadas pelo Postgres. Módulo separado de `lib/calendar.ts` de propósito (contratos diferentes: período x reserva única)
-- `POST /api/admin/reservations/{id}/cancel`: chama `setReservationStatus`, traduz os erros tipados em 404/409. Não reimplementa a máquina de estados, não dispara e-mail, não toca no dinheiro
-- `_components/reservation-panel.tsx`: overlay lateral, detalhe sob demanda no clique, rótulos de `settings`, confirmação por digitar `CANCELAR`, fecha por X/clique fora/Esc, trava a rolagem do body enquanto aberto
-- `day-view` e `week-view` chamam `onSelect(reservation.id)`; `router.refresh()` recarrega a grade depois do cancelamento
+**Fase 3, tarefa 5: formulário público (`cbc32ff` + `00dc154`)**
+- `app/(public)/page.tsx` **na raiz** (paga a dívida do route group; removeu o placeholder do create-next-app)
+- Wizard de 6 passos, mobile-first, estado 100% no cliente até o POST final
+- `GET /api/experiences` público (só ativas, sem `active` nem `buffer_minutes`) e `lib/resources.ts`
+- Todos os rótulos de `settings`, inclusive o rótulo do passo; o formulário deriva da configuração
+- Termo e pagamento são **placeholder**, marcados no código
 
 ## O que esta sessão fez
 
-1. **Rota de detalhe** (`a59c340`): `lib/reservation-detail.ts` e `GET /api/admin/reservations/{id}`.
-2. **Rota de cancelamento** (`ae43593`): `POST .../cancel` sobre `setReservationStatus`.
-3. **Painel** (`26a8831`): overlay, confirmação digitada, wiring das duas views, trava de rolagem do body.
-4. **CLAUDE.md** atualizado: seção 7.2 ganhou a rota de detalhe com a regra de dado sensível; a 11.1 ganhou o parágrafo do painel sobreposto; a árvore da 14 esclarece o papel da página `/admin/reservas/[id]`.
+1. **Congelamento de duração e buffer** — migration 0001 editada à mão (nullable → backfill → NOT NULL), backfill híbrido (`period` para o total, experiência para a divisão), com ramo degenerado e log de pós-condição.
+2. **CRUD de experiências**, primeira tela que escreve catálogo.
+3. **Formulário público de agendamento** ponta a ponta, com uma reserva real criada e conferida no banco.
+4. **CLAUDE.md atualizado**: seção 4.4 (as duas colunas), 4.6 (invariante do snapshot), 7.2 (rotas do CRUD e o recorte do sinal), 14 (árvore com `reservation-detail.ts`, `experiences.ts`, `resources.ts`).
+5. Corrigidos de carona: título da aba e `lang="pt-BR"`; `.claude/launch.json` no `.gitignore`.
 
-Verificado ao fim: `npx tsc --noEmit` limpo, `npm run lint` limpo, `npm test` com **30 passed**, `npm run db:generate` sem mudanças.
-
-**Medições desta sessão, feitas no navegador e no psql:**
-- Cancelamento de uma reserva de 2 quadris deixou `reservations.status = cancelled` com `cancelled_at`, as DUAS linhas de `reservation_resources` em `cancelled`, e o horário voltou: `/api/availability` para 2 recursos em 04/08 não oferecia 11:00 antes e passou a oferecer depois.
-- Erros: já cancelada → 409; expirada pelo cron → 409; sem sessão → 401; inexistente e malformado → 404.
-- Nenhum CPF ou CNH aparece no log do servidor. No código novo existem dois `console.*`, ambos `console.error` de catch.
+Verificado ao fim: `npx tsc --noEmit` limpo, `npm run lint` limpo, `npm test` com **34 passed**, `npm run db:generate` sem mudanças.
 
 ## PRÓXIMO PASSO
 
-**CRUD de experiências** (tarefa 4 de 8 da Fase 3). É a primeira tela de catálogo e a que o cliente mais precisa para confirmar os valores PROVISÓRIOS do template.
+**Decidir o que fazer com a regra dos 18 anos** (bloqueia nada, mas é decisão de negócio pendente e barata de resolver) e seguir para o **CRUD de recursos** (tarefa 6 de 9).
 
-Pontos de atenção já conhecidos, todos no CLAUDE.md:
-- Inclui `payment_mode` e o sinal (`deposit_percent` **ou** `deposit_fixed_cents`, exatamente um dos dois — há CHECK no schema).
-- **Preço zero tem que ser recusado** pelo CRUD (seção 4.6): experiência gratuita não é suportada e produziria reserva presa em `pending` para sempre.
-- Desativar é `active = false`, nunca apagar: reservas apontam para a experiência.
+O CRUD de recursos é pequeno e tem lar pronto: `lib/resources.ts` já existe com a leitura. Campos: nome, `capacity`, `active`. Mesma forma do CRUD de experiências (sem DELETE, desativar por `active=false`, 422 para corpo inválido). Atenção: o número de recursos ativos é o teto de `resourcesNeeded` no formulário público e o número de colunas do calendário, então desativar recurso com reserva futura ativa precisa ser pensado — a reserva aponta para o recurso em `reservation_resources`.
 
-**Depois:** CRUD de recursos, horários e bloqueios, configurações, termo, clientes sem faturas, agenda compartilhada.
+**Depois:** horários e bloqueios, configurações, termo real, clientes, agenda compartilhada.
 
 ## Migrations
 
-- **Uma migration:** `drizzle/0000_oval_mandroid.sql` (colapsada, schema rev 6 completo)
-- **Local:** aplicada. `drizzle.__drizzle_migrations` tem 1 linha, 13 tabelas em `public` (conferido nesta sessão)
-- **Produção:** NUNCA migrou. Banco vazio. Primeira migration em produção entra no checklist de go-live
+- **Duas migrations:** `drizzle/0000_oval_mandroid.sql` e `drizzle/0001_busy_tomorrow_man.sql`
+- **Local:** as duas aplicadas (`drizzle.__drizzle_migrations` tem 2 linhas, conferido nesta sessão)
+- **Produção:** NUNCA migrou. Banco vazio. As duas entram juntas no checklist de go-live; o backfill da 0001 será no-op lá
 - `npm run db:generate` responde "No schema changes, nothing to migrate" (verificado no fim desta sessão)
-- `btree_gist` e a exclusion constraint são SQL manual dentro da migration
-- Esta sessão NÃO tocou o schema
+- A 0001 é **editada à mão** e precisa continuar assim se for regerada: o drizzle-kit emite `ADD COLUMN NOT NULL`, que aborta em tabela com linhas
 
 ## Banco local
 
-Container `aventix-db-dev` (postgres:17-alpine) no ar. Catálogo semeado e conferido intacto ao fim da sessão (2 recursos ativos, 0 blackouts). As 6 reservas de demonstração foram recriadas no encerramento; a suíte de testes as apaga, então rode `npm run db:seed:demo` de novo antes de olhar a tela.
+Container `aventix-db-dev` (postgres:17-alpine) no ar. Catálogo semeado e conferido intacto (2 recursos ativos capacity 2, 2 experiências ativas, `payment_mode='full'`). As 6 reservas de demonstração existem; a suíte de testes as apaga, então rode `npm run db:seed:demo` antes de olhar as telas.
 
 ## Pendências e dívidas conhecidas
 
-- **`getDayGrid` duplica a precedência exceção-sobre-`operating_hours`** (seção 6) que já vive em `lib/availability.ts`. Se as duas cópias divergirem, a tela desenha horário que o motor não vende — não causa overbooking, causa tela mentindo. O lugar certo de unificar é quando o CRUD de horários entrar e virar o terceiro consumidor
-- **Blocos não adjacentes continuam sem vínculo visual.** Reserva nos recursos 1 e 3, com o 2 livre, vira dois blocos separados (correto), e nada indica que são a mesma reserva. O que **deixou** de ser dívida: os dois blocos abrem a mesma reserva, agora medido contra dado real (recurso temporário + blackout no do meio forçaram a alocação 1 e 3; os dois blocos dispararam GET do mesmo id)
-- **`instrumentation.ts` compila para Edge Runtime e falha lá:** `./lib/auth.ts:24 — 'node:crypto' is not supported in the Edge Runtime`, repetido a cada request em dev. Não derruba nada, mas polui o log a ponto de esconder erro de verdade. Ficou mais incômodo agora que há mais tela para depurar
-- **`app/layout.tsx` ainda é o do `create-next-app`:** `lang="en"` e título "Create Next App". O título aparece na aba do dono, na tela mais usada do sistema
-- **A âncora dos testes de lead time vence em junho de 2027.** Vencida, o bloco falha com instrução de trocar a data (não passa em silêncio)
-- **Sem rate limiting no login.** `POST /api/admin/login` aceita tentativas ilimitadas. TODO no arquivo, previsto para o hardening da Fase 4
-- **Sessão sem revogação.** Estado no cookie (iron-session). Cookie roubado vale até expirar, 8h. Aceito no MVP de usuário único
-- **O cancelamento não tem teste automatizado.** A lógica de estado inteira é `setReservationStatus`, que a suíte já cobre; o que entrou é tradução HTTP, verificada por curl nesta sessão. Se a rota ganhar regra própria, o teste passa a ser necessário
-- **A página `/admin/reservas/[id]` da seção 14 não existe.** O painel sobreposto cobre o uso do dia a dia; a página só faz falta para link direto (compartilhar uma reserva por mensagem). Não é bloqueio para o go-live
-- **DEPENDÊNCIA DA FASE 2 (não é o próximo passo):** pré-requisitos do Asaas (CLAUDE.md seção 18) dependem do cliente e travam a Fase 2 inteira: conta aprovada com prova de vida, chave Pix cadastrada, API keys, webhook com token próprio, régua de notificações ajustada. Junto vem a decisão de negócio: **lançamento com pagamento integral ou com sinal?**
-- **`reservations.payment_state` é `'pending'` em toda reserva**, inclusive nas confirmadas, porque nada marca cobrança como paga antes da Fase 2. O painel já exibe total, pago e em aberto lendo esses campos, então hoje ele mostra "Em aberto: R$ 650,98" numa reserva confirmada. É o dado correto do banco, não um defeito da tela, e se corrige sozinho quando o pagamento entrar
-- **O painel não tem cobrança de saldo nem "Recebi por fora"** (seção 11.1). Dependem da Fase 2; o ponto de entrada está comentado no arquivo
-- **11 valores PROVISÓRIOS** em `lib/templates/quadriciclo.ts` (`grep -n "PROVISORIO"`): `min_lead_minutes`, ponto de encontro, o que levar, política de sinal, nomes dos recursos, grade de horários, os dois `paymentMode` e o `reply_to_email`, que está como `contato@aventix.com.br` e aparece para o cliente final, onde a regra de marca manda aparecer o tenant
-- **`ce3e4c6` tem mensagem que não bate com o conteúdo.** Já está em `origin`, nada a fazer além de saber
-- **`app/` não usa o route group `(public)`** que a seção 14 especifica. Só o admin ganhou `(admin)`. A resolver quando o formulário público for construído
-- **A exclusion constraint não é exercitada pela suíte.** Com `single_experience_per_slot=true` a criação serializa por advisory lock e o perdedor cai no recheck. Medido: 0 via constraint, 10 via recheck
-- **Reserva expirada mantém `reservation_payments` em `pending`.** O job de reconciliação da Fase 2 vai encontrar essas linhas; o filtro da seção 8-B provavelmente precisa excluir `expired`, não só `cancelled`
-- **Sem proteção contra duplo clique** em `POST /api/reservations`. Defesa natural é desabilitar o botão na tela
-- **Termo sem versão vigente:** não há onde guardar texto e versão atual. O servidor valida presença, não que a versão seja a corrente
-- **`mode:'string'` no schema:** toda nova função que retorne `timestamptz` reintroduz o formato não-ISO. Regra na seção 3
-- **`operating_hours` permite faixas sobrepostas** no mesmo weekday. O motor deduplica; a correção de origem é validar no CRUD
-- **Experiência gratuita** (`price_cents = 0`) não é suportada; seção 4.6
-- **Cron em dev:** o timer guarda a versão do módulo carregada no boot. Editar `lib/jobs/expire-holds.ts` não muda o tick até reiniciar
+**Decisão de negócio pendente**
+- **A regra dos 18 anos para condutor não existe no servidor.** MEDIDO nesta sessão: `POST /api/reservations` com condutor de 13 anos respondeu **201**. A validação inline do formulário público é hoje a **única** barreira, e um POST direto a ignora. A regra também não está no CLAUDE.md. Se ela é real (conduzir quadriciclo exige CNH, que exige 18), o lugar é `createReservation` + seção 15, e o front volta a ser conveniência. Anotado em `app/(public)/_components/types.ts`
+- **Lançamento com pagamento integral ou com sinal?** Trava o recorte do CRUD de experiências e a tela de pagamento
+
+**Fase 2 (dependem do cliente)**
+- Pré-requisitos do Asaas (CLAUDE.md seção 18): conta aprovada com prova de vida, chave Pix, API keys, webhook com token próprio, régua de notificações ajustada
+- `reservations.payment_state` é `'pending'` em toda reserva, inclusive confirmadas, porque nada marca cobrança como paga antes da Fase 2. O painel exibe "em aberto" numa reserva confirmada; é o dado correto do banco
+- Reserva expirada mantém `reservation_payments` em `pending`. O filtro do job de reconciliação (seção 8-B) provavelmente precisa excluir `expired`, não só `cancelled`
+- O painel não tem cobrança de saldo nem "Recebi por fora"; ponto de entrada comentado no arquivo
+
+**Formulário público**
+- **Termo é placeholder**: um checkbox, envia `version: "PROVISORIO"`. A tarefa do Termo põe texto versionado com scroll-to-end. IP e user-agent **já** são capturados pela rota
+- **Pagamento é placeholder**: "Pix em breve" com id, valor e contador do hold. Sem QR falso. Pontos de costura da Fase 2 comentados
+- **A grade não mostra horário insuficiente.** `GET /api/availability` devolve `{ startAt, label }` e já filtra por `resourcesNeeded`; não informa quantos recursos sobram num horário, então horário que não comporta N simplesmente não aparece. Melhoria: o motor devolver `freeResources` por slot
+- **Sem campo de CPF** no formulário. A rota aceita e o schema tem a coluna
+- `app/(public)/reserva/[id]/page.tsx` e `agenda/[token]` da seção 14 ainda não existem
+
+**Gerais**
+- `getDayGrid` duplica a precedência exceção-sobre-`operating_hours` que já vive em `lib/availability.ts`. Unificar quando o CRUD de horários virar o terceiro consumidor
+- Blocos não adjacentes da mesma reserva não têm vínculo visual entre si
+- `instrumentation.ts` compila para Edge Runtime e falha lá (`node:crypto` não suportado), poluindo o log de dev a cada request
+- Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`, `GET /api/experiences` e `POST /api/reservations` — todas públicas ou expostas. Hardening da Fase 4
+- Sessão sem revogação (iron-session, 8h). Aceito no MVP de usuário único
+- A âncora dos testes de lead time vence em junho de 2027; vencida, falha com instrução de trocar a data
+- Cancelamento e CRUD de experiências não têm teste automatizado (a lógica de estado já é coberta; o que entrou é tradução HTTP, verificada por curl)
+- A página `/admin/reservas/[id]` da seção 14 não existe; o painel sobreposto cobre o dia a dia
+- **11 valores PROVISÓRIOS** em `lib/templates/quadriciclo.ts` (`grep -n "PROVISORIO"`), incluindo `reply_to_email` como `contato@aventix.com.br`, que aparece ao cliente final onde a regra de marca manda aparecer o tenant
+- `ce3e4c6` tem mensagem que não bate com o conteúdo; já está em `origin`
+- A exclusion constraint não é exercitada pela suíte (com `single_experience_per_slot=true` o perdedor cai no recheck antes)
+- Sem proteção contra duplo clique em `POST /api/reservations` no servidor; a defesa é o botão desabilitado no formulário
+- Termo sem versão vigente: o servidor valida presença, não que a versão seja a corrente
+- `mode:'string'` no schema: toda nova função que retorne `timestamptz` reintroduz o formato não-ISO (seção 3)
+- `operating_hours` permite faixas sobrepostas no mesmo weekday; corrigir no CRUD de horários
+- Experiência gratuita não é suportada (seção 4.6); o CRUD recusa
+- Cron em dev: o timer guarda a versão do módulo carregada no boot
+
+## Deploy
+
+`main` está em `00dc154` e foi pushed. O Easypanel constrói a partir do repo — **se o build for automático, o formulário público está indo ao ar em `aventix.com.br`** com termo provisório e pagamento em placeholder. Não foi verificado nesta sessão como o build está configurado lá.
 
 ## Prazo
 
-Go-live 24/08. Faltam 5 tarefas de admin da Fase 3 mais o fluxo público, a Fase 2 (à espera do Asaas) e a Fase 4 (integrações e hardening). Ritmo de cerca de 2h/dia. Custo aceito da inversão: Fases 2 e 3 serão costuradas no fim. Candidatos a corte se apertar: agenda compartilhada por link secreto, seed como template (virar seed simples).
+Go-live 24/08. Faltam 4 tarefas de admin da Fase 3, o termo real, a Fase 2 inteira (à espera do Asaas) e a Fase 4. Ritmo de cerca de 2h/dia. Candidatos a corte se apertar: agenda compartilhada por link secreto, seed como template (virar seed simples).
