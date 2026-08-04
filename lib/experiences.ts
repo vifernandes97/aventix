@@ -103,6 +103,50 @@ export async function listExperiences(): Promise<ExperienceRow[]> {
     .orderBy(desc(experiences.active), asc(experiences.durationMinutes), asc(experiences.id));
 }
 
+/**
+ * O que o catalogo PUBLICO expoe de uma experiencia (secao 7.1).
+ *
+ * Deliberadamente menor que ExperienceRow: sem `active` (toda linha daqui e
+ * ativa, entao o campo so contaria ao mundo que existe o conceito) e sem os
+ * campos de configuracao de sinal.
+ */
+export type PublicExperience = {
+  id: number;
+  name: string;
+  durationMinutes: number;
+  priceCents: number;
+  paymentMode: 'full' | 'deposit';
+};
+
+/**
+ * Experiencias ATIVAS, para o formulario de agendamento.
+ *
+ * `buffer_minutes` NAO sai daqui: e tempo de preparo do tenant entre um passeio
+ * e o proximo, nao faz parte do que o cliente compra, e o fim que ele enxerga e
+ * `start + duracao` (secao 4.6). Expo-lo faria a tela mostrar um passeio mais
+ * longo do que o vendido.
+ *
+ * SINAL (secao 7.1): quando `paymentMode` for 'deposit', o contrato preve
+ * `depositCents` e `balanceCents` JA CALCULADOS aqui — o valor do sinal nunca se
+ * calcula no cliente (secao 4.6). Nao existem hoje porque o modo depende do
+ * total (preco x resourcesNeeded), que so e conhecido depois do passo 2, e
+ * porque nenhuma experiencia pode ser 'deposit' no MVP. Entram na Fase 2, junto
+ * com a decisao de negocio sobre o sinal.
+ */
+export async function listPublicExperiences(): Promise<PublicExperience[]> {
+  return db
+    .select({
+      id: experiences.id,
+      name: experiences.name,
+      durationMinutes: experiences.durationMinutes,
+      priceCents: experiences.priceCents,
+      paymentMode: experiences.paymentMode,
+    })
+    .from(experiences)
+    .where(and(eq(experiences.tenantId, getTenantId()), eq(experiences.active, true)))
+    .orderBy(asc(experiences.durationMinutes), asc(experiences.id));
+}
+
 // ============================================================================
 // Escrita
 // ============================================================================
