@@ -180,8 +180,9 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
       r.id::text                AS id,
       r.status::text            AS status,
       r.start_at                AS start_at,
-      e.duration_minutes        AS duration_minutes,
-      e.buffer_minutes          AS buffer_minutes,
+      -- DA RESERVA, nunca da experiencia: snapshot da venda (ver lib/db/schema.ts).
+      r.duration_minutes        AS duration_minutes,
+      r.buffer_minutes          AS buffer_minutes,
       r.resources_needed        AS resources_needed,
       r.total_price_cents       AS total_price_cents,
       r.hold_expires_at         AS hold_expires_at,

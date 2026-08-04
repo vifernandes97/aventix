@@ -134,11 +134,13 @@ export type CalendarReservationSummary = {
 
 /** Detalhe — o que as views de DIA e SEMANA precisam para desenhar o bloco. */
 export type CalendarReservationDetail = CalendarReservationSummary & {
-  /** ISO. start + duracao: e o fim que o cliente enxerga, SEM buffer (secao 4.6). */
+  /** ISO. start + duracao CONGELADA: o fim que o cliente enxerga, SEM buffer (secao 4.6). */
   endAt: string;
-  /** ISO. start + duracao + buffer: o que a vaga realmente ocupa. */
+  /** ISO. start + duracao + buffer, ambos congelados: o que a vaga realmente ocupa. */
   bufferEndAt: string;
+  /** Snapshot da venda (reservations.duration_minutes), nao o valor atual da experiencia. */
   durationMinutes: number;
+  /** Snapshot da venda (reservations.buffer_minutes). */
   bufferMinutes: number;
   resourcesNeeded: number;
   /** Uma reserva pode ocupar N recursos. */
@@ -201,8 +203,11 @@ export async function getCalendarReservations(params: {
       r.resources_needed        AS resources_needed,
       e.id                      AS experience_id,
       e.name                    AS experience_name,
-      e.duration_minutes        AS duration_minutes,
-      e.buffer_minutes          AS buffer_minutes,
+      -- DA RESERVA, nunca da experiencia: sao o snapshot da venda. Lidos do
+      -- JOIN, editar a duracao de uma trilha redesenharia retroativamente o
+      -- bloco de reservas ja vendidas.
+      r.duration_minutes        AS duration_minutes,
+      r.buffer_minutes          AS buffer_minutes,
       c.name                    AS customer_name,
       coalesce(
         json_agg(json_build_object('id', res.id, 'name', res.name) ORDER BY res.id)
