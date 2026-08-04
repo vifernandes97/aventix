@@ -244,6 +244,23 @@ export const reservations = pgTable(
     totalPriceCents: integer('total_price_cents').notNull(), // price_cents * resources_needed (servidor)
     startAt: tstz('start_at').notNull(),
 
+    // SNAPSHOT de como foi vendido, junto com total_price_cents e payment_mode:
+    // os tres congelam na venda e NUNCA acompanham edicao do catalogo.
+    //
+    // POR QUE EXISTEM: sem eles, o calendario e o painel liam duracao e buffer do
+    // JOIN com experiences, ou seja, do valor ATUAL. Editar a duracao de uma
+    // trilha redesenhava retroativamente o tamanho dos blocos de reservas ja
+    // vendidas — bloco de 09:00-13:00 sobre uma vaga que na verdade libera 10:45.
+    // A vaga em si (reservation_resources.period) sempre foi congelada, entao o
+    // defeito nunca produziu overbooking: produzia tela mentindo, nas duas
+    // direcoes (dono recusando cliente num horario livre, ou grade oferecendo um
+    // vao que o POST recusa com 409).
+    //
+    // Quem le duracao da EXPERIENCIA continua certo em availability.ts e no
+    // calculo do period em createReservation: reserva NOVA usa a duracao vigente.
+    durationMinutes: integer('duration_minutes').notNull(),
+    bufferMinutes: integer('buffer_minutes').notNull(),
+
     channel: text('channel'), // origem da venda: NULL = direto; ex. 'aventurando'
 
     // rev 6: estado financeiro AGREGADO. As cobrancas em si vivem em
@@ -267,6 +284,10 @@ export const reservations = pgTable(
   },
   (t) => [
     check('reservations_resources_needed_check', sql`${t.resourcesNeeded} >= 1`),
+    // Espelham os CHECKs de experiences: o snapshot nao pode ser menos rigoroso
+    // que a origem de onde ele foi copiado.
+    check('reservations_duration_minutes_check', sql`${t.durationMinutes} > 0`),
+    check('reservations_buffer_minutes_check', sql`${t.bufferMinutes} >= 0`),
     index('idx_reservations_status_hold').on(t.status, t.holdExpiresAt),
     index('idx_reservations_start').on(t.tenantId, t.startAt),
     index('idx_reservations_customer').on(t.customerId),

@@ -241,10 +241,16 @@ export async function occupy(params: {
   await db.execute(sql`
     INSERT INTO reservations
       (id, tenant_id, customer_id, experience_id, resources_needed, total_price_cents,
-       start_at, payment_mode, termo_version, termo_accepted_at, status, hold_expires_at)
+       start_at, duration_minutes, buffer_minutes,
+       payment_mode, termo_version, termo_accepted_at, status, hold_expires_at)
     VALUES
       (${id}, ${TENANT_ID}, ${customerId}, ${experienceId}, 1, 10000,
-       ${startUtc}::timestamptz, 'full'::payment_mode, 'v1', now(),
+       -- O snapshot da venda tem que FECHAR com o period inserido logo abaixo:
+       -- o parametro minutes e duracao + buffer, entao aqui ele vai inteiro na
+       -- duracao e o buffer fica zero. Fixture com snapshot divergente do
+       -- proprio period seria dado que a aplicacao nunca produz.
+       ${startUtc}::timestamptz, ${minutes}, 0,
+       'full'::payment_mode, 'v1', now(),
        ${status}::reservation_status,
        ${holdExpiresAt === 'past' ? sql`now() - interval '1 minute'` : sql`NULL`})
   `);

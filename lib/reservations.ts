@@ -789,7 +789,14 @@ async function applyCreateReservation(
       totalPriceCents: totalCents,
       startAt: startIso,
       channel,
-      paymentMode: experience.paymentMode, // SNAPSHOT de como foi vendido
+      // SNAPSHOT de como foi vendido — os quatro congelam aqui e NUNCA
+      // acompanham edicao posterior do catalogo. duracao e buffer entraram no
+      // conjunto porque o calendario e o painel liam do JOIN com experiences,
+      // e editar a duracao redesenhava retroativamente reserva ja vendida.
+      // Sao os MESMOS numeros que montam o period logo abaixo.
+      durationMinutes: experience.durationMinutes,
+      bufferMinutes: experience.bufferMinutes,
+      paymentMode: experience.paymentMode,
       termoVersion: input.termo.version.trim(),
       termoAcceptedAt: termoAcceptedAt.toISOString(),
       termoAcceptedIp: input.acceptance?.ip ?? null,
