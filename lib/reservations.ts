@@ -491,6 +491,7 @@ export type CreateReservationInput = {
     documentNumber?: string | null;
   }[];
   termo: { version: string; acceptedAt: string };
+  emergencyContact: { name: string; phone: string };
   channel?: string | null;
   /** capturados na rota — sao a prova juridica do aceite (secao 10) */
   acceptance?: { ip?: string | null; userAgent?: string | null };
@@ -589,6 +590,15 @@ export async function createReservation(
     throw new InvalidCompositionError('nenhum participante informado');
   }
 
+  // Contato de emergencia (passo 5, junto ao termo). Nome obrigatorio;
+  // telefone passa pela mesma normalizacao/validacao do telefone do cliente
+  // (secao 4.6) — reaproveitar evita uma segunda regra de "telefone
+  // brasileiro valido" divergindo da primeira.
+  if (!input.emergencyContact?.name?.trim()) {
+    throw new InvalidCompositionError('contato de emergencia sem nome');
+  }
+  const emergencyContactPhone = normalizePhone(input.emergencyContact.phone);
+
   const operators = input.participants.filter((p) => p.role === 'operator');
   if (operators.length < input.resourcesNeeded) {
     throw new InvalidCompositionError(
@@ -599,16 +609,16 @@ export async function createReservation(
 
   const channel = sanitizeChannel(input.channel);
 
-  if (tx) return applyCreateReservation(tx, input, { startInstant, termoAcceptedAt, channel });
-  return db.transaction((ownTx) =>
-    applyCreateReservation(ownTx, input, { startInstant, termoAcceptedAt, channel }),
-  );
+  const prepared = { startInstant, termoAcceptedAt, channel, emergencyContactPhone };
+  if (tx) return applyCreateReservation(tx, input, prepared);
+  return db.transaction((ownTx) => applyCreateReservation(ownTx, input, prepared));
 }
 
 type PreparedInput = {
   startInstant: Date;
   termoAcceptedAt: Date;
   channel: string | null;
+  emergencyContactPhone: string;
 };
 
 /**
@@ -620,7 +630,7 @@ async function applyCreateReservation(
   prepared: PreparedInput,
 ): Promise<CreateReservationResult> {
   const tenantId = getTenantId();
-  const { startInstant, termoAcceptedAt, channel } = prepared;
+  const { startInstant, termoAcceptedAt, channel, emergencyContactPhone } = prepared;
   const startIso = startInstant.toISOString();
 
   // -- 1. ADVISORY LOCK ------------------------------------------------------
@@ -789,6 +799,8 @@ async function applyCreateReservation(
       totalPriceCents: totalCents,
       startAt: startIso,
       channel,
+      emergencyContactName: input.emergencyContact.name.trim(),
+      emergencyContactPhone,
       // SNAPSHOT de como foi vendido — os quatro congelam aqui e NUNCA
       // acompanham edicao posterior do catalogo. duracao e buffer entraram no
       // conjunto porque o calendario e o painel liam do JOIN com experiences,

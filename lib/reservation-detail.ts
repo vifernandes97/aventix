@@ -11,7 +11,8 @@
 // reserva, sob demanda, quando o dono clica.
 //
 // >>> DADOS SENSIVEIS <<<
-// Este e o unico modulo do projeto que devolve CPF e numero de documento juntos.
+// Este e o unico modulo do projeto que devolve CPF, numero de documento E
+// contato de emergencia (nome + telefone de terceiro) juntos.
 // Duas regras que acompanham qualquer mudanca aqui:
 //   1. o retorno vai no CORPO da resposta, nunca em query string ou URL;
 //   2. nada deste retorno entra em log — nem em erro, nem em debug.
@@ -95,6 +96,14 @@ export type ReservationDetail = {
   participants: DetailParticipant[];
 
   /**
+   * Quem acionar em caso de necessidade durante o passeio (passo 5 do
+   * formulario publico). NULL nos dois campos junto: reserva anterior a esta
+   * funcionalidade nunca capturou o dado (secao 4.6 — coluna nullable de
+   * proposito). SENSIVEL — ver cabecalho.
+   */
+  emergencyContact: { name: string | null; phone: string | null };
+
+  /**
    * Estado financeiro. Ate a Fase 2 existir, nenhuma cobranca e criada no Asaas
    * e `paymentState` fica 'pending' em TODA reserva, inclusive nas confirmadas.
    * As linhas de reservation_payments ja existem desde a criacao (secao 5.2
@@ -138,6 +147,8 @@ type Row = {
   customer_email: string | null;
   customer_cpf: string | null;
   customer_birthdate: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
   resources: DetailResource[];
   participants: DetailParticipant[];
   payments: (Omit<DetailPayment, 'paidAt'> & { paidAt: string | null })[];
@@ -201,6 +212,8 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
       c.email                   AS customer_email,
       c.cpf                     AS customer_cpf,
       c.birthdate::text         AS customer_birthdate,
+      r.emergency_contact_name  AS emergency_contact_name,
+      r.emergency_contact_phone AS emergency_contact_phone,
 
       (
         SELECT coalesce(
@@ -299,6 +312,10 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
       birthdate: row.customer_birthdate,
     },
     participants: row.participants,
+    emergencyContact: {
+      name: row.emergency_contact_name,
+      phone: row.emergency_contact_phone,
+    },
     payment: {
       mode: row.payment_mode,
       state: row.payment_state,

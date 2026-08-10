@@ -15,10 +15,11 @@
 // interacao explicita, de UMA reserva.
 //
 // >>> DADO SENSIVEL <<<
-// Este componente recebe CPF e numero de documento. Eles chegam pelo CORPO da
-// resposta (nunca por URL) e sao exibidos porque isto e o painel do dono, atras
-// do login, olhando os proprios clientes. Nao logue o payload; nao o coloque em
-// querystring ao acrescentar qualquer funcionalidade aqui.
+// Este componente recebe CPF, numero de documento e contato de emergencia
+// (nome + telefone de terceiro). Eles chegam pelo CORPO da resposta (nunca por
+// URL) e sao exibidos porque isto e o painel do dono, atras do login, olhando
+// os proprios clientes. Nao logue o payload; nao o coloque em querystring ao
+// acrescentar qualquer funcionalidade aqui.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -297,6 +298,29 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
               <Field label="E-mail">{detail.customer.email ?? '—'}</Field>
               <Field label="CPF">{detail.customer.cpf ?? '—'}</Field>
               <Field label="Nascimento">{dateBr(detail.customer.birthdate)}</Field>
+            </Section>
+
+            {/* -- contato de emergencia --------------------------------------
+                NULL nos dois campos junto: reserva anterior a esta
+                funcionalidade nunca capturou o dado (lib/reservation-detail.ts). */}
+            <Section title="Contato de emergência">
+              {detail.emergencyContact.name ? (
+                <>
+                  <Field label="Nome">{detail.emergencyContact.name}</Field>
+                  <Field label="Telefone">
+                    <a
+                      href={`tel:${detail.emergencyContact.phone}`}
+                      className="underline underline-offset-2"
+                    >
+                      {detail.emergencyContact.phone}
+                    </a>
+                  </Field>
+                </>
+              ) : (
+                <p className="text-sm text-neutral-500">
+                  Não informado (reserva anterior a este recurso).
+                </p>
+              )}
             </Section>
 
             {/* -- participantes --------------------------------------------- */}

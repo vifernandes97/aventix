@@ -385,6 +385,7 @@ export function reservationInput(params: {
       })),
     ],
     termo: { version: 'v1', acceptedAt: new Date().toISOString() },
+    emergencyContact: { name: 'Contato Emergência', phone: '(19) 98888-7777' },
   };
 }
 

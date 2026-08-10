@@ -9,14 +9,16 @@
 // e convidaria alguem a tirar o caminho do matcher um dia.
 //
 // >>> PRIVACIDADE — as tres regras desta rota <<<
-// 1. CPF e numero de documento saem no CORPO, nunca em URL. O que vai na URL e
-//    so o id da reserva, que e opaco (uuid) e nao identifica ninguem.
+// 1. CPF, numero de documento e contato de emergencia (nome + telefone de
+//    terceiro) saem no CORPO, nunca em URL. O que vai na URL e so o id da
+//    reserva, que e opaco (uuid) e nao identifica ninguem.
 // 2. NADA do payload entra em log. O `console.error` do catch recebe o objeto de
 //    erro, e os UNICOS valores que esta rota liga a uma query sao o id e o
 //    tenant — nenhum dado do cliente e parametro de statement, entao nem um erro
-//    do driver teria como ecoar CPF ou CNH. Se um dia alguem acrescentar log de
-//    requisicao aqui, os campos `customer.cpf` e `participants[].documentNumber`
-//    tem que ser redigidos ANTES.
+//    do driver teria como ecoar CPF, CNH ou contato de emergencia. Se um dia
+//    alguem acrescentar log de requisicao aqui, os campos `customer.cpf`,
+//    `participants[].documentNumber` e `emergencyContact.*` tem que ser
+//    redigidos ANTES.
 // 3. Nao existe `console.log` de depuracao neste arquivo. Nao acrescente.
 //
 // SOMENTE LEITURA. O cancelamento e a rota irma em ./cancel.

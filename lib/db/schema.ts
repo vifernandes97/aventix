@@ -263,6 +263,15 @@ export const reservations = pgTable(
 
     channel: text('channel'), // origem da venda: NULL = direto; ex. 'aventurando'
 
+    // Contato de emergencia, capturado no passo 5 do formulario publico
+    // (junto ao termo). Nullable de proposito: reserva anterior a esta
+    // funcionalidade nao tem o dado e nao ha como retroagir (mesma licao da
+    // migration 0001 sobre NOT NULL em tabela ja povoada). A obrigatoriedade
+    // para reserva NOVA vive na camada de aplicacao (rota + createReservation),
+    // nao aqui.
+    emergencyContactName: text('emergency_contact_name'),
+    emergencyContactPhone: text('emergency_contact_phone'),
+
     // rev 6: estado financeiro AGREGADO. As cobrancas em si vivem em
     // reservation_payments; estes dois campos sao DERIVADOS e so podem ser
     // escritos por recalcReservationPayment, na mesma transacao (secao 4.6).

@@ -151,6 +151,7 @@ async function main() {
           })),
         ],
         termo: { version: 'demo-v1', acceptedAt: new Date().toISOString() },
+        emergencyContact: { name: `Emergência (${item.who.split(' ')[0]})`, phone: item.phone },
         channel: DEMO_CHANNEL,
       });
 

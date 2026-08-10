@@ -58,6 +58,10 @@ const bodySchema = z.object({
     version: z.string().min(1),
     acceptedAt: isoInstant,
   }),
+  emergencyContact: z.object({
+    name: z.string().min(1),
+    phone: z.string().min(1),
+  }),
   channel: z.string().nullish(),
 });
 
