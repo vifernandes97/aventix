@@ -211,6 +211,15 @@ CREATE TABLE reservations (
   termo_accepted_ip text,
   termo_accepted_user_agent text,
 
+  -- Quem acionar em caso de necessidade durante o passeio (passo 5 do
+  -- formulario publico, junto ao termo). NULLABLE de proposito (migration 0002):
+  -- reserva anterior a esta funcionalidade nao tem o dado e nao ha como
+  -- retroagir. Obrigatorio para reserva NOVA na aplicacao (rota + createReservation),
+  -- nunca no banco -- mesma regra que NAO deu NOT NULL a duration_minutes/buffer_minutes
+  -- quando a 0001 entrou.
+  emergency_contact_name text,
+  emergency_contact_phone text,
+
   status reservation_status NOT NULL DEFAULT 'pending_payment',
   hold_expires_at timestamptz,
 
@@ -373,9 +382,9 @@ ORDER BY r.id;
 
 **`GET /api/experiences`** → inclui `paymentMode`, `priceCents` e, quando `deposit`, `depositCents` e `balanceCents` **já calculados no servidor** para exibir no checkout.
 
-**`GET /api/termo`** → texto + `version`.
+**Termo:** não existe `GET /api/termo`. O texto e a versão vigente (`TERM_VERSION`, `TERM_TEXT`) vivem em `lib/terms/quadriciclo-v1.ts` e entram no bundle do cliente por import direto — o formulário é `'use client'`, então buscar por API seria uma volta ao servidor sem necessidade. Versão nova = arquivo novo (`quadriciclo-v2.ts`); a reserva antiga mantém o registro do que aceitou, gravando só a versão (`termo_version`), nunca o texto.
 
-**`POST /api/reservations`** — cria cliente, reserva, alocações, participantes e pagamentos. Corpo igual à rev 5, sem campo de pagamento (o modo vem da experiência).
+**`POST /api/reservations`** — cria cliente, reserva, alocações, participantes e pagamentos. Corpo igual à rev 5, sem campo de pagamento (o modo vem da experiência), **mais `emergencyContact: { name, phone }`** (obrigatório — passo 5 do formulário público, seção 10). `createReservation` valida presença de `termo.version`/`acceptedAt`, mas **não** que a versão seja a vigente — divida registrada em `docs/ESTADO-ATUAL.md`.
 Resposta `201`:
 ```json
 {
@@ -398,11 +407,11 @@ No modo `deposit`, a tela **deve** deixar explícito: "Você paga agora R$X e o 
 
 ### 7.2 Admin (sessão)
 
-- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, termo, `shared_calendar_links`.
+- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/quadriciclo-v1.ts` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
 - **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
   **Sinal fora do CRUD por ora:** `payment_mode` só aceita `full`, e `deposit_percent`/`deposit_fixed_cents` não são expostos. `deposit` responde 422 em vez de gravar experiência que ninguém consegue vender — gravar o modo sem os campos de sinal violaria `experiences_deposit_mode_check` e viraria 500. Reabre com a Fase 2 e a decisão de negócio sobre o sinal; o ponto único a mudar é `ACCEPTED_PAYMENT_MODES` em `lib/experiences.ts`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
-- **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF ou número de documento:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas.
+- **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento, **contato de emergência** e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF, número de documento ou contato de emergência:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas. `emergencyContact` vem `null` em reserva anterior à migration 0002 (coluna nullable).
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
 - `GET /api/admin/customers` — clientes + histórico.
 - **`GET /api/admin/reservations/{id}/balance`** — retorna o saldo pendente e, sob demanda, o **QR Code Pix atual** da cobrança de saldo (buscado no Asaas **na hora**, nunca cacheado — QR expira).
@@ -472,7 +481,7 @@ Comprovante inclui ponto de encontro e o que levar (de `settings`). Falha de e-m
 
 ## 10. Termo de aceite digital
 
-Inalterado: exibe o termo completo; botão ativa só após **rolar até o fim**; captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`; e-mail reforçando; texto versionado editável no admin. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável. Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
+Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — ainda não implementado, já que nenhuma experiência do Quadri Club vende em `deposit` (seção 7.2). Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
 
 ---
 
@@ -548,14 +557,12 @@ Um único login (o dono). Sem provider externo.
     /admin/recursos/page.tsx
     /admin/horarios/page.tsx
     /admin/bloqueios/page.tsx
-    /admin/termo/page.tsx
     /admin/configuracoes/page.tsx
     /admin/compartilhar/page.tsx
     /admin/integracao/page.tsx        # saude do webhook / reconciliacao
   /api
     /availability/route.ts
     /experiences/route.ts             # catalogo PUBLICO: so ativas, sem `active` nem buffer_minutes
-    /termo/route.ts
     /reservations/route.ts
     /reservations/[id]/status/route.ts
     /webhooks/asaas/route.ts          # SEM redirect; responde 200 rapido
@@ -568,9 +575,10 @@ Um único login (o dono). Sem provider externo.
   /reservations.ts                    # find-or-create, criacao transacional, setReservationStatus, recalcReservationPayment
   /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
   /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
-  /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento
+  /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento + contato de emergencia
   /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
   /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
+  /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
   /jobs/expire-holds.ts               # expiracao de hold (secao 12); vizinho do reconcile na Fase 2
   /templates/types.ts                 # forma de um template de segmento
   /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
@@ -685,3 +693,8 @@ Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **ante
 4. **Webhook criado com token secreto próprio**, URL exata sem redirect, e e-mail de alerta configurado para avisar interrupção de fila.
 5. **Régua de cobrança/notificações do Asaas ajustada**: desligar as notificações automáticas na cobrança de **saldo**, para o cliente não receber avisos de cobrança de algo que será pago presencialmente.
 6. **Decisão de negócio registrada:** percentual do sinal, se é reembolsável, e o que fazer se o cliente não pagar o saldo no dia.
+
+### Credenciais e chaves (estado em 17/08/2026)
+- **Asaas sandbox:** chave gerada, nome "aventix", sem expiração, sem permissão de saque. Salva em `ASAAS_API_KEY` no `.env` local. `ASAAS_BASE_URL=https://sandbox.asaas.com/api/v3`.
+- **Asaas produção:** ainda NÃO gerada. Gerar no painel do Asaas quando a Fase 4 (deploy) começar. Mesmas configurações: sem expiração, sem permissão de saque. Entrar no Easypanel como variável de ambiente, não em arquivo.
+- **Chave SSH do VPS:** ainda NÃO configurada. Login atual é por senha de root (guardada com o dev). Configurar chave SSH é tarefa do hardening da Fase 4.
