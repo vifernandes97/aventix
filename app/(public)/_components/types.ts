@@ -30,6 +30,12 @@ export type ResponsibleForm = PersonForm & {
   email: string;
 };
 
+/** Contato a acionar em caso de necessidade durante o passeio (passo 5, bloco 1). */
+export type EmergencyContactForm = {
+  name: string;
+  phone: string;
+};
+
 export type WizardState = {
   experience: PublicExperience | null;
   resourcesNeeded: number;
@@ -39,8 +45,25 @@ export type WizardState = {
   responsible: ResponsibleForm;
   /** Participantes ALEM do responsavel. */
   others: PersonForm[];
+  emergencyContact: EmergencyContactForm;
+  /** Checkbox 1 do passo 5 — obrigatorio, so habilita apos scroll-to-end do termo. */
   termoAccepted: boolean;
+  /** Checkbox 2 do passo 5 — opcional, sem efeito no servidor. */
+  imageConsent: boolean;
 };
+
+export const emptyEmergencyContact = (): EmergencyContactForm => ({ name: '', phone: '' });
+
+/**
+ * Checagem LEVE de conveniencia (mesma ressalva do topo do arquivo: nao e
+ * defesa). So conta digitos — a normalizacao completa de telefone brasileiro
+ * (normalizePhone, com a regra do DDI e do 10/11 digitos) vive em
+ * lib/reservations.ts, que importa Postgres e nao pode entrar num Client
+ * Component. O servidor reaplica a regra real e recusa o que passar daqui.
+ */
+export function hasValidEmergencyContact(contact: EmergencyContactForm): boolean {
+  return contact.name.trim().length > 0 && contact.phone.replace(/\D/g, '').length >= 10;
+}
 
 /** Idade minima para conduzir. Ver a nota em `minorOperators`. */
 export const MIN_OPERATOR_AGE = 18;

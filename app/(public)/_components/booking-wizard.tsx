@@ -23,6 +23,7 @@
 import { useCallback, useMemo, useState } from 'react';
 
 import type { PublicExperience } from '@/lib/experiences';
+import { TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
 
 import {
   StepDone,
@@ -33,18 +34,13 @@ import {
   StepTerms,
 } from './steps';
 import { type PublicLabels, moneyLabel, durationLabel, totalCents } from './shared';
-import { type WizardState, emptyPerson, validatePeople } from './types';
-
-/**
- * PLACEHOLDER — o termo de verdade e tarefa separada (secao 10).
- *
- * A tarefa do Termo de Aceite substitui isto pelo texto versionado com
- * scroll-to-end e captura de IP/user-agent. O IP e o user-agent JA sao
- * capturados pela rota (ela e quem os enxerga); o que falta e o texto real e a
- * versao vigente. `createReservation` valida a PRESENCA de version/acceptedAt,
- * nao que a versao seja a corrente — divida ja registrada.
- */
-const TERMO_PLACEHOLDER_VERSION = 'PROVISORIO';
+import {
+  type WizardState,
+  emptyEmergencyContact,
+  emptyPerson,
+  hasValidEmergencyContact,
+  validatePeople,
+} from './types';
 
 export type CreatedReservation = {
   reservationId: string;
@@ -85,7 +81,9 @@ export function BookingWizard({
     startAt: null,
     responsible: { ...emptyPerson('responsavel', 'operator'), phone: '', email: '' },
     others: [],
+    emergencyContact: emptyEmergencyContact(),
     termoAccepted: false,
+    imageConsent: false,
   });
 
   const [stepId, setStepId] = useState<StepId>('experience');
@@ -184,8 +182,11 @@ export function BookingWizard({
             role: p.role,
             documentNumber: p.documentNumber.trim() || null,
           })),
-          // PLACEHOLDER — ver TERMO_PLACEHOLDER_VERSION no topo.
-          termo: { version: TERMO_PLACEHOLDER_VERSION, acceptedAt: new Date().toISOString() },
+          termo: { version: TERM_VERSION, acceptedAt: new Date().toISOString() },
+          emergencyContact: {
+            name: state.emergencyContact.name.trim(),
+            phone: state.emergencyContact.phone.trim(),
+          },
           channel,
         }),
       });
@@ -338,7 +339,11 @@ export function BookingWizard({
             <StepTerms
               state={state}
               labels={labels}
-              onToggle={(termoAccepted) => setState((s) => ({ ...s, termoAccepted }))}
+              onChangeEmergencyContact={(patch) =>
+                setState((s) => ({ ...s, emergencyContact: { ...s.emergencyContact, ...patch } }))
+              }
+              onToggleTermo={(termoAccepted) => setState((s) => ({ ...s, termoAccepted }))}
+              onToggleImageConsent={(imageConsent) => setState((s) => ({ ...s, imageConsent }))}
             />
           )}
 
@@ -400,7 +405,12 @@ export function BookingWizard({
                   // Desabilitar durante o envio E a defesa contra duplo clique
                   // que a rota do POST pede no proprio cabecalho: sem isto, dois
                   // toques criam DUAS reservas quando ha recurso sobrando.
-                  disabled={!state.termoAccepted || submitting}
+                  // Checkbox 2 (imagem) NAO entra aqui: e opcional (secao 10).
+                  disabled={
+                    !state.termoAccepted ||
+                    !hasValidEmergencyContact(state.emergencyContact) ||
+                    submitting
+                  }
                   className="flex-1 rounded-lg bg-orange-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
                 >
                   {submitting ? 'Criando reserva…' : 'Confirmar e ir para o pagamento'}

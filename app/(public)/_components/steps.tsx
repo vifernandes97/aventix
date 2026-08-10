@@ -3,9 +3,10 @@
 // Os seis passos do formulario publico. A maquina de estados vive em
 // booking-wizard.tsx; aqui e so o corpo de cada passo.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { PublicExperience } from '@/lib/experiences';
+import { TERM_TEXT, TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
 
 import type { CreatedReservation } from './booking-wizard';
 import {
@@ -23,10 +24,12 @@ import {
   weekdayLabel,
 } from './shared';
 import {
+  type EmergencyContactForm,
   type PeopleValidation,
   type PersonForm,
   type WizardState,
   emptyPerson,
+  hasValidEmergencyContact,
 } from './types';
 
 // ============================================================================
@@ -602,18 +605,59 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ============================================================================
-// 5 — termo (PLACEHOLDER)
+// 5 — contato de emergencia + termo (scroll-to-end) + aceites
 // ============================================================================
+
+/** Tolerancia de pixels no fim do scroll — teclados/zoom raramente entregam scrollHeight exato. */
+const SCROLL_END_TOLERANCE_PX = 20;
+
+/**
+ * Substitui os marcadores do texto do termo SO NA EXIBICAO (secao 10). O que
+ * vai para o POST — e o que a reserva grava — e `TERM_VERSION`, nunca este
+ * texto com os marcadores trocados: e a versao que aponta pro arquivo.
+ */
+function renderTermText(name: string): string {
+  return TERM_TEXT.replace('{nome}', name.trim() || 'você')
+    .replace('{data_hora}', '[registrado no aceite]')
+    .replace('{ip}', '[registrado no aceite]');
+}
 
 export function StepTerms({
   state,
   labels,
-  onToggle,
+  onChangeEmergencyContact,
+  onToggleTermo,
+  onToggleImageConsent,
 }: {
   state: WizardState;
   labels: PublicLabels;
-  onToggle: (accepted: boolean) => void;
+  onChangeEmergencyContact: (patch: Partial<EmergencyContactForm>) => void;
+  onToggleTermo: (accepted: boolean) => void;
+  onToggleImageConsent: (accepted: boolean) => void;
 }) {
+  // Scroll-to-end e estado LOCAL do passo, de proposito: sair do passo 5 e
+  // voltar exige rolar de novo, o mesmo padrao de qualquer termo com rolagem
+  // obrigatoria. Uma vez que o checkbox 1 ja esteja marcado (persistido em
+  // state.termoAccepted), ele continua habilitado mesmo remontando — so um
+  // termo NUNCA lido comeca desabilitado.
+  const [hasScrolledToEnd, setHasScrolledToEnd] = useState(state.termoAccepted);
+  const termBoxRef = useRef<HTMLDivElement>(null);
+
+  const checkScrolledToEnd = (el: HTMLDivElement) => {
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_END_TOLERANCE_PX) {
+      setHasScrolledToEnd(true);
+    }
+  };
+
+  useEffect(() => {
+    // Termo curto o bastante para caber sem rolagem: nao ha o que "rolar ate
+    // o fim", entao ja nasce liberado. Roda so na montagem do passo.
+    if (termBoxRef.current) checkScrolledToEnd(termBoxRef.current);
+  }, []);
+
+  const checkbox1Enabled = hasScrolledToEnd || state.termoAccepted;
+  const emergencyContactValid = hasValidEmergencyContact(state.emergencyContact);
+
   return (
     <section>
       <h1 className="text-xl font-semibold">Confirme e aceite</h1>
@@ -641,21 +685,97 @@ export function StepTerms({
       </div>
 
       {/* ====================================================================
-          PLACEHOLDER — o termo de verdade e TAREFA SEPARADA (secao 10).
-          Ela substitui este bloco pelo texto versionado com rolagem ate o fim
-          (o botao so habilita depois), e passa a enviar a versao VIGENTE em vez
-          de "PROVISORIO". O IP e o user-agent ja sao capturados pela rota, que
-          e quem os enxerga. NAO tratar este checkbox como aceite valido.
+          BLOCO 1 — contato de emergencia
           ==================================================================== */}
-      <label className="mt-4 flex items-start gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+      <div className="mt-6">
+        <h2 className="text-base font-semibold">Contato de emergência</h2>
+        <p className="mt-1 text-sm text-stone-400">
+          Quem devemos acionar em caso de necessidade durante o passeio?
+        </p>
+
+        <div className="mt-3 flex flex-col gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+          <Field label="Nome completo">
+            <input
+              value={state.emergencyContact.name}
+              onChange={(e) => onChangeEmergencyContact({ name: e.target.value })}
+              className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2.5 text-sm"
+            />
+          </Field>
+          <Field label="Telefone / WhatsApp">
+            <input
+              value={state.emergencyContact.phone}
+              onChange={(e) => onChangeEmergencyContact({ phone: e.target.value })}
+              inputMode="tel"
+              placeholder="(11) 90000-0000"
+              className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2.5 text-sm"
+            />
+          </Field>
+          {!emergencyContactValid && (
+            <p className="text-xs text-stone-500">
+              Nome e telefone do contato de emergência são obrigatórios.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ====================================================================
+          BLOCO 2 — termo, com rolagem obrigatoria ate o fim
+          ==================================================================== */}
+      <div className="mt-6">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-base font-semibold">Termo de responsabilidade</h2>
+          <span className="text-xs text-stone-500">Versão {TERM_VERSION}</span>
+        </div>
+
+        <div
+          ref={termBoxRef}
+          onScroll={(e) => checkScrolledToEnd(e.currentTarget)}
+          className="mt-3 h-80 overflow-y-scroll rounded-xl border border-stone-800 bg-stone-900/60 p-4 text-sm leading-relaxed text-stone-300"
+        >
+          <pre className="whitespace-pre-wrap font-sans">
+            {renderTermText(state.responsible.name)}
+          </pre>
+        </div>
+
+        {!hasScrolledToEnd && (
+          <p className="mt-2 text-xs text-stone-500">
+            Role o texto acima até o fim para poder aceitar.
+          </p>
+        )}
+      </div>
+
+      {/* ====================================================================
+          BLOCO 3 — os dois checkboxes (secao 10)
+          ==================================================================== */}
+      <label
+        className={`mt-4 flex items-start gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-4 ${
+          !checkbox1Enabled ? 'opacity-50' : ''
+        }`}
+      >
         <input
           type="checkbox"
           checked={state.termoAccepted}
-          onChange={(e) => onToggle(e.target.checked)}
+          disabled={!checkbox1Enabled}
+          onChange={(e) => onToggleTermo(e.target.checked)}
           className="mt-0.5 h-5 w-5 shrink-0 accent-orange-600"
         />
         <span className="text-sm text-stone-300">
-          Li e aceito os termos de responsabilidade.
+          Li e concordo integralmente com o Termo de Responsabilidade, Assunção de Riscos e
+          Indenização acima.
+        </span>
+      </label>
+
+      <label className="mt-3 flex items-start gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+        <input
+          type="checkbox"
+          checked={state.imageConsent}
+          onChange={(e) => onToggleImageConsent(e.target.checked)}
+          className="mt-0.5 h-5 w-5 shrink-0 accent-orange-600"
+        />
+        <span className="text-sm text-stone-300">
+          Autorizo o uso da minha imagem e voz, captadas em fotos e vídeos durante o passeio, pelo{' '}
+          {labels.business_name} para fins de divulgação em redes sociais e site, sem ônus para a
+          empresa.
         </span>
       </label>
     </section>
