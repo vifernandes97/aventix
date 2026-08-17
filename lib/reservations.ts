@@ -541,6 +541,18 @@ function isExclusionViolation(error: unknown): boolean {
 }
 
 /**
+ * Data de corte para maioridade (18 anos): 'YYYY-MM-DD' de `today` menos 18
+ * anos, mesma aritmetica de calendario ancorada em UTC de `weekdayOf`
+ * (lib/time.ts) — data de calendario nao tem fuso, so precisa fechar o
+ * round-trip. Operador nasceu ATE essa data (inclusive) -> 18+ na data do
+ * agendamento (hoje), nao na data do passeio (decisao explicita).
+ */
+function cutoffDate18(today: string): string {
+  const [y, m, d] = today.split('-').map(Number);
+  return new Date(Date.UTC(y - 18, m - 1, d)).toISOString().slice(0, 10);
+}
+
+/**
  * Sanitiza `channel` (origem da venda, secao 4.4). Vem de querystring publica
  * (`?canal=aventurando`), entao nao se confia no formato: lowercase, trim, so
  * [a-z0-9_-], no maximo 40 chars. Vazio depois disso vira null.
@@ -604,6 +616,20 @@ export async function createReservation(
     throw new InvalidCompositionError(
       `${operators.length} operador(es) para ${input.resourcesNeeded} recurso(s); ` +
         'cada recurso alugado precisa de ao menos um habilitado a operar',
+    );
+  }
+
+  // Maioridade do condutor (espelha a validacao do front, secao 1): 18+ na
+  // DATA DO AGENDAMENTO, nunca na data do passeio (regra deliberadamente
+  // simples — sem calculo de "faz aniversario antes do passeio"). Sem
+  // birthdate nao ha como verificar, entao recusa em vez de deixar passar.
+  const cutoff18 = cutoffDate18(todayLocalDate());
+  const underageOperators = operators.filter(
+    (p) => !p.birthdate || p.birthdate > cutoff18,
+  );
+  if (underageOperators.length > 0) {
+    throw new InvalidCompositionError(
+      `${underageOperators.length} operador(es) sem data de nascimento comprovando 18 anos ou mais na data do agendamento`,
     );
   }
 

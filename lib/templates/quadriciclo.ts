@@ -43,10 +43,11 @@ export const quadricicloTemplate: SegmentTemplate = {
     what_to_bring:
       'Documento com foto, calca comprida, tenis fechado, protetor solar e agua.', // PROVISORIO — confirmar com o cliente
 
-    // ATENCAO na confirmacao: este e-mail aparece para o CLIENTE FINAL do tenant.
-    // Um endereco @aventix.com.br expoe a plataforma onde a regra de marca (rev 5)
-    // manda aparecer o tenant. O natural e um endereco do proprio Quadri Club.
-    reply_to_email: 'contato@aventix.com.br', // PROVISORIO — confirmar com o cliente
+    // ATENCAO: este e-mail aparece para o CLIENTE FINAL do tenant. Um endereco
+    // @aventix.com.br expoe a plataforma onde a regra de marca (rev 5) manda
+    // aparecer o tenant. Endereco do proprio Quadri Club, confirmado com o
+    // cliente em 17/08/2026 — dominio e .com, NAO .com.br.
+    reply_to_email: 'contato@quadriclub.com',
 
     // So aparece no termo quando a experiencia for 'deposit' (secao 10). Fica
     // preenchido para nao travar a troca de modo, mesmo com as duas experiencias

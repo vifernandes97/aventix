@@ -161,6 +161,58 @@ describe('D — composicao e validacao', () => {
     expect(precoCurta).not.toBe(precoLonga);
   });
 
+  it('16. operador menor de 18 anos e rejeitado; 18+ e sem data tambem se comportam corretamente', async () => {
+    const startAt = await primeiroSlot(EXP.curta, 1);
+    const antes = await movementCounts();
+
+    // 17 anos completos hoje: menor.
+    const seventeen = new Date();
+    seventeen.setUTCFullYear(seventeen.getUTCFullYear() - 17);
+    const birthdate17 = seventeen.toISOString().slice(0, 10);
+
+    await expect(
+      createReservation(
+        reservationInput({
+          experienceId: EXP.curta,
+          startAt,
+          resourcesNeeded: 1,
+          operatorBirthdate: birthdate17,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(InvalidCompositionError);
+    expect(await movementCounts()).toEqual(antes);
+
+    // Sem data de nascimento: nao ha como verificar, entao rejeita tambem.
+    await expect(
+      createReservation(
+        reservationInput({
+          experienceId: EXP.curta,
+          startAt,
+          resourcesNeeded: 1,
+          operatorBirthdate: null,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(InvalidCompositionError);
+    expect(await movementCounts()).toEqual(antes);
+
+    // Controle: exatamente 18 anos completos HOJE passa (borda da regra —
+    // "na data do agendamento", nao "mais de 18").
+    const eighteen = new Date();
+    eighteen.setUTCFullYear(eighteen.getUTCFullYear() - 18);
+    const birthdate18 = eighteen.toISOString().slice(0, 10);
+
+    const ok = await createReservation(
+      reservationInput({
+        experienceId: EXP.curta,
+        startAt,
+        resourcesNeeded: 1,
+        operatorBirthdate: birthdate18,
+        phone: '11933330000',
+      }),
+    );
+    expect(ok.status).toBe('pending_payment');
+  });
+
   it('15b. valor de preco vindo do cliente e ignorado', async () => {
     const startAt = await primeiroSlot(EXP.curta, 1);
 

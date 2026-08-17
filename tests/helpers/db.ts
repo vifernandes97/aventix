@@ -349,6 +349,23 @@ export async function removeDepositExperiences(): Promise<void> {
 
 // -- entrada padrao de createReservation ------------------------------------
 
+/**
+ * 'YYYY-MM-DD' de alguem com `years` anos completos HOJE (relogio real do
+ * processo — nao e mock, e so a construcao do dado de entrada, igual
+ * `hold_expires_at no passado` para lead time; a regra de "nao mockar o
+ * relogio" e sobre o codigo em teste, nao sobre como a fixture calcula uma
+ * data). Ancorado em UTC, mesmo padrao de `cutoffDate18` em lib/reservations.ts.
+ */
+function birthdateYearsAgo(years: number): string {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear() - years, now.getUTCMonth(), now.getUTCDate()))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** Nasceu ha 30 anos: adulto de sobra, nao encosta na borda dos 18. */
+const ADULT_BIRTHDATE = birthdateYearsAgo(30);
+
 export function reservationInput(params: {
   experienceId: number;
   startAt: string;
@@ -357,6 +374,11 @@ export function reservationInput(params: {
   operators?: number;
   passengers?: number;
   withDocuments?: boolean;
+  /**
+   * Data de nascimento aplicada a TODOS os operadores. Default: adulto.
+   * `null` explicito testa operador SEM data de nascimento (rejeitado).
+   */
+  operatorBirthdate?: string | null;
 }) {
   const {
     experienceId,
@@ -366,6 +388,7 @@ export function reservationInput(params: {
     operators = resourcesNeeded,
     passengers = 0,
     withDocuments = true,
+    operatorBirthdate = ADULT_BIRTHDATE,
   } = params;
 
   return {
@@ -378,6 +401,7 @@ export function reservationInput(params: {
         name: `Condutor ${i + 1}`,
         role: 'operator' as const,
         documentNumber: withDocuments ? `1234567890${i}` : null,
+        birthdate: operatorBirthdate,
       })),
       ...Array.from({ length: passengers }, (_, i) => ({
         name: `Garupa ${i + 1}`,
