@@ -1,113 +1,186 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-09
+> Última atualização: 2026-08-17
 
 ## Onde estamos
 
-**Fase 3 (interfaces), 6 de 9 tarefas.** Fases 0 e 1 completas. Go-live: 24/08/2026.
+**Fase 2 concluída em sandbox.** Fases 0 e 1 completas; Fase 3 com 6 de 9 tarefas.
+Go-live: **24/08/2026** (faltam 7 dias).
 
-A ordem das fases está invertida por decisão de 28/07 (`docs/DECISOES.md`): os pré-requisitos do Asaas travam a Fase 2 inteira, então as telas que não dependem de pagamento vêm primeiro.
+A ordem das fases está invertida por decisão de 28/07: os pré-requisitos do Asaas
+travavam a Fase 2, então as telas de admin vieram primeiro. O Asaas destravou
+nesta sessão e a Fase 2 foi fechada inteira.
 
-Tarefas da Fase 3: **auth (pronta)**, **calendário — grade (pronta)**, **calendário — painel de detalhes e cancelamento (pronta)**, **CRUD de experiências (pronta)**, **formulário público (pronto, com termo real; pagamento em placeholder, aguardando Fase 2)**, **termo real (pronto, esta sessão)**, CRUD de recursos, horários e bloqueios, configurações, clientes sem faturas, agenda compartilhada.
-
-O sistema **vende de ponta a ponta** com termo de verdade: um cliente entra em `aventix.com.br`, escolhe, preenche contato de emergência, lê e aceita o termo real (rolagem obrigatória), e a reserva nasce `pending_payment` com hold de 15 min. Falta cobrar (Fase 2).
+**O ciclo do dinheiro fecha de ponta a ponta contra o sandbox:** o cliente
+agenda, recebe QR Code Pix real, paga, e a reserva confirma sozinha pelo
+webhook. Se a fila do webhook cair, o job de 10 minutos confirma por conta
+própria. Verificado com entrega REAL do Asaas (`User-Agent: Asaas_Hmlg/3.0`).
 
 ## Pronto
 
-**Fase 0 e 1 (completas)** — schema de 13 tabelas com exclusion constraint, tenant/settings, motor de disponibilidade, criação transacional, cron de expiração de hold, seed como template de segmento, `POST /api/reservations` e `GET /api/availability`.
+**Fases 0 e 1** — schema (13 tabelas + exclusion constraint), tenant/settings,
+motor de disponibilidade, criação transacional, cron de expiração de hold, seed
+como template de segmento.
 
-**Fase 3, tarefas 1 a 3** — `lib/auth.ts` + `proxy.ts`; calendário nativo (dia/semana/mês) em UMA query; painel sobreposto de detalhe + cancelamento sobre `setReservationStatus`.
+**Fase 3, tarefas 1 a 6** — auth + `proxy.ts`; calendário nativo (dia/semana/mês)
+em uma query; painel sobreposto de detalhe e cancelamento; CRUD de experiências;
+formulário público de 6 passos; termo real com rolagem obrigatória e contato de
+emergência.
 
-**Congelamento da venda (`fa8d213` + `9051eb3`)**
-- Migration `0001`: `reservations.duration_minutes` e `buffer_minutes`, NOT NULL, com backfill
-- `createReservation` grava o snapshot; `lib/calendar.ts` e `lib/reservation-detail.ts` passaram a ler dele em vez do JOIN com `experiences`
+**Fase 2 completa (esta sessão)**
+- `lib/payments/provider.ts` — contrato genérico, três métodos. Nada fora de
+  `asaas.ts` fala "asaas"; status usa o enum `payment_state`.
+- `lib/payments/asaas.ts` — única implementação: cobrança, QR, consulta,
+  cancelamento, verificação do token do webhook. Timeout de 10s justificado.
+- `lib/payments/money.ts` — centavos para reais sem ponto flutuante.
+- `lib/payments/charge.ts` — cria a cobrança FORA da transação (seção 5.2 passo
+  5); falha expira a reserva e libera a vaga.
+- `lib/payments/process.ts` — FUNÇÃO ÚNICA usada pelo webhook e pela
+  reconciliação, como a seção 8-B exige.
+- `app/api/webhooks/asaas/route.ts` — as oito regras invioláveis da seção 8.1.
+- `lib/jobs/reconcile-payments.ts` + cron de 10 min em `instrumentation.ts`.
+- Migration `0003`: `customers.asaas_customer_id` (+ índice único parcial) e
+  `reservation_payments.asaas_invoice_url`.
+- Passo 6 do wizard com QR real, copia-e-cola e botão copiar.
 
-**Fase 3, tarefa 4: CRUD de experiências (`4b08d95`)**
-- `lib/experiences.ts` + `GET|POST /api/admin/experiences` + `PATCH /{id}`, sem DELETE
-- `app/(admin)/admin/experiencias/`: lista com inativas esmaecidas, form com preço em reais
+**CPF no formulário público (esta sessão)** — `lib/cpf.ts`, módulo puro
+compartilhado entre front e servidor, com validação de dígito verificador.
+Obrigatório porque o Asaas recusa criar cobrança sem CPF do pagador. Sem
+migration: a coluna já existia.
 
-**Fase 3, tarefa 5: formulário público (`cbc32ff` + `00dc154`)**
-- `app/(public)/page.tsx` na raiz, wizard de 6 passos, mobile-first, estado 100% no cliente até o POST final
-- `GET /api/experiences` público e `lib/resources.ts`
-
-**Termo real e contato de emergência (`cbcfd20` + `fafca60`, esta sessão)**
-- `lib/terms/quadriciclo-v1.ts`: `TERM_VERSION = '2026-08-01'` + `TERM_TEXT`, texto real do Quadri Club, versionado por arquivo (não por admin — decisão registrada em `docs/DECISOES.md`)
-- Migration `0002`: `reservations.emergency_contact_name` e `emergency_contact_phone`, nullable de propósito
-- `createReservation` exige `emergencyContact { name, phone }`, valida o nome e normaliza o telefone com `normalizePhone` (mesma regra do telefone do cliente)
-- Passo 5 do wizard reescrito por completo: bloco de contato de emergência (nome + telefone, obrigatórios), bloco do termo com caixa de rolagem e checkbox 1 que só habilita após rolar até o fim, checkbox 2 opcional (uso de imagem)
-- `GET /api/admin/reservations/{id}` e o painel de detalhe (`reservation-panel.tsx`) passaram a expor o contato de emergência ao dono, numa seção própria
-- CLAUDE.md atualizado (seções 4.4, 7.1, 7.2, 10, 14): removida a menção a `/api/termo` e `/admin/termo/page.tsx`, que nunca existiram e não vão existir nesta arquitetura
+**Maioridade do condutor no servidor (esta sessão)** — `createReservation` exige
+18 anos completos na data do agendamento e recusa operador sem data de
+nascimento. Fecha a divergência registrada em 04/08.
 
 ## O que esta sessão fez
 
-1. **Termo de responsabilidade real**, substituindo o placeholder (`version: 'PROVISORIO'`, um checkbox solto) pelo texto jurídico completo do Quadri Club, com rolagem obrigatória.
-2. **Contato de emergência**, campo novo ponta a ponta: migration → `createReservation` → wizard → exposição no admin.
-3. **CLAUDE.md corrigido** para parar de descrever uma tela de edição de termo que nunca foi construída (nem vai ser, por decisão desta sessão).
-4. Dois commits, ambos com `git show --stat` conferido antes da mensagem, e pushed para `origin/main`: `cbcfd20` (backend: termo, migration, `createReservation`, exposição admin) e `fafca60` (passo 5 do wizard).
+Seis commits, todos pushed (`main` = `origin/main` em `8b0975e`):
 
-Verificado ao fim: `npx tsc --noEmit` limpo, `eslint` limpo, `npm test` com **34 passed**, `npm run db:generate` sem mudanças. Reserva real criada via `curl` contra `POST /api/reservations` e conferida por `psql` (`termo_version`, `emergency_contact_name/phone` gravados certos) e por leitura direta de `getReservationDetail()` (o que a rota do admin executa). Reservas de teste removidas do banco local ao final.
+1. `fdd8ee1` maioridade do condutor no servidor + `reply_to_email` do tenant
+2. `d1e0344` correção de fuso no teste de maioridade
+3. `eef16b7` PaymentProvider + cobrança Pix (Fase 2, 1/2)
+4. `9c7858f` CPF do responsável no wizard
+5. `6a67696` webhook + reconciliação (Fase 2, 2/2)
+6. `8b0975e` documentação
+
+Verificado ao fim: `npx tsc --noEmit` limpo, `eslint` limpo, `npm test` com
+**55 passed** (9 arquivos), `npm run db:generate` sem mudanças. Cada commit foi
+construído com a árvore no estado dele e passa isoladamente (35, 39, 44, 55).
 
 ## PRÓXIMO PASSO
 
-**Ainda pendente de sessões anteriores, não tocado nesta:** decidir a regra dos 18 anos para condutor (bloqueia nada, mas é decisão de negócio pendente e barata de resolver — ver Pendências) e seguir para o **CRUD de recursos** (tarefa 7 de 9).
+**Tela de status da reserva com polling** — `app/(public)/reserva/[id]/page.tsx`
+e `GET /api/reservations/{id}/status`, ambos previstos na seção 14 e ainda
+inexistentes.
 
-O CRUD de recursos é pequeno e tem lar pronto: `lib/resources.ts` já existe com a leitura. Campos: nome, `capacity`, `active`. Mesma forma do CRUD de experiências (sem DELETE, desativar por `active=false`, 422 para corpo inválido). Atenção: o número de recursos ativos é o teto de `resourcesNeeded` no formulário público e o número de colunas do calendário, então desativar recurso com reserva futura ativa precisa ser pensado — a reserva aponta para o recurso em `reservation_resources`.
+É o buraco visível do fluxo de venda: hoje o cliente paga o Pix, a reserva
+confirma no banco, e a tela dele continua dizendo "Falta pagar". O ponto de
+costura já está comentado em `steps.tsx` (`StepDone`). É pequeno e fecha a
+experiência de compra, que é o que precisa estar de pé no go-live.
 
-**Depois:** horários e bloqueios, configurações, clientes, agenda compartilhada.
+**Depois, e provavelmente antes das telas de admin que faltam:** o checklist de
+produção da Fase 4 (ver Deploy abaixo), porque ele depende do cliente e tem
+prazo. As tarefas restantes da Fase 3 (recursos, horários e bloqueios,
+configurações, clientes, agenda compartilhada) são as candidatas naturais a
+corte se apertar, e o `docs/CONTEXTO-NEGOCIO.md` já registra quais o cliente
+aceita adiar.
 
 ## Migrations
 
-- **Três migrations:** `drizzle/0000_oval_mandroid.sql`, `drizzle/0001_busy_tomorrow_man.sql`, `drizzle/0002_emergency_contact.sql`
-- **Local:** as três aplicadas (`drizzle.__drizzle_migrations` tem 3 linhas, conferido nesta sessão)
-- **Produção:** NUNCA migrou. Banco vazio. As três entram juntas no checklist de go-live; o backfill da 0001 e a 0002 nullable são no-op/seguras lá
-- `npm run db:generate` responde "No schema changes, nothing to migrate" (verificado no fim desta sessão)
-- A 0001 é **editada à mão** e precisa continuar assim se for regerada: o drizzle-kit emite `ADD COLUMN NOT NULL`, que aborta em tabela com linhas. A 0002 é gerada sem edição (`ADD COLUMN` simples, nullable)
+- **Quatro no disco:** `0000_oval_mandroid`, `0001_busy_tomorrow_man`,
+  `0002_emergency_contact`, `0003_asaas_ids`.
+- **Local:** as quatro aplicadas (`drizzle.__drizzle_migrations` com 4 linhas,
+  conferido nesta sessão).
+- **Produção: NUNCA migrou. Banco vazio.** As quatro entram juntas no deploy.
+  A `0003` é `ADD COLUMN` nullable mais índice parcial, segura em tabela com
+  linhas.
+- `npm run db:generate` responde "No schema changes, nothing to migrate".
+- A `0001` é **editada à mão** e precisa continuar assim se for regerada: o
+  drizzle-kit emite `ADD COLUMN NOT NULL`, que aborta em tabela com linhas.
 
 ## Banco local
 
-Container `aventix-db-dev` (postgres:17-alpine) no ar. Catálogo semeado e intacto (2 recursos ativos capacity 2, 2 experiências ativas, `payment_mode='full'`). As 6 reservas de demonstração (`npm run db:seed:demo`) foram atualizadas nesta sessão para incluir `emergencyContact` — se ainda não foram re-semeadas depois da migration 0002, os campos de emergência delas estão `NULL` até rodar o seed de novo.
+Container `aventix-db-dev` no ar. Catálogo semeado e intacto (2 recursos ativos,
+2 experiências ativas em `payment_mode='full'`, 13 settings). **Movimento
+zerado** — as reservas de teste desta sessão foram removidas. As 6 reservas de
+demonstração (`npm run db:seed:demo`) não estão semeadas.
 
 ## Pendências e dívidas conhecidas
 
-**Decisão de negócio pendente**
-- **A regra dos 18 anos para condutor não existe no servidor.** `POST /api/reservations` com condutor de 13 anos responde **201**. A validação inline do formulário público é hoje a **única** barreira. Anotado em `app/(public)/_components/types.ts`
-- **Lançamento com pagamento integral ou com sinal?** Trava o recorte do CRUD de experiências e a tela de pagamento
+**Fluxo de venda**
+- **Tela de status/polling não existe** (é o próximo passo). O cliente paga e a
+  tela dele não muda.
+- **Termo sem checagem de versão vigente no servidor.** `createReservation`
+  valida só a presença de `termo.version`, não que bata com `TERM_VERSION`.
+- **A grade não mostra horário insuficiente.** `GET /api/availability` não
+  informa quantos recursos sobram num horário.
+- Sem proteção contra duplo clique em `POST /api/reservations` no servidor.
+- Erro do telefone do contato de emergência chega com mensagem genérica, sem
+  distinguir de quem é o telefone.
 
-**Fase 2 (dependem do cliente)**
-- Pré-requisitos do Asaas (CLAUDE.md seção 18): conta aprovada com prova de vida, chave Pix, API keys, webhook com token próprio, régua de notificações ajustada
-- `reservations.payment_state` é `'pending'` em toda reserva, inclusive confirmadas, porque nada marca cobrança como paga antes da Fase 2
-- O painel não tem cobrança de saldo nem "Recebi por fora"; ponto de entrada comentado no arquivo
+**Integração de pagamento**
+- **Indicador de saúde da integração no `/admin` não construído** (seção 8-B).
+  Sem ele, fila interrompida só aparece quando o cliente reclama.
+- **Cinco divergências entre a seção 8 e o que foi medido**, levantadas e ainda
+  não resolvidas: (a) 8.2 lista dois eventos, mas o webhook assina três e o Pix
+  entrega `PAYMENT_CONFIRMED` junto; (b) 8-C diz "sinaliza estorno pendente na
+  reserva", sugerindo campo, e a implementação usa estado derivado; (c) a regra
+  6 não cobre 404 do provedor, que também é órfã; (d) a 8.3 não menciona que o
+  registro do pagamento precisa sobreviver à colisão, o que exige savepoint;
+  (e) 8-B pede o indicador de saúde, não construído.
+- **Modo sinal (`deposit`) não é vendável:** o CRUD recusa com 422 e
+  `receiveInCash` não foi implementado. Fora do MVP por decisão de 04/08.
+- Os testes do webhook mockam `getCharge` (a borda de rede). O banco é real.
 
-**Formulário público**
-- **Termo real, mas sem checagem de versão vigente no servidor.** `createReservation` valida só a PRESENÇA de `termo.version`/`acceptedAt`, não que a versão bata com `TERM_VERSION` atual. Um POST direto com `version: "qualquer coisa"` ainda passa
-- **Telefone do contato de emergência reaproveita `normalizePhone()`**, então um erro 400 dele chega com a mesma mensagem genérica de um erro do telefone do cliente — sem distinguir de quem é (decisão registrada, baixo risco: o wizard nunca deixa o campo vazio chegar ao servidor)
-- **Pagamento continua placeholder**: "Pix em breve" com id, valor e contador do hold. Sem QR falso. Pontos de costura da Fase 2 comentados
-- **A grade não mostra horário insuficiente.** `GET /api/availability` não informa quantos recursos sobram num horário; horário que não comporta N simplesmente não aparece
-- **Sem campo de CPF** no formulário. A rota aceita e o schema tem a coluna
-- `app/(public)/reserva/[id]/page.tsx` e `agenda/[token]` da seção 14 ainda não existem
+**Produção (Fase 4, depende do cliente)**
+- **Chave de API de produção não gerada.** Sem ela o boot avisa e nenhuma
+  reserva se completa.
+- **`ASAAS_API_KEY` precisa de escape `\$` também no Easypanel**, que injeta env
+  em runtime. Sem isso a chave chega vazia.
+- **Webhook de produção não cadastrado.** O que existe aponta para o ngrok, é do
+  sandbox e a URL muda a cada reinício do túnel.
+- **Chave Pix do Quadri Club pendente** (tarefas no board do cliente). Sem ela o
+  QR só é pagável até 23:59 do mesmo dia.
+- **O nome no copia-e-cola é da conta sandbox** (`NEOSOLUTI COMERCIO E SERV`).
+  Em produção precisa ser o Quadri Club.
+- Chave SSH do VPS não configurada; acesso por senha de root.
 
 **Gerais**
-- `getDayGrid` duplica a precedência exceção-sobre-`operating_hours` que já vive em `lib/availability.ts`. Unificar quando o CRUD de horários virar o terceiro consumidor
-- Blocos não adjacentes da mesma reserva não têm vínculo visual entre si
-- `instrumentation.ts` compila para Edge Runtime e falha lá (`node:crypto` não suportado), poluindo o log de dev a cada request
-- Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`, `GET /api/experiences` e `POST /api/reservations` — todas públicas ou expostas. Hardening da Fase 4
-- Sessão sem revogação (iron-session, 8h). Aceito no MVP de usuário único
-- A âncora dos testes de lead time vence em junho de 2027; vencida, falha com instrução de trocar a data
-- Cancelamento e CRUD de experiências não têm teste automatizado
-- A página `/admin/reservas/[id]` da seção 14 não existe; o painel sobreposto cobre o dia a dia
-- **14 valores PROVISÓRIOS** em `lib/templates/quadriciclo.ts` (`grep -n "PROVISORIO"`, recontado nesta sessão — a nota anterior dizia 11), incluindo `reply_to_email` como `contato@aventix.com.br`, que aparece ao cliente final onde a regra de marca manda aparecer o tenant
-- A exclusion constraint não é exercitada pela suíte (com `single_experience_per_slot=true` o perdedor cai no recheck antes)
-- Sem proteção contra duplo clique em `POST /api/reservations` no servidor; a defesa é o botão desabilitado no formulário
-- `mode:'string'` no schema: toda nova função que retorne `timestamptz` reintroduz o formato não-ISO (seção 3)
-- `operating_hours` permite faixas sobrepostas no mesmo weekday; corrigir no CRUD de horários
-- Experiência gratuita não é suportada (seção 4.6); o CRUD recusa
-- Cron em dev: o timer guarda a versão do módulo carregada no boot
+- `instrumentation.ts` compila para Edge Runtime e falha lá (`node:crypto`),
+  poluindo o log de dev a cada request.
+- Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`,
+  `GET /api/experiences` e `POST /api/reservations`.
+- Sessão sem revogação (iron-session, 8h). Aceito no MVP de usuário único.
+- A âncora dos testes de lead time vence em junho de 2027.
+- Cancelamento e CRUD de experiências não têm teste automatizado.
+- `app/(public)/agenda/[token]` e `/admin/reservas/[id]` da seção 14 não existem.
+- **13 valores PROVISÓRIOS** em `lib/templates/quadriciclo.ts` (era 14; o
+  `reply_to_email` foi confirmado nesta sessão).
+- `getDayGrid` duplica a precedência exceção-sobre-`operating_hours` que já vive
+  em `lib/availability.ts`.
+- Blocos não adjacentes da mesma reserva não têm vínculo visual entre si.
+- `operating_hours` permite faixas sobrepostas no mesmo weekday.
+- Experiência gratuita não é suportada; o CRUD recusa preço zero.
+- `mode:'string'` no schema: toda nova função que retorne `timestamptz`
+  reintroduz o formato não-ISO.
+- Cron em dev: o timer guarda a versão do módulo carregada no boot.
 
 ## Deploy
 
-`main` está em `fafca60` e foi pushed. O Easypanel constrói a partir do repo — **se o build for automático, o formulário público com termo real está indo ao ar em `aventix.com.br`**, com pagamento em placeholder. Não foi verificado nesta sessão como o build está configurado lá.
+`main` está em `8b0975e` e foi pushed. O Easypanel constrói a partir do repo.
+**Se o build for automático, a Fase 2 está indo ao ar sem credencial para
+cobrar** — o site sobe, o boot avisa que o pagamento está mal configurado, e
+qualquer tentativa de reserva falha ao gerar a cobrança e expira sozinha.
+
+Antes de vender em produção: rodar as quatro migrations, gerar a chave de
+produção (com escape do `$`), cadastrar o webhook de produção com token próprio
+e confirmar a chave Pix do Quadri Club.
 
 ## Prazo
 
-Go-live 24/08. Faltam 3 tarefas de admin da Fase 3 (recursos, horários/bloqueios, configurações) mais clientes e agenda compartilhada, a Fase 2 inteira (à espera do Asaas) e a Fase 4. Ritmo de cerca de 2h/dia. Candidatos a corte se apertar: agenda compartilhada por link secreto, seed como template (virar seed simples).
+Go-live 24/08, 7 dias, ritmo de cerca de 2h/dia. O fluxo de compra funciona
+ponta a ponta em sandbox; o que falta para lançar é a tela de status, o
+checklist de produção e as pendências do cliente. Candidatos a corte, já
+acordados com o cliente: agenda compartilhada, lista de clientes com faturas,
+CRUD de recursos e tela de configurações.
