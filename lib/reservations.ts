@@ -13,6 +13,7 @@ import {
   InvalidResourcesNeededError,
   getAvailability,
 } from './availability';
+import { isValidCpf, normalizeCpf } from './cpf';
 import { db } from './db/client';
 import {
   customers,
@@ -611,6 +612,24 @@ export async function createReservation(
   }
   const emergencyContactPhone = normalizePhone(input.emergencyContact.phone);
 
+  // CPF do responsavel: OBRIGATORIO e com digito verificador conferido.
+  //
+  // Nao e preciosismo de formulario — e pre-requisito da venda. MEDIDO contra o
+  // Asaas em 17/08/2026: `POST /customers` aceita cpfCnpj nulo, mas
+  // `POST /payments` recusa ("Para criar esta cobranca e necessario preencher o
+  // CPF ou CNPJ do cliente"). Sem CPF a reserva nasce e morre: a cobranca falha,
+  // o hold e expirado e a vaga volta (caso de borda 9). Recusar aqui, antes de
+  // abrir transacao, troca uma venda perdida por uma mensagem de campo.
+  //
+  // A mensagem NUNCA ecoa o valor recebido (dado sensivel).
+  const customerCpf = normalizeCpf(input.customer?.cpf);
+  if (!customerCpf) {
+    throw new InvalidCompositionError('CPF do responsavel e obrigatorio para emitir a cobranca');
+  }
+  if (!isValidCpf(customerCpf)) {
+    throw new InvalidCompositionError('CPF do responsavel invalido (digito verificador nao confere)');
+  }
+
   const operators = input.participants.filter((p) => p.role === 'operator');
   if (operators.length < input.resourcesNeeded) {
     throw new InvalidCompositionError(
@@ -635,7 +654,7 @@ export async function createReservation(
 
   const channel = sanitizeChannel(input.channel);
 
-  const prepared = { startInstant, termoAcceptedAt, channel, emergencyContactPhone };
+  const prepared = { startInstant, termoAcceptedAt, channel, emergencyContactPhone, customerCpf };
   if (tx) return applyCreateReservation(tx, input, prepared);
   return db.transaction((ownTx) => applyCreateReservation(ownTx, input, prepared));
 }
@@ -645,6 +664,8 @@ type PreparedInput = {
   termoAcceptedAt: Date;
   channel: string | null;
   emergencyContactPhone: string;
+  /** ja validado e reduzido a digitos — e o que vai para o banco */
+  customerCpf: string;
 };
 
 /**
@@ -656,7 +677,7 @@ async function applyCreateReservation(
   prepared: PreparedInput,
 ): Promise<CreateReservationResult> {
   const tenantId = getTenantId();
-  const { startInstant, termoAcceptedAt, channel, emergencyContactPhone } = prepared;
+  const { startInstant, termoAcceptedAt, channel, emergencyContactPhone, customerCpf } = prepared;
   const startIso = startInstant.toISOString();
 
   // -- 1. ADVISORY LOCK ------------------------------------------------------
@@ -790,7 +811,14 @@ async function applyCreateReservation(
   }
 
   // -- 4. find-or-create do cliente ------------------------------------------
-  const { customer } = await findOrCreateCustomer(input.customer, tx);
+  // O CPF entra JA NORMALIZADO (so digitos), nunca o texto cru do formulario:
+  // `customers.cpf` guarda digitos, e "123.456.789-09" e "12345678909" viram a
+  // mesma linha. Gravar os dois formatos faria o mesmo cliente ter CPFs que nao
+  // se comparam, e o valor seguiria assim para o Asaas.
+  const { customer } = await findOrCreateCustomer(
+    { ...input.customer, cpf: customerCpf },
+    tx,
+  );
 
   // -- 5. PRECO NO SERVIDOR (secao 4.6) --------------------------------------
   // Inteiros de centavos de ponta a ponta. Nunca confie em valor do cliente.

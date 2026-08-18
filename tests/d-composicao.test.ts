@@ -1,8 +1,10 @@
 // GRUPO D — composicao e validacao na criacao (CLAUDE.md secao 1 e 4.6).
 
+import { sql } from 'drizzle-orm';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { getAvailability } from '@/lib/availability';
+import { db } from '@/lib/db/client';
 import { InvalidCompositionError, createReservation } from '@/lib/reservations';
 import { getBooleanSetting } from '@/lib/tenant';
 import { todayLocalDate } from '@/lib/time';
@@ -223,6 +225,54 @@ describe('D — composicao e validacao', () => {
       }),
     );
     expect(ok.status).toBe('pending_payment');
+  });
+
+  it('16b. CPF do responsavel ausente ou com digito errado e rejeitado', async () => {
+    const startAt = await primeiroSlot(EXP.curta, 1);
+    const antes = await movementCounts();
+
+    // Sem CPF: o Asaas nao emite cobranca, entao a reserva nasceria so para
+    // morrer expirada. Recusar antes e o comportamento util.
+    await expect(
+      createReservation(
+        reservationInput({ experienceId: EXP.curta, startAt, resourcesNeeded: 1, cpf: '' }),
+      ),
+    ).rejects.toBeInstanceOf(InvalidCompositionError);
+    expect(await movementCounts()).toEqual(antes);
+
+    // Digito verificador errado (ultimo digito trocado num CPF valido). Tem 11
+    // digitos, entao so a checagem de comprimento deixaria passar.
+    await expect(
+      createReservation(
+        reservationInput({
+          experienceId: EXP.curta,
+          startAt,
+          resourcesNeeded: 1,
+          cpf: '24971563793',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(InvalidCompositionError);
+    expect(await movementCounts()).toEqual(antes);
+
+    // Controle: o MESMO numero valido, porem PONTUADO, e aceito e chega ao
+    // banco so com digitos — o formato do formulario nao vaza para a coluna.
+    const ok = await createReservation(
+      reservationInput({
+        experienceId: EXP.curta,
+        startAt,
+        resourcesNeeded: 1,
+        cpf: '249.715.637-92',
+        phone: '11922220000',
+      }),
+    );
+    expect(ok.status).toBe('pending_payment');
+
+    const [gravado] = (
+      await db.execute<{ cpf: string }>(
+        sql`SELECT cpf FROM customers WHERE phone = '11922220000'`,
+      )
+    ).rows;
+    expect(gravado.cpf).toBe('24971563792');
   });
 
   it('15b. valor de preco vindo do cliente e ignorado', async () => {

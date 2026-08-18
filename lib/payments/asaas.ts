@@ -159,6 +159,23 @@ export function redactHeaders(headers: Record<string, string>): Record<string, s
 /** Corpo de erro do Asaas: `{ errors: [{ code, description }] }`. */
 type AsaasErrorBody = { errors?: { code?: string; description?: string }[] };
 
+/**
+ * Redige documento (CPF/CNPJ) de um texto que PODE acabar em log.
+ *
+ * O corpo que mandamos ao Asaas carrega `cpfCnpj`, e a descricao de erro que ele
+ * devolve pode ecoar o valor recebido. Essa descricao vira `detail` de
+ * `PaymentProviderApiError`, que a rota loga com `console.error` — sem esta
+ * funcao, um CPF chegaria ao log do servidor por um caminho que ninguem escreveu
+ * de proposito. Mesma regra de dado sensivel de
+ * app/api/admin/reservations/[id]/route.ts.
+ *
+ * Corta sequencias de 11 ou 14 digitos (CPF e CNPJ), com ou sem pontuacao.
+ * Sobra o texto da mensagem, que e o que serve para diagnosticar.
+ */
+export function redactDocuments(text: string): string {
+  return text.replace(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g, '<REDACTED:documento>');
+}
+
 
 /**
  * Chamada HTTP unica do modulo. Toda requisicao ao Asaas passa por aqui, para
@@ -217,7 +234,8 @@ async function request<T>(
     } catch {
       // corpo nao-JSON: fica o texto cru truncado
     }
-    throw new PaymentProviderApiError(response.status, detail);
+    // O detail e logado pela rota; documento nunca pode passar por aqui.
+    throw new PaymentProviderApiError(response.status, redactDocuments(detail));
   }
 
   // 204 e corpo vazio (DELETE) — nao ha o que parsear.
@@ -322,6 +340,10 @@ export const asaasProvider: PaymentProvider = {
           name: payer.name,
           mobilePhone: payer.phone,
           ...(payer.email ? { email: payer.email } : {}),
+          // Sem cpfCnpj o cadastro passa e a COBRANCA e que falha (ver taxId em
+          // provider.ts). Mandamos quando existe para nao criar o cliente ja
+          // condenado a nao conseguir ser cobrado.
+          ...(payer.taxId ? { cpfCnpj: payer.taxId } : {}),
           externalReference: payer.externalReference,
         },
       });

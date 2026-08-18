@@ -67,6 +67,7 @@ export async function createChargeForReservation(
       customerName: customers.name,
       customerPhone: customers.phone,
       customerEmail: customers.email,
+      customerCpf: customers.cpf,
       providerCustomerId: customers.asaasCustomerId,
       experienceName: experiences.name,
     })
@@ -90,6 +91,11 @@ export async function createChargeForReservation(
         name: row.customerName,
         phone: row.customerPhone,
         email: row.customerEmail,
+        // `customers.cpf` ja existe no schema e ja e aceito por
+        // POST /api/reservations — o formulario publico e que nao o coleta.
+        // Sem ele o Asaas recusa a COBRANCA (nao o cadastro): ver `taxId` em
+        // provider.ts. Nenhum campo novo foi criado aqui.
+        taxId: row.customerCpf,
         // Referencia cruzada: o cliente do provedor aponta para o nosso.
         externalReference: row.customerId,
 

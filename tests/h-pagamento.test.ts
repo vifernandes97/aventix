@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { toPaymentState } from '@/lib/payments/asaas';
+import { formatCpf, isValidCpf, normalizeCpf } from '@/lib/cpf';
+import { redactDocuments, toPaymentState } from '@/lib/payments/asaas';
 import { centsToReais, centsToReaisNumber } from '@/lib/payments/money';
 
 import { TEMPLATE_EXP } from './helpers/db';
@@ -57,6 +58,64 @@ describe('H — conversao de dinheiro para o provedor', () => {
     // Arredondar aqui esconderia o bug la atras, em quem produziu o valor.
     expect(() => centsToReais(325.5)).toThrow(RangeError);
     expect(() => centsToReais(Number.NaN)).toThrow(RangeError);
+  });
+});
+
+describe('H — CPF do responsavel', () => {
+  // CPFs com digito verificador CORRETO, gerados pelo algoritmo da Receita.
+  // Nao sao de ninguem: sao sequencias que fecham a conta.
+  const VALIDOS = ['24971563792', '52998224725', '11144477735'];
+
+  it('21. CPF valido passa, com e sem pontuacao', () => {
+    for (const cpf of VALIDOS) {
+      expect(isValidCpf(cpf), `${cpf} sem pontuacao`).toBe(true);
+      // Mesmo numero pontuado tem que dar o MESMO veredito — e o formato que o
+      // cliente digita quando o teclado do celular oferece a mascara.
+      expect(isValidCpf(formatCpf(cpf)), `${cpf} pontuado`).toBe(true);
+      expect(normalizeCpf(formatCpf(cpf))).toBe(cpf);
+    }
+  });
+
+  it('22. digito verificador errado e recusado', () => {
+    // Cada um destes e um CPF valido com o ULTIMO digito trocado. E o erro real
+    // de digitacao: o comprimento esta certo, so a conta nao fecha. Validar so
+    // "tem 11 digitos" deixaria todos passarem.
+    for (const cpf of VALIDOS) {
+      const ultimo = Number(cpf[10]);
+      const adulterado = cpf.slice(0, 10) + ((ultimo + 1) % 10);
+      expect(isValidCpf(adulterado), `${adulterado} deveria ser invalido`).toBe(false);
+    }
+
+    // Primeiro digito verificador errado (posicao 9), nao so o segundo.
+    expect(isValidCpf('24971563702')).toBe(false);
+  });
+
+  it('23. vazio, curto e digitos repetidos sao recusados', () => {
+    expect(isValidCpf('')).toBe(false);
+    expect(isValidCpf(null)).toBe(false);
+    expect(isValidCpf(undefined)).toBe(false);
+    expect(isValidCpf('123')).toBe(false);
+    expect(isValidCpf('249715637921')).toBe(false); // 12 digitos
+
+    // Repetidos PASSAM na aritmetica do checksum — por isso sao caso proprio.
+    // Sao o que alguem digita para "preencher qualquer coisa".
+    for (const repetido of ['00000000000', '11111111111', '99999999999']) {
+      expect(isValidCpf(repetido), `${repetido} deveria ser invalido`).toBe(false);
+    }
+  });
+
+  it('24. documento nao vaza em mensagem de erro do provedor', () => {
+    // A descricao de erro do Asaas pode ecoar o cpfCnpj que MANDAMOS. Ela vira
+    // `detail` do erro, que a rota loga — entao a redacao acontece antes.
+    const comCpf = 'O CPF 249.715.637-92 informado e invalido';
+    expect(redactDocuments(comCpf)).not.toContain('249');
+    expect(redactDocuments(comCpf)).toContain('<REDACTED:documento>');
+
+    expect(redactDocuments('CPF 24971563792 invalido')).not.toContain('24971563792');
+    expect(redactDocuments('CNPJ 12.345.678/0001-95 invalido')).not.toContain('12.345.678');
+
+    // O texto util sobrevive: e ele que diz o que aconteceu.
+    expect(redactDocuments(comCpf)).toContain('invalido');
   });
 });
 

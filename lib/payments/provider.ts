@@ -35,6 +35,13 @@ export type ChargePayer = {
   /** so digitos (formato de `customers.phone`) */
   phone: string;
   email: string | null;
+  /**
+   * CPF/CNPJ do pagador, so digitos. MEDIDO contra o sandbox do Asaas em
+   * 17/08/2026: criar o CLIENTE sem ele responde 200, mas criar a COBRANCA Pix
+   * responde 400 ("Para criar esta cobranca e necessario preencher o CPF ou
+   * CNPJ do cliente"). Ou seja, e opcional no cadastro e obrigatorio na venda.
+   */
+  taxId: string | null;
   /** id do cliente no Aventix — vai como referencia externa no provedor */
   externalReference: string;
 

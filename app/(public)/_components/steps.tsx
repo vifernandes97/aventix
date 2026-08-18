@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { formatCpf, normalizeCpf } from '@/lib/cpf';
 import type { PublicExperience } from '@/lib/experiences';
 import { TERM_TEXT, TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
 
@@ -429,6 +430,26 @@ export function StepPeople({
             placeholder="voce@email.com"
             className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2.5 text-sm"
           />
+        </Field>
+        {/* CPF fica DEPOIS do e-mail e ANTES da data de nascimento: e dado de
+            identificacao do responsavel e agrupa com os outros.
+
+            Formatacao ao digitar (`formatCpf`), mas o que vai no POST sao os
+            digitos — mesmo principio do telefone, que ja aceita "(19) 99999-8888"
+            e "19999998888". O cliente digita como quiser. */}
+        <Field label="CPF">
+          <input
+            value={formatCpf(state.responsible.cpf)}
+            onChange={(e) => patchResponsible({ cpf: normalizeCpf(e.target.value) })}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="000.000.000-00"
+            className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2.5 text-sm"
+          />
+          {/* Sem esta linha o cliente se pergunta por que um passeio de
+              quadriciclo quer o CPF dele — e desconfiar no checkout e
+              exatamente o que faz abandonar a compra. */}
+          <p className="mt-1 text-xs text-stone-500">Necessário para emitir a cobrança.</p>
         </Field>
       </PersonCard>
 

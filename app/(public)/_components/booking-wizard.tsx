@@ -86,7 +86,7 @@ export function BookingWizard({
     resourcesNeeded: 1,
     date: null,
     startAt: null,
-    responsible: { ...emptyPerson('responsavel', 'operator'), phone: '', email: '' },
+    responsible: { ...emptyPerson('responsavel', 'operator'), phone: '', email: '', cpf: '' },
     others: [],
     emergencyContact: emptyEmergencyContact(),
     termoAccepted: false,
@@ -180,6 +180,9 @@ export function BookingWizard({
             name: state.responsible.name.trim(),
             phone: state.responsible.phone.trim(),
             email: state.responsible.email.trim() || null,
+            // So digitos: o estado ja guarda normalizado (a formatacao com
+            // pontos e do campo, nao do dado).
+            cpf: state.responsible.cpf,
             birthdate: state.responsible.birthdate || null,
           },
           // O responsavel E um participante, e vai primeiro.

@@ -6,9 +6,10 @@
 // (secao 5.2), que refaz cada uma dentro da transacao e devolve 422. Um cliente
 // que burle o front nao consegue gravar nada invalido.
 //
-// A excecao esta anotada em `minorOperators`: a maioridade do condutor NAO tem
-// contrapartida no servidor hoje.
+// Desde 17/08/2026 nao ha excecao: toda regra deste arquivo tem contrapartida
+// no servidor, incluindo a maioridade do condutor e o CPF do responsavel.
 
+import { isValidCpf, normalizeCpf } from '@/lib/cpf';
 import type { PublicExperience } from '@/lib/experiences';
 
 import { ageFromBirthdate } from './shared';
@@ -28,6 +29,12 @@ export type PersonForm = {
 export type ResponsibleForm = PersonForm & {
   phone: string;
   email: string;
+  /**
+   * CPF do responsavel. So do RESPONSAVEL, nao de cada participante: quem paga
+   * e ele, e e o CPF do pagador que o Asaas exige para emitir a cobranca. Pedir
+   * de todo mundo seria coletar dado sensivel sem uso.
+   */
+  cpf: string;
 };
 
 /** Contato a acionar em caso de necessidade durante o passeio (passo 5, bloco 1). */
@@ -126,13 +133,11 @@ export function validatePeople(params: {
     if (person.role === 'operator') {
       const age = ageFromBirthdate(person.birthdate);
 
-      // >>> UNICA REGRA SEM ESPELHO NO SERVIDOR <<<
-      // createReservation NAO valida maioridade, e o CLAUDE.md nao registra a
-      // regra. Enquanto for assim, esta checagem e a UNICA barreira: um POST
-      // direto cadastra menor como condutor sem erro nenhum. Se a regra for
-      // real (dirigir quadriciclo exige CNH, que exige 18), o lugar dela e
-      // createReservation + secao 15 do CLAUDE.md — e ai esta linha volta a ser
-      // o que as outras ja sao, conveniencia.
+      // JA TEM ESPELHO NO SERVIDOR desde 17/08/2026: createReservation recusa
+      // operador sem 18 anos completos na data do agendamento (e recusa tambem
+      // operador sem data de nascimento, que antes passava). Esta checagem
+      // voltou a ser o que as outras sao: conveniencia, para o cliente errar
+      // cedo. Um POST direto com menor responde 422.
       if (age !== null && age < MIN_OPERATOR_AGE) {
         addPersonError(
           person.key,
@@ -148,6 +153,16 @@ export function validatePeople(params: {
 
   if (!state.responsible.phone.trim()) {
     addPersonError(state.responsible.key, 'Informe o telefone.');
+  }
+
+  // CPF do responsavel. Diferente das outras checagens deste arquivo, esta usa a
+  // MESMA funcao que o servidor (lib/cpf.ts) — o digito verificador nao admite
+  // "versao leve", e duas implementacoes divergiriam. O servidor reaplica.
+  const cpfDigits = normalizeCpf(state.responsible.cpf);
+  if (!cpfDigits) {
+    addPersonError(state.responsible.key, 'Informe o CPF.');
+  } else if (!isValidCpf(cpfDigits)) {
+    addPersonError(state.responsible.key, 'CPF inválido. Confira os números.');
   }
 
   // Espelha createReservation: cada recurso precisa de alguem que o conduza.

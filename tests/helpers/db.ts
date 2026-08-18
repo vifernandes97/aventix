@@ -368,6 +368,12 @@ function birthdateYearsAgo(years: number): string {
 /** Nasceu ha 30 anos: adulto de sobra, nao encosta na borda dos 18. */
 const ADULT_BIRTHDATE = birthdateYearsAgo(30);
 
+/**
+ * CPF com digito verificador correto, para os cenarios que NAO estao testando
+ * CPF. Nao e de ninguem: e uma sequencia que fecha a conta da Receita.
+ */
+export const VALID_CPF = '24971563792';
+
 export function reservationInput(params: {
   experienceId: number;
   startAt: string;
@@ -381,6 +387,12 @@ export function reservationInput(params: {
    * `null` explicito testa operador SEM data de nascimento (rejeitado).
    */
   operatorBirthdate?: string | null;
+  /**
+   * CPF do responsavel. Default: valido. Passe invalido ou vazio para exercitar
+   * a recusa — o CPF e obrigatorio desde que o Asaas passou a exigi-lo para
+   * emitir a cobranca.
+   */
+  cpf?: string;
 }) {
   const {
     experienceId,
@@ -391,13 +403,14 @@ export function reservationInput(params: {
     passengers = 0,
     withDocuments = true,
     operatorBirthdate = ADULT_BIRTHDATE,
+    cpf = VALID_CPF,
   } = params;
 
   return {
     experienceId,
     startAt,
     resourcesNeeded,
-    customer: { name: 'Cliente Teste', phone },
+    customer: { name: 'Cliente Teste', phone, cpf },
     participants: [
       ...Array.from({ length: operators }, (_, i) => ({
         name: `Condutor ${i + 1}`,
