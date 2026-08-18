@@ -18,18 +18,68 @@
 // por exemplo) lanca "This module cannot be imported from a Client Component
 // module" — foi por isso que scripts/seed.ts nao importa lib/tenant.ts.
 
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import cron from 'node-cron';
 
 import { checkAuthConfig } from './lib/auth';
+import { db } from './lib/db/client';
 import { expireHolds } from './lib/jobs/expire-holds';
 import { reconcilePayments } from './lib/jobs/reconcile-payments';
 import { checkAsaasConfig } from './lib/payments/asaas';
 
 /** Flag no globalThis, mesmo padrao de lib/db/client.ts. */
 const globalForCron = globalThis as unknown as {
+  // Guarda das migrations: uma PROMISE, nao um boolean. O agendamento de cron
+  // e sincrono (marca a flag e volta), entao um boolean basta la; a migration e
+  // ASSINCRONA, e dois `register()` concorrentes passariam os dois pela checagem
+  // de um boolean antes de qualquer um marcar. Memoizar a promise faz o segundo
+  // a chegar AGUARDAR a mesma execucao em vez de disparar um `migrate()` em
+  // paralelo — o drizzle nao usa advisory lock (medido em 0.45.2: o migrator so
+  // abre uma transacao), entao a serializacao tem que vir daqui.
+  migrationsPromise?: Promise<void>;
   holdCronRegistered?: boolean;
   reconcileCronRegistered?: boolean;
 };
+
+/**
+ * Aplica as migrations pendentes no boot (CLAUDE.md secoes 2 e 14; decisao de
+ * 2026-08-18). O migrator le os `.sql` e o `meta/_journal.json` do disco via
+ * `readMigrationFiles` e aplica so o que ainda nao esta em
+ * `drizzle.__drizzle_migrations` — idempotente, e aplica a 0001 (editada a mao)
+ * exatamente como esta no arquivo, sem regenerar nada.
+ *
+ * O caminho 'drizzle' resolve contra o cwd do processo: `/app` no container
+ * (WORKDIR do Dockerfile) e a raiz do repo em `npm start` local. O Dockerfile
+ * copia `/app/drizzle` para a imagem final — sem essa copia, nao ha `.sql` para
+ * ler (medido na investigacao: o standalone do Next nao carrega a pasta).
+ *
+ * DECISAO EXPLICITA — falha aqui DERRUBA o processo (`process.exit(1)`), ao
+ * contrario dos fail-fast de auth e Asaas, que avisam e seguem. Servir com o
+ * schema incerto e pior que nao servir: uma reserva gravada num schema
+ * inconsistente corrompe dado. O container nao subir e o comportamento
+ * desejado — o deploy falha VISIVEL, no lugar de aceitar venda sobre schema
+ * errado. Por isso roda ANTES dos fail-fast e dos crons: se o schema nao esta
+ * garantido, nada mais importa.
+ */
+async function applyMigrations(): Promise<void> {
+  try {
+    await migrate(db, { migrationsFolder: 'drizzle' });
+    // Log curto, uma linha por boot: no banco ja migrado e no-op silencioso do
+    // migrator, e esta linha so confirma que a checagem passou.
+    console.log('[migrate] schema em dia (migrations aplicadas/verificadas)');
+  } catch (error) {
+    console.error('='.repeat(78));
+    console.error('[migrate] FALHA AO APLICAR MIGRATIONS — O PROCESSO NAO VAI SUBIR');
+    console.error('[migrate] O schema do banco NAO esta garantido; servir agora corromperia dados.');
+    console.error('[migrate] Verifique DATABASE_URL, o banco de producao e a pasta drizzle/ na imagem.');
+    console.error('[migrate] Causa:', error);
+    console.error('='.repeat(78));
+    // exit(1) e nao `throw`: garante que o processo morra mesmo se algum caller
+    // futuro engolir a excecao de register(). Codigo != 0 -> o Easypanel marca o
+    // deploy como falho.
+    process.exit(1);
+  }
+}
 
 export async function register() {
   // Agenda so no runtime Node. Nas execucoes deste projeto o instrumentation foi
@@ -37,6 +87,19 @@ export async function register() {
   // hoje. A guarda custa uma comparacao e evita agendar um timer com acesso a
   // banco caso isso mude.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+
+  // -- migrations no boot, ANTES DE TUDO (CLAUDE.md secoes 2 e 14) -----------
+  //
+  // Precede os fail-fast e os crons de proposito: se o schema nao esta certo,
+  // validar auth/Asaas ou agendar timer nao tem sentido. A guarda memoiza a
+  // promise no globalThis para que uma reavaliacao do modulo (o mesmo motivo da
+  // flag de cron) nao dispare um segundo `migrate()` em paralelo — o segundo
+  // caller aguarda o primeiro. A checagem e a atribuicao sao sincronas (sem
+  // await entre elas), entao nao ha janela de corrida no mesmo processo.
+  if (!globalForCron.migrationsPromise) {
+    globalForCron.migrationsPromise = applyMigrations();
+  }
+  await globalForCron.migrationsPromise;
 
   // -- fail-fast da configuracao de autenticacao (CLAUDE.md secao 13) --------
   //

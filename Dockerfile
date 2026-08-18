@@ -27,6 +27,13 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Migrations aplicadas no boot por instrumentation.ts (CLAUDE.md secoes 2 e 14).
+# O trace do Next standalone NAO carrega a pasta drizzle/ (os .sql ficariam de
+# fora, medido na investigacao), entao ela e copiada explicitamente. Precisa vir
+# com os quatro .sql E o meta/_journal.json — o journal e o que o migrator le
+# para saber o que ja rodou.
+COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
+
 USER nextjs
 
 EXPOSE 3000
