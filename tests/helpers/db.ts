@@ -18,7 +18,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '@/lib/db/client';
 import { quadricicloTemplate } from '@/lib/templates/quadriciclo';
 import { invalidateSettingsCache } from '@/lib/tenant';
-import { localToUtc } from '@/lib/time';
+import { localToUtc, todayLocalDate } from '@/lib/time';
 
 export const TENANT_ID = 1;
 
@@ -354,13 +354,15 @@ export async function removeDepositExperiences(): Promise<void> {
  * processo — nao e mock, e so a construcao do dado de entrada, igual
  * `hold_expires_at no passado` para lead time; a regra de "nao mockar o
  * relogio" e sobre o codigo em teste, nao sobre como a fixture calcula uma
- * data). Ancorado em UTC, mesmo padrao de `cutoffDate18` em lib/reservations.ts.
+ * data).
+ *
+ * Ancorado no dia de SAO PAULO (`todayLocalDate`), que e o fuso pelo qual o
+ * servidor corta a maioridade. Derivar do UTC erraria por um dia depois das
+ * 21h locais.
  */
 function birthdateYearsAgo(years: number): string {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear() - years, now.getUTCMonth(), now.getUTCDate()))
-    .toISOString()
-    .slice(0, 10);
+  const [year, month, day] = todayLocalDate().split('-');
+  return `${Number(year) - years}-${month}-${day}`;
 }
 
 /** Nasceu ha 30 anos: adulto de sobra, nao encosta na borda dos 18. */

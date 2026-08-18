@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { getAvailability } from '@/lib/availability';
 import { InvalidCompositionError, createReservation } from '@/lib/reservations';
 import { getBooleanSetting } from '@/lib/tenant';
+import { todayLocalDate } from '@/lib/time';
 
 import {
   EXP,
@@ -17,6 +18,21 @@ import {
 } from './helpers/db';
 
 const SAT = nextSaturday();
+
+/**
+ * Data de nascimento de quem completa `years` anos HOJE, no fuso do tenant.
+ *
+ * ANCORADA EM `todayLocalDate()`, NAO em `new Date().toISOString()`. A regra de
+ * maioridade do servidor corta pela data de calendario de SAO PAULO, e depois
+ * das 21h locais o UTC ja virou o dia seguinte — uma data derivada do UTC
+ * produziria "um dia a mais" e o caso de borda dos 18 anos exatos falharia so
+ * no fim da noite. Foi exatamente assim que este teste quebrou ao ser rodado
+ * 22h; o bug estava aqui, nao no servidor.
+ */
+function birthdateForAge(years: number): string {
+  const [year, month, day] = todayLocalDate().split('-');
+  return `${Number(year) - years}-${month}-${day}`;
+}
 
 async function primeiroSlot(experienceId: number, resourcesNeeded: number): Promise<string> {
   const { slots } = await getAvailability({ experienceId, date: SAT, resourcesNeeded });
@@ -166,9 +182,7 @@ describe('D — composicao e validacao', () => {
     const antes = await movementCounts();
 
     // 17 anos completos hoje: menor.
-    const seventeen = new Date();
-    seventeen.setUTCFullYear(seventeen.getUTCFullYear() - 17);
-    const birthdate17 = seventeen.toISOString().slice(0, 10);
+    const birthdate17 = birthdateForAge(17);
 
     await expect(
       createReservation(
@@ -197,9 +211,7 @@ describe('D — composicao e validacao', () => {
 
     // Controle: exatamente 18 anos completos HOJE passa (borda da regra —
     // "na data do agendamento", nao "mais de 18").
-    const eighteen = new Date();
-    eighteen.setUTCFullYear(eighteen.getUTCFullYear() - 18);
-    const birthdate18 = eighteen.toISOString().slice(0, 10);
+    const birthdate18 = birthdateForAge(18);
 
     const ok = await createReservation(
       reservationInput({
