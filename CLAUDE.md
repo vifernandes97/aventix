@@ -71,7 +71,8 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 
 - **Timezone:** `America/Sao_Paulo` fixo. `timestamptz` (UTC) no banco; conversão só na grade e na exibição.
 - **Serialização de datas:** o schema usa `timestamp mode:'string'`, então o driver devolve o **texto cru do Postgres** (`2026-07-27 23:09:14.518994-03`): espaço no lugar do `T`, offset sem minutos, microssegundos. Toda função de `lib/` que devolva `timestamptz` para a camada de API converte para **ISO 8601** (`new Date(v).toISOString()`). O V8 tolera o formato cru, outros motores devolvem `NaN` — o sintoma aparece só no navegador do cliente. Colunas `date` (`birthdate`, `due_date`) já saem como `YYYY-MM-DD` e **não** passam por `new Date()`.
-- **Dinheiro:** inteiro em centavos. Nunca float. Nunca calcule preço no cliente.
+- **Dinheiro:** inteiro em centavos. Nunca float. Nunca calcule preço no cliente. A conversão para a unidade do provedor de pagamento (reais com decimal) passa **só** por `lib/payments/money.ts`, que faz manipulação de string sobre o inteiro — `cents / 100` erra em alguns valores e o erro aparece na serialização, virando um centavo de diferença entre o que o banco diz e o que o cliente paga.
+- **Valores com `$` no `.env`:** o `@next/env` aplica expansão de variáveis, e valores contendo `$` chegam **vazios ou truncados** dentro do Next. Aspas simples **não** protegem — só o escape `\$` funciona. Afeta `ADMIN_PASSWORD_HASH` (bcrypt) e `ASAAS_API_KEY` (chaves Asaas começam com `$aact_`). O sintoma é sempre "autenticação inválida", nunca "variável mal formatada" — por isso todo módulo que lê chave crítica tem **fail-fast no boot** distinguindo "ausente" de "presente mas vazia". Medido: `dotenv` puro (scripts, testes) lê certo mesmo sem escape, o que faz o problema aparecer **só dentro do Next**. Vale igual no Easypanel, que injeta env em runtime. Detalhe do hash bcrypt na seção 13.
 - **Multi-tenant-ready:** `tenant_id NOT NULL DEFAULT 1` em toda tabela de negócio; toda query filtra por tenant.
 - **Labels/textos de UI** sempre de `settings`, nunca hardcode.
 - **Segredos** em `.env`. **IDs** de negócio: UUID. **Código em inglês, UI em português.**
@@ -565,7 +566,7 @@ Um único login (o dono). Sem provider externo.
     /experiences/route.ts             # catalogo PUBLICO: so ativas, sem `active` nem buffer_minutes
     /reservations/route.ts
     /reservations/[id]/status/route.ts
-    /webhooks/asaas/route.ts          # SEM redirect; responde 200 rapido
+    /webhooks/asaas/route.ts          # SEM redirect; responde 200 rapido (401 por token e a UNICA excecao)
     /shared/[token]/agenda/route.ts
     /admin/...                        # + reservations/[id]/balance, balance/receive-in-cash, integration/health
 /lib
@@ -578,15 +579,18 @@ Um único login (o dono). Sem provider externo.
   /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento + contato de emergencia
   /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
   /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
+  /cpf.ts                             # validacao/normalizacao de CPF — modulo PURO, unico algoritmo, usado pelo servidor E pelo wizard
   /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
-  /jobs/expire-holds.ts               # expiracao de hold (secao 12); vizinho do reconcile na Fase 2
+  /jobs/expire-holds.ts               # expiracao de hold (secao 12)
+  /jobs/reconcile-payments.ts         # job de 10 min (secao 8-B); vizinho do expire-holds, mesmo padrao
   /templates/types.ts                 # forma de um template de segmento
   /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
-  /payments/provider.ts               # interface PaymentProvider
-  /payments/asaas.ts                  # criar cobranca, QR, consultar, receiveInCash, remover, verify webhook
+  /payments/provider.ts               # interface PaymentProvider + erros tipados (config/auth/rede/API)
+  /payments/asaas.ts                  # UNICO arquivo que fala "asaas": cobranca, QR, consultar, cancelar, token do webhook
+  /payments/money.ts                  # centavos -> reais SEM ponto flutuante; travessia unica para o provedor
+  /payments/charge.ts                 # cria a cobranca da reserva FORA da transacao (secao 5.2 passo 5)
   /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao
-  /payments/reconcile.ts              # job de 10 min
-  /notifications.ts                   # Resend (assincrono)
+  /notifications.ts                   # Resend (assincrono) — Fase 4, ainda nao existe
   /auth.ts
   /time.ts
 /scripts
@@ -595,7 +599,7 @@ Um único login (o dono). Sem provider externo.
   /seed-demo-reservations.ts          # movimento FALSO p/ ver o admin (npm run db:seed:demo) — NUNCA em producao
 /tests                                # integracao contra o Postgres local (Vitest)
 /drizzle
-/instrumentation.ts                   # agenda o cron de hold no boot (secao 12)
+/instrumentation.ts                   # fail-fast de auth e de pagamento + agenda os crons de hold (1 min) e reconciliacao (10 min)
 /proxy.ts                             # NAO pode redirecionar /api/webhooks/*
 docker-compose.dev.yml                # SO Postgres local; producao e Easypanel (secao 2)
 Dockerfile
@@ -693,6 +697,14 @@ Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **ante
 4. **Webhook criado com token secreto próprio**, URL exata sem redirect, e e-mail de alerta configurado para avisar interrupção de fila.
 5. **Régua de cobrança/notificações do Asaas ajustada**: desligar as notificações automáticas na cobrança de **saldo**, para o cliente não receber avisos de cobrança de algo que será pago presencialmente.
 6. **Decisão de negócio registrada:** percentual do sinal, se é reembolsável, e o que fazer se o cliente não pagar o saldo no dia.
+
+### Aprendido na integração (medido em 17/08/2026)
+
+**CPF é obrigatório para cobrar.** `POST /v3/customers` aceita `cpfCnpj` null, mas `POST /v3/payments` recusa: *"Para criar esta cobrança é necessário preencher o CPF ou CNPJ do cliente"*. Opcional no cadastro, obrigatório na venda. Por isso o wizard coleta CPF no passo 4, com validação de dígito verificador no front e no servidor (`lib/cpf.ts`, algoritmo único compartilhado). Sem isso o fluxo público ficava quebrado para cliente novo: ele preenchia tudo, a cobrança falhava, a reserva expirava e o horário voltava — sem ele entender por quê.
+
+**O Asaas permite cliente duplicado.** Criar o cliente duas vezes não dá erro: dá dois cadastros. Por isso `customers.asaas_customer_id` é gravado e reutilizado, e gravado **no instante em que o cliente passa a existir**, antes de a cobrança ser tentada — senão cada falha de cobrança deixaria um cliente órfão a mais na conta do tenant.
+
+**O Asaas opera no fuso de Brasília.** Data que ele informa (`paymentDate`) e data que ele aceita (`dueDate`, `paymentDate` de baixa) já são locais. Mandar data em UTC depois das 21h faz o dia virar: medido, `receiveInCash` recusou com *"A data selecionada 18/08/2026 não pode ser posterior a data atual"* quando em São Paulo ainda era 17.
 
 ### Credenciais e chaves (estado em 17/08/2026)
 - **Asaas sandbox:** chave gerada, nome "aventix", sem expiração, sem permissão de saque. Salva em `ASAAS_API_KEY` no `.env` local. `ASAAS_BASE_URL=https://sandbox.asaas.com/api/v3`.
