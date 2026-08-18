@@ -15,6 +15,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { InvalidDateError, ExperienceNotFoundError, InvalidResourcesNeededError } from '@/lib/availability';
+import { createChargeForReservation } from '@/lib/payments/charge';
+import {
+  PaymentProviderAuthError,
+  PaymentProviderConfigError,
+} from '@/lib/payments/provider';
 import {
   InvalidCompositionError,
   InvalidCustomerDataError,
@@ -107,7 +112,13 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json(result, { status: 201 });
+    // Passo 5 da secao 5.2, FORA da transacao acima. A rota costura os dois
+    // porque cada um tem escopo transacional proprio e porque e aqui que os
+    // erros ja viram HTTP. Falha aqui dentro JA deixou a reserva `expired` e a
+    // vaga livre (caso de borda 9) — o catch abaixo so escolhe o status.
+    const payment = await createChargeForReservation(result.reservationId);
+
+    return NextResponse.json({ ...result, payment }, { status: 201 });
   } catch (error) {
     // 404 — experiencia inexistente ou inativa
     if (error instanceof ExperienceNotFoundError) {
@@ -138,6 +149,34 @@ export async function POST(request: Request) {
       error instanceof InvalidDateError
     ) {
       return NextResponse.json({ error: 'dados invalidos', detail: error.message }, { status: 400 });
+    }
+
+    // 500 — falha de CONFIGURACAO do provedor de pagamento. E problema nosso,
+    // nao do cliente e nao do provedor: repetir nao adianta enquanto o ambiente
+    // nao for corrigido. A mensagem do erro (que cita a causa provavel) fica no
+    // log do servidor; a resposta nao vaza nada sobre credencial.
+    if (error instanceof PaymentProviderConfigError || error instanceof PaymentProviderAuthError) {
+      console.error('[POST /api/reservations] pagamento mal configurado:', error.message);
+      return NextResponse.json(
+        {
+          error: 'pagamento indisponivel',
+          detail: 'Nao foi possivel gerar a cobranca. A reserva foi liberada; tente novamente em instantes.',
+        },
+        { status: 500 },
+      );
+    }
+
+    // 502 — o provedor de pagamento falhou (timeout, rede, recusa da API). A
+    // reserva ja foi expirada e a vaga liberada; o cliente pode tentar de novo.
+    if (error instanceof Error && error.name.startsWith('PaymentProvider')) {
+      console.error('[POST /api/reservations] falha ao criar cobranca:', error.message);
+      return NextResponse.json(
+        {
+          error: 'falha ao gerar a cobranca',
+          detail: 'Nao foi possivel gerar o Pix agora. A reserva foi liberada; tente novamente.',
+        },
+        { status: 502 },
+      );
     }
 
     // 500 — loga o detalhe no servidor, nunca vaza na resposta

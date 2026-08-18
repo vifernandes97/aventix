@@ -50,6 +50,13 @@ export type CreatedReservation = {
   dueNowCents: number;
   balanceCents: number;
   paymentMode: string;
+  /** bloco `payment` do 201 (secao 7.1). Ausente so em resposta antiga/inesperada. */
+  payment?: {
+    method: string;
+    qrCodeBase64: string;
+    copyPaste: string;
+    expiresAt: string | null;
+  } | null;
 };
 
 type StepId = 'experience' | 'resources' | 'schedule' | 'people' | 'terms' | 'done';

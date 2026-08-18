@@ -220,9 +220,24 @@ export const customers = pgTable(
     email: text('email'),
     cpf: text('cpf'),
     birthdate: date('birthdate'),
+
+    // Id do cliente no provedor de pagamento (cus_...). NULLABLE: cliente
+    // anterior a esta coluna nao tem, e cliente novo so ganha o id quando a
+    // primeira cobranca dele e criada. E gravado UMA vez e reutilizado —
+    // o Asaas PERMITE cadastro duplicado, entao sem guardar o id cada reserva
+    // criaria um cliente novo la.
+    asaasCustomerId: text('asaas_customer_id'),
+
     createdAt: tstz('created_at').notNull().defaultNow(),
   },
-  (t) => [unique('customers_tenant_phone_unique').on(t.tenantId, t.phone)], // find-or-create por telefone
+  (t) => [
+    unique('customers_tenant_phone_unique').on(t.tenantId, t.phone), // find-or-create por telefone
+    // Parcial: muitos clientes ainda sem id no provedor (NULL nao colide), mas
+    // um mesmo cus_... nunca pode se vincular a dois clientes do Aventix.
+    uniqueIndex('idx_customers_asaas')
+      .on(t.asaasCustomerId)
+      .where(sql`${t.asaasCustomerId} IS NOT NULL`),
+  ],
 );
 
 export const reservations = pgTable(
@@ -347,6 +362,9 @@ export const reservationPayments = pgTable(
     state: paymentState('state').notNull().default('pending'),
 
     asaasPaymentId: text('asaas_payment_id'), // id da cobranca no Asaas (pay_...)
+    // Link da fatura no provedor, persistido na CRIACAO da cobranca (secao 7.1:
+    // a tela de clientes linka para ela sem chamar o Asaas ao vivo).
+    asaasInvoiceUrl: text('asaas_invoice_url'),
     // "{reservation_id}:{kind}" — unico e deterministico. E o que permite
     // reconciliar mesmo se o asaas_payment_id se perder (secao 4.6 / 8-B).
     externalReference: text('external_reference').notNull(),

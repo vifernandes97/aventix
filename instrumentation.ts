@@ -22,6 +22,7 @@ import cron from 'node-cron';
 
 import { checkAuthConfig } from './lib/auth';
 import { expireHolds } from './lib/jobs/expire-holds';
+import { checkAsaasConfig } from './lib/payments/asaas';
 
 /** Flag no globalThis, mesmo padrao de lib/db/client.ts. */
 const globalForCron = globalThis as unknown as { holdCronRegistered?: boolean };
@@ -55,6 +56,25 @@ export async function register() {
     console.error('='.repeat(78));
   }
 
+  // -- fail-fast da configuracao de pagamento (CLAUDE.md secao 2) ------------
+  //
+  // Mesma logica do bloco acima, e pelo mesmo motivo (env injetada em runtime
+  // pelo Easypanel). A diferenca e o que quebra: sem Asaas o site continua
+  // mostrando a grade, mas NENHUMA reserva se completa — o POST cria a reserva,
+  // falha ao cobrar e a expira. Por isso o aviso e explicito no boot, em vez de
+  // aparecer como venda perdida no primeiro cliente do dia.
+  //
+  // A mensagem nunca imprime a chave: so comprimento e prefixo (ver asaas.ts).
+  const asaasConfig = checkAsaasConfig();
+  if (asaasConfig.ok) {
+    console.log('[asaas] configuracao de pagamento validada');
+  } else {
+    console.error('='.repeat(78));
+    console.error('[asaas] CONFIGURACAO DE PAGAMENTO INVALIDA — NENHUMA RESERVA VAI SE COMPLETAR');
+    console.error(asaasConfig.message);
+    console.error('='.repeat(78));
+  }
+
   // Precaucao contra registro duplicado. Nao observei duplicacao nas execucoes
   // deste projeto (o log "agendado" saiu uma vez por boot), mas o modulo pode ser
   // reavaliado em dev, e cada avaliacao registraria mais um timer.
@@ -84,4 +104,5 @@ export async function register() {
   });
 
   console.log('[cron:expire-holds] agendado (* * * * *, a cada minuto)');
+
 }

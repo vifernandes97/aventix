@@ -794,8 +794,51 @@ function Row({ term, value, strong }: { term: string; value: string; strong?: bo
 }
 
 // ============================================================================
-// 6 — pagamento (PLACEHOLDER — Fase 2)
+// 6 — pagamento (Pix real — Fase 2 tarefa 1)
 // ============================================================================
+
+/**
+ * Copia-e-cola do Pix com confirmacao visual.
+ *
+ * O feedback nao e enfeite: o cliente esta prestes a sair para o app do banco e
+ * precisa saber que o codigo FOI para a area de transferencia antes de trocar de
+ * tela. `navigator.clipboard` exige contexto seguro (https ou localhost) — o
+ * fallback marca a falha em vez de fingir que copiou.
+ */
+function CopyPasteBox({ copyPaste }: { copyPaste: string }) {
+  const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
+
+  useEffect(() => {
+    if (copied === 'idle') return;
+    const timer = setTimeout(() => setCopied('idle'), 2500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(copyPaste);
+      setCopied('ok');
+    } catch {
+      setCopied('fail');
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-medium text-stone-400">Pix copia e cola</p>
+      <p className="mt-1 max-h-20 overflow-y-auto break-all rounded-lg border border-stone-800 bg-stone-950/60 p-2 font-mono text-[11px] leading-relaxed text-stone-400">
+        {copyPaste}
+      </p>
+      <button
+        type="button"
+        onClick={copy}
+        className="mt-2 w-full rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-2.5 text-sm font-semibold text-orange-200 transition hover:bg-orange-500/20 active:scale-[0.99]"
+      >
+        {copied === 'ok' ? 'Código copiado!' : copied === 'fail' ? 'Não deu — copie na mão' : 'Copiar código'}
+      </button>
+    </div>
+  );
+}
 
 export function StepDone({
   reservation,
@@ -821,33 +864,53 @@ export function StepDone({
     return () => clearInterval(timer);
   }, [reservation.holdExpiresAt]);
 
+  const payment = reservation.payment;
+
   return (
     <section>
-      <h1 className="text-xl font-semibold text-orange-200">Reserva criada!</h1>
+      <h1 className="text-xl font-semibold text-orange-200">Falta pagar!</h1>
       <p className="mt-1 text-sm text-stone-400">
-        Ela fica guardada enquanto o pagamento não é confirmado.
+        Sua reserva está guardada. Pague o Pix abaixo para confirmá-la.
       </p>
 
       {/* ====================================================================
-          PLACEHOLDER — PAGAMENTO E FASE 2 (secoes 7.1 e 8).
+          FASE 2 TAREFA 2 ENTRA AQUI: polling de GET /api/reservations/{id}/status,
+          que troca esta tela pela confirmacao quando o webhook marcar o
+          pagamento. Hoje o cliente paga e recebe a confirmacao por outro
+          caminho — a tela nao sabe sozinha que o Pix caiu.
 
-          Aqui entram, quando o Asaas existir:
-            1. o QR Code Pix e o copia-e-cola, vindos de `payment` no corpo do
-               201 de POST /api/reservations (a rota ja preve o campo);
-            2. o polling de GET /api/reservations/{id}/status, que troca esta
-               tela pela confirmacao quando o webhook marcar o pagamento;
-            3. no modo `deposit`, a frase obrigatoria da secao 7.1: "Voce paga
-               agora R$X e o restante (R$Y) no dia, direto com o guia."
-
-          NAO ha QR falso nem simulacao de pagamento: uma tela que finge cobrar
-          e pior que uma que assume nao cobrar ainda.
+          No modo `deposit` entra tambem a frase obrigatoria da secao 7.1
+          ("Voce paga agora R$X e o restante (R$Y) no dia, direto com o guia").
+          Nenhuma experiencia vende em `deposit` hoje.
           ==================================================================== */}
-      <div className="mt-5 rounded-xl border border-dashed border-stone-700 bg-stone-900/60 px-4 py-8 text-center">
-        <p className="text-sm font-medium text-stone-300">Pagamento via Pix em breve</p>
-        <p className="mt-1 text-xs text-stone-500">
-          O QR Code aparece aqui quando o pagamento entrar no ar.
-        </p>
-      </div>
+      {payment ? (
+        <div className="mt-5 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+          <div className="flex justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element -- base64 do provedor, sem host externo para o next/image otimizar */}
+            <img
+              src={`data:image/png;base64,${payment.qrCodeBase64}`}
+              alt="QR Code do Pix para pagar a reserva"
+              className="h-56 w-56 rounded-lg bg-white p-2"
+            />
+          </div>
+
+          <p className="mt-3 text-center text-sm text-stone-300">
+            Abra o app do seu banco, escolha <strong className="text-stone-100">Pix</strong> e
+            aponte para o código — ou copie o código abaixo.
+          </p>
+
+          <CopyPasteBox copyPaste={payment.copyPaste} />
+        </div>
+      ) : (
+        <div className="mt-5 rounded-xl border border-dashed border-amber-700/60 bg-amber-950/20 px-4 py-6 text-center">
+          <p className="text-sm font-medium text-amber-200">
+            Não conseguimos gerar o QR Code agora
+          </p>
+          <p className="mt-1 text-xs text-amber-200/70">
+            Anote o código {reservation.reservationId.slice(0, 8)} e fale com a gente.
+          </p>
+        </div>
+      )}
 
       <dl className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4 text-sm">
         <Row term="Passeio" value={experience.name} />
