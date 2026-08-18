@@ -534,8 +534,15 @@ export class SlotUnavailableError extends Error {
   }
 }
 
-/** `exclusion_violation` do Postgres: outro cliente ganhou a corrida no recurso. */
-function isExclusionViolation(error: unknown): boolean {
+/**
+ * `exclusion_violation` do Postgres: outro cliente ganhou a corrida no recurso.
+ *
+ * Exportada porque o Pix tardio (secao 8.3) precisa do MESMO reconhecimento: ao
+ * reconfirmar uma reserva expirada, as linhas de `reservation_resources` voltam
+ * para a clausula WHERE da constraint e podem colidir com quem tomou a vaga.
+ * Duas definicoes de "isto e um 23P01" divergiriam.
+ */
+export function isExclusionViolation(error: unknown): boolean {
   const code = (error as { cause?: { code?: string }; code?: string })?.cause?.code
     ?? (error as { code?: string })?.code;
   return code === '23P01';

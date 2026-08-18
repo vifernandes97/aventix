@@ -22,10 +22,14 @@ import cron from 'node-cron';
 
 import { checkAuthConfig } from './lib/auth';
 import { expireHolds } from './lib/jobs/expire-holds';
+import { reconcilePayments } from './lib/jobs/reconcile-payments';
 import { checkAsaasConfig } from './lib/payments/asaas';
 
 /** Flag no globalThis, mesmo padrao de lib/db/client.ts. */
-const globalForCron = globalThis as unknown as { holdCronRegistered?: boolean };
+const globalForCron = globalThis as unknown as {
+  holdCronRegistered?: boolean;
+  reconcileCronRegistered?: boolean;
+};
 
 export async function register() {
   // Agenda so no runtime Node. Nas execucoes deste projeto o instrumentation foi
@@ -105,4 +109,44 @@ export async function register() {
 
   console.log('[cron:expire-holds] agendado (* * * * *, a cada minuto)');
 
+  // -- reconciliacao de pagamentos (CLAUDE.md secao 8-B) ---------------------
+  //
+  // A cada 10 minutos, como a secao manda. Mesmo padrao do cron acima: a logica
+  // vive em lib/jobs/reconcile-payments.ts e aqui so se agenda.
+  //
+  // Este job e o que segura o dinheiro quando a fila do webhook interrompe (15
+  // falhas consecutivas). Se ele nao rodar, uma fila caida vira pagamento
+  // invisivel por horas — por isso o try/catch, igual ao de cima: excecao nao
+  // tratada no callback de um timer derruba o processo Node inteiro, e um tick
+  // que falha nao pode levar junto o site e o cron de hold.
+  if (globalForCron.reconcileCronRegistered) return;
+  globalForCron.reconcileCronRegistered = true;
+
+  cron.schedule('*/10 * * * *', async () => {
+    try {
+      const { checked, reconciled, refundPending } = await reconcilePayments();
+
+      if (reconciled > 0) {
+        // Nao e rotina: significa que o webhook NAO entregou algo que ja estava
+        // pago. Sobe para warn para nao se perder no meio dos ticks silenciosos.
+        console.warn(
+          `[cron:reconcile-payments] ${reconciled} de ${checked} cobranca(s) estavam pagas ` +
+            'sem o webhook ter avisado — conferir a saude da fila no painel do Asaas',
+        );
+      } else if (checked > 0) {
+        console.log(`[cron:reconcile-payments] tick: ${checked} cobranca(s) pendente(s), nenhuma paga`);
+      }
+
+      if (refundPending.length > 0) {
+        console.error(
+          `[cron:reconcile-payments] ESTORNO PENDENTE em ${refundPending.length} reserva(s): ` +
+            `${refundPending.join(', ')} — estornar no painel do Asaas (secao 8-C)`,
+        );
+      }
+    } catch (error) {
+      console.error('[cron:reconcile-payments] tick falhou:', error);
+    }
+  });
+
+  console.log('[cron:reconcile-payments] agendado (*/10 * * * *, a cada 10 minutos)');
 }

@@ -20,6 +20,9 @@
 
 import 'server-only';
 
+import { createHash, timingSafeEqual } from 'node:crypto';
+
+import { localToUtc } from '../time';
 import { centsToReaisNumber } from './money';
 import {
   type ChargeSnapshot,
@@ -144,6 +147,47 @@ export function invalidateAsaasConfigCache(): void {
   cachedConfig = null;
 }
 
+// -- token do webhook --------------------------------------------------------
+//
+// SEGREDO SEPARADO DA API KEY, de proposito (secao 8.1 regra 8). A API key
+// AUTORIZA A COBRAR na conta do tenant; o token do webhook so prova que quem
+// bateu na nossa porta e o Asaas. Reaproveitar a API key aqui a exporia num
+// campo de configuracao de terceiro sem nenhum ganho.
+
+/**
+ * Compara em tempo constante, via sha256 (mesma tecnica de `lib/auth.ts`):
+ * `timingSafeEqual` exige buffers do mesmo tamanho e LANCA se diferirem — o
+ * proprio comprimento do token vazaria pelo throw. O hash iguala em 32 bytes.
+ */
+function constantTimeEquals(a: string, b: string): boolean {
+  return timingSafeEqual(
+    createHash('sha256').update(a).digest(),
+    createHash('sha256').update(b).digest(),
+  );
+}
+
+/**
+ * Confere o header `asaas-access-token` do webhook.
+ *
+ * NUNCA logue o argumento nem o valor esperado. Um token ausente no ambiente
+ * faz esta funcao recusar TUDO — e o lado seguro: sem o segredo configurado nao
+ * ha como distinguir o Asaas de qualquer um, e aceitar seria pior que recusar.
+ */
+export function verifyWebhookToken(received: string | null | undefined): boolean {
+  const expected = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
+  if (!expected) {
+    console.error(
+      '[asaas] ASAAS_WEBHOOK_TOKEN ausente: o webhook vai recusar TODAS as ' +
+        'notificacoes (401) e nenhum pagamento sera confirmado por essa via. ' +
+        'A reconciliacao (secao 8-B) segura o fluxo enquanto isso.',
+    );
+    return false;
+  }
+  if (!received) return false;
+
+  return constantTimeEquals(received, expected);
+}
+
 /**
  * Headers prontos para log. A credencial vira um marcador de comprimento — util
  * para diagnosticar truncamento, inutil para quem quiser usar a chave.
@@ -175,7 +219,6 @@ type AsaasErrorBody = { errors?: { code?: string; description?: string }[] };
 export function redactDocuments(text: string): string {
   return text.replace(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g, '<REDACTED:documento>');
 }
-
 
 /**
  * Chamada HTTP unica do modulo. Toda requisicao ao Asaas passa por aqui, para
@@ -312,12 +355,22 @@ type AsaasPixQrCode = {
 /**
  * Data de pagamento do Asaas -> ISO 8601.
  *
- * O campo vem como 'YYYY-MM-DD' (data de calendario) ou como data/hora. A
- * conversao passa por Date so quando ha hora; data pura vira meia-noite UTC.
+ * O campo vem como 'YYYY-MM-DD' (data de calendario) ou como data/hora.
+ *
+ * DATA PURA VIRA MEIA-NOITE DE SAO PAULO, nao de UTC. MEDIDO: um pagamento de
+ * 17/08 lido como `2026-08-17T00:00:00Z` vira `2026-08-16 21:00-03` no banco e
+ * aparece como DIA ANTERIOR em toda tela e recibo — o cliente pagou dia 17 e o
+ * comprovante diz 16. O Asaas opera no fuso de Brasilia, entao a data que ele
+ * informa ja e local (secao 3: fuso nas bordas, UTC no banco).
  */
 function toIsoOrNull(value: string | null | undefined): string | null {
   if (!value) return null;
-  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value);
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return localToUtc(value, '00:00').toISOString();
+  }
+
+  const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
