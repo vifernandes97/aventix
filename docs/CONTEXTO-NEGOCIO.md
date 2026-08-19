@@ -5,7 +5,7 @@
 > resposta. O `CLAUDE.md` cobre a especificação técnica; o `docs/DECISOES.md`
 > cobre o porquê das escolhas de arquitetura. Este cobre o negócio.
 >
-> Última atualização: 17/08/2026 (fim da Fase 2)
+> Última atualização: 19/08/2026 (deploy do MVP em sandbox)
 
 ---
 
@@ -113,6 +113,14 @@ por jurídico.**
 - **Produção:** ainda **não gerada**. Criar na Fase 4 com as mesmas
   configurações. Entra como variável de ambiente no Easypanel, nunca em arquivo.
 
+**Deploy em produção com chaves de sandbox (19/08).** Enquanto as chaves de
+produção não são geradas pelo cliente, o sistema roda no domínio real
+(`https://aventix.com.br`) apontando para sandbox. Funcional para teste — QR
+gerado, webhook recebido, reserva confirma — **sem cobrar dinheiro real**.
+Trocar `ASAAS_API_KEY` e `ASAAS_BASE_URL` no Easypanel quando as credenciais de
+produção chegarem, e cadastrar novo webhook apontando para o domínio (não para
+o ngrok, que era do sandbox).
+
 **O escape `\$` não é detalhe.** A chave começa com `$aact_`, e o carregador de
 ambiente do Next expande `$`. Sem a barra invertida a chave chega **vazia**
 dentro do Next (medido) — e aspas simples não protegem. No Easypanel vale a
@@ -141,8 +149,10 @@ do cliente e, se paga, exigiria estorno manual com taxa que não volta.
   Depois de reiniciar o ngrok é preciso atualizar a URL no painel do Asaas (ou
   por `PUT /v3/webhooks/{id}`), senão as entregas falham em silêncio — e 15
   falhas consecutivas **interrompem a fila**.
-- **Produção:** cadastro próprio, com token próprio, na Fase 4. A URL definitiva
-  é `https://aventix.com.br/api/webhooks/asaas`, **exata, sem barra final**:
+- **Produção:** o webhook de sandbox continua ativo apontando para o ngrok
+  temporário, inclusive com o deploy no ar. Quando a chave de produção for
+  gerada, cadastrar **novo** webhook na conta de produção do Asaas apontando
+  para `https://aventix.com.br/api/webhooks/asaas`, **exata, sem barra final**:
   medido que a variante com barra responde 308, e o Asaas não segue redirect.
 - Configurar o **e-mail de alerta** do Asaas para avisar interrupção de fila.
 
@@ -221,6 +231,9 @@ com `// PROVISÓRIO`:
   automáticos). Domínio: `aventix.com.br`.
 - **Acesso ao servidor:** hoje por **usuário root + senha** (guardada com o dev).
   Chave SSH ainda **não configurada** — tarefa do hardening da Fase 4.
-- **Banco de produção nunca foi migrado.** Está vazio. As **quatro** migrations
-  (`0000`, `0001`, `0002`, `0003`) rodam pela primeira vez no deploy.
+- **Banco de produção migrado e semeado em 19/08.** As quatro migrations
+  rodaram no boot pelo `instrumentation.ts` (migration-no-boot); catálogo
+  semeado manualmente via console do container do Postgres (a solução
+  permanente — rota admin de seed — fica pós go-live). Estado: 2 experiências,
+  2 recursos, 2 horários operacionais, 13 settings, 1 tenant.
 - **E-mail:** Resend (Fase 4, ainda não integrado).
