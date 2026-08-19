@@ -1,16 +1,21 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-18
+> Última atualização: 2026-08-19
 
 ## Onde estamos
 
-**Fase 2 concluída em sandbox** (fechada na sessão anterior). **Fase 4 (deploy)
-iniciada:** o caminho de aplicar as quatro migrations dentro do container está
-implementado e provado localmente, mas a primeira tentativa de subir a Fase 2
-para o Easypanel falhou com sintoma que os artefatos do repositório não
-explicam — investigação aberta, ver Deploy abaixo. Fase 3 continua em 6 de 9.
-Go-live: **24/08/2026** (faltam 6 dias).
+**Fase 2 concluída em sandbox.** **Fase 4 (deploy) em andamento:** entre a
+sessão anterior e esta, o dono tentou popular o catálogo de produção pela
+primeira vez direto pelo console web do Easypanel, o que só é possível se as
+migrations já tinham rodado lá (as tabelas existiam para receber `INSERT`) —
+indício forte de que o mistério do ENOENT `/app/drizzle` registrado na sessão
+anterior se resolveu sozinho quando o Easypanel finalmente serviu a imagem
+nova. **Isto não foi verificado por ferramenta nesta sessão**, é inferência a
+partir do relato do dono; ver PRÓXIMO PASSO. A tentativa de seed esbarrou numa
+armadilha nova do console web (ver abaixo), então o estado real do catálogo em
+produção é incerto. Fase 3 continua em 6 de 9. Go-live: **24/08/2026** (faltam
+5 dias).
 
 O fluxo de compra ponta a ponta contra o sandbox segue funcionando: cliente
 agenda, recebe QR Pix real, paga e a reserva confirma sozinha pelo webhook, com
@@ -32,54 +37,60 @@ integral e sinal em código (sinal não vendável no CRUD), webhook com as oito
 regras invioláveis da seção 8, job de reconciliação de 10 min e migration `0003`
 com `customers.asaas_customer_id` e `reservation_payments.asaas_invoice_url`.
 
+**Migrations no boot + `tsx` em dependencies** (fechado em 18/08, commits
+`799523d` e `511b4d5`, ambos pushed) — ver sessão anterior para detalhe.
+
 ## O que esta sessão fez
 
-Dois commits em `main`, ambos pushed:
+Sessão só de documentação, nenhum código tocado. Registrada uma lição de
+infraestrutura descoberta pelo dono ao tentar semear o catálogo em produção
+pelo console web do Easypanel:
 
-1. `799523d` **migrations no boot** pelo `instrumentation.ts` (opção 1 das três
-   investigadas, decisão registrada em `DECISOES.md`). Roda ANTES dos fail-fast
-   de auth/Asaas e dos crons. Falha DERRUBA o processo (`process.exit(1)`),
-   diferente dos outros dois fail-fast, que avisam e seguem — servir com schema
-   incerto corromperia dados. Guarda por promise memoizada no `globalThis`, não
-   boolean, porque o migrator do drizzle 0.45.2 não usa advisory lock e dois
-   `register()` concorrentes precisam compartilhar a mesma execução. Dockerfile
-   ganhou `COPY --from=builder /app/drizzle ./drizzle` no estágio runner — o
-   trace do standalone deixa os `.sql` de fora, então a pasta é copiada
-   explicitamente com os quatro `.sql` e o `meta/_journal.json`. Provado
-   localmente contra a imagem real: build sem cache produz `/app/drizzle` com
-   os 9 arquivos; boot da imagem em banco vazio aplica as 4 migrations e cria
-   as 13 tabelas + `btree_gist` + a exclusion constraint; falha com
-   `DATABASE_URL` inválido derruba com exit 1 e banner claro; segundo boot é
-   no-op.
-2. `511b4d5` **`tsx` movido para `dependencies`** para que `npm run db:seed`
-   funcione no container do Easypanel. Como devDependency o binário sumia do
-   runtime da imagem — o standalone do Next só carrega as deps runtime, mesmo
-   os scripts do `package.json` intactos falhavam com "tsx: not found".
-   Trade-off registrado no `DECISOES.md`: aumenta o tamanho da imagem, mas seed
-   em produção é operação real, não só de dev.
+- **CLAUDE.md ganhou a seção 19 — "Armadilhas de infraestrutura (Easypanel)".**
+  O console web (tanto `bash` quanto o `PostgreSQL Client` embutido) processa
+  SQL colado (`psql -f` sobre um arquivo com várias statements) de um jeito
+  que quebra a semântica de transação: `INSERT`/`COMMIT` reportam sucesso e
+  até um `SELECT` na mesma sessão confirma os dados, mas a sessão morre antes
+  de persistir de verdade — conexões novas veem as tabelas vazias. Só
+  `psql -c` isolado (uma statement por chamada, autocommit implícito)
+  persistiu de fato, provado por um `INSERT` de teste que persistiu e um
+  segundo idêntico que falhou por `duplicate key`. A seção registra o
+  protocolo de verificação (conexão nova depois de qualquer `psql -f`) e
+  aponta a solução permanente pós go-live: rota `POST /api/admin/seed` que
+  chama a função de seed do próprio código Next, eliminando SQL manual.
+- **DECISOES.md ganhou a entrada de 2026-08-19** apontando para a seção 19 em
+  vez de duplicar a regra.
 
-Verificado ao fim: `npx tsc --noEmit` limpo, `npm test` **55 passed** (9
-arquivos), `npm run db:generate` sem mudanças, `npm run db:seed` reconcilia o
-catálogo (13/2/2/2 "sem mudança").
+Verificado ao fim: `npm run db:generate` responde "No schema changes, nothing
+to migrate"; 4 migrations em disco e 4 linhas em
+`drizzle.__drizzle_migrations` local, batendo.
+
+Achado um artefato solto na raiz do repo, **não criado por esta sessão**:
+`seed-producao.sql` (dump gerado durante a investigação de produção, 91
+linhas, começa com `\restrict`), não commitado, não versionado. Não mexido
+nesta sessão — decidir na próxima se apaga ou arquiva fora do repo.
 
 ## PRÓXIMO PASSO
 
-**Fechar o mistério do Easypanel antes de mais qualquer código.** O log do
-container em produção mostrou `ENOENT: no such file or directory, scandir
-'/app/drizzle'` depois do commit `799523d` — o que é incompatível com o build
-`--no-cache` desta árvore, que produz uma imagem com `/app/drizzle` populado.
-Duas hipóteses testáveis do lado do painel, ambas fora do que o repo controla:
-(a) a imagem em execução é anterior a `799523d`, seja por cache de camada ou
-por o container do runtime não ter sido recriado sobre a imagem nova; (b) o
-contexto de build no Easypanel difere do repo, com `.dockerignore` de serviço,
-`Dockerfile` alternativo ou subdiretório errado. Dado empírico útil, se
-disponível: o log completo do build no Easypanel (a linha
-`COPY --from=builder … /app/drizzle ./drizzle` aparece?) e o SHA da imagem que
-o container está de fato executando. Sem esses dois dados, mexer no Dockerfile
-é chute.
+**Confirmar o estado real do catálogo em produção antes de qualquer outra
+coisa.** Duas perguntas em aberto, nesta ordem:
 
-**Depois disso, e assumindo que a Fase 2 de fato entrou:** o próximo passo de
-código é o mesmo que já estava — a **tela de status da reserva com polling**
+1. **As migrations rodaram em produção?** A tentativa de seed sugere que sim
+   (as tabelas existiam), mas isso não foi confirmado por consulta direta
+   nesta sessão. Verificar com uma conexão nova: `psql -U aventix -d aventix
+   -c "SELECT count(*) FROM drizzle.__drizzle_migrations;"` — espera-se `4`.
+2. **O catálogo persistiu?** A sessão anterior de seed bateu na armadilha do
+   console (seção 19 do CLAUDE.md): só o `INSERT` do tenant, feito como
+   statement isolada, é confirmado como persistido. Os outros 18 inserts
+   (recursos, experiências, settings) podem ou não ter sobrevivido. Verificar
+   com conexão nova: `psql -U aventix -d aventix -c "SELECT count(*) FROM
+   resources;"` (esperado 2), idem para `experiences` (2) e `settings` (13).
+   Se qualquer contagem vier zero ou parcial, repetir o seed seguindo o
+   protocolo da seção 19 (statement por statement via `psql -c`), nunca
+   `psql -f` colado no console.
+
+**Depois de confirmar isso:** o próximo passo de código continua sendo a
+**tela de status da reserva com polling**
 (`app/(public)/reserva/[id]/page.tsx` + `GET /api/reservations/{id}/status`,
 seção 14). É o buraco visível do fluxo de venda: hoje o cliente paga o Pix, a
 reserva confirma no banco, e a tela dele continua dizendo "Falta pagar". O
@@ -91,11 +102,9 @@ ponto de costura já está comentado em `steps.tsx` (`StepDone`).
   `0002_emergency_contact`, `0003_asaas_ids`.
 - **Local:** as quatro aplicadas. `drizzle.__drizzle_migrations` com 4 linhas,
   conferido nesta sessão.
-- **Produção:** ainda **incerto**. O caminho de aplicar existe (via
-  `instrumentation.ts`), foi provado contra a imagem local, e o commit está em
-  `origin/main`. Se o Easypanel de fato serviu a imagem nova, o banco de
-  produção deve estar em `4/4`. O ENOENT do log sugere que não serviu; o passo
-  acima é descobrir se sim ou não.
+- **Produção:** provavelmente `4/4` (ver PRÓXIMO PASSO), mas não confirmado
+  por ferramenta nesta sessão — só inferido do fato de o dono ter conseguido
+  tentar um `INSERT` contra tabelas que precisam existir primeiro.
 - `npm run db:generate` responde "No schema changes, nothing to migrate".
 - A `0001` continua editada à mão e precisa continuar assim se for regerada.
 
@@ -109,15 +118,25 @@ zerado — as tabelas de teste são limpas pelo próprio Vitest a cada rodada. A
 ## Pendências e dívidas conhecidas
 
 **Deploy (novas nesta sessão)**
-- **Divergência não explicada entre local e Easypanel.** Ver PRÓXIMO PASSO. É a
-  bloqueadora número um da Fase 4.
+- **Estado do catálogo em produção incerto.** Ver PRÓXIMO PASSO. Bloqueadora
+  número um da Fase 4 agora.
+- **Artefato solto `seed-producao.sql` na raiz do repo**, não commitado.
+  Decidir se apaga ou arquiva fora do repo.
+- **Rota `POST /api/admin/seed` como saída permanente do SQL manual em
+  produção** — registrada como tarefa pós go-live na seção 19 do CLAUDE.md,
+  ainda sem lugar no board do Orbi (o dono precisa criar).
+
+**Deploy (da sessão anterior, resolvida se a inferência acima se confirmar)**
+- ~~Divergência não explicada entre local e Easypanel (ENOENT
+  `/app/drizzle`).~~ Provavelmente resolvida — confirmar com o passo 1 do
+  PRÓXIMO PASSO antes de riscar de vez.
 - **Custo de imagem por causa do `tsx` em dep** aceito como trade-off (decisão
-  desta sessão). Se apertar por tamanho, o caminho de saída é migrar `seed.ts`
+  de 18/08). Se apertar por tamanho, o caminho de saída é migrar `seed.ts`
   e `hash-password.ts` para JS puro ou pré-compilar no build.
 
 **Fluxo de venda**
-- **Tela de status/polling não existe** (fica pra depois de resolver o
-  Easypanel). O cliente paga e a tela dele não muda.
+- **Tela de status/polling não existe.** O cliente paga e a tela dele não
+  muda.
 - **Termo sem checagem de versão vigente no servidor.** `createReservation`
   valida só a presença de `termo.version`, não que bata com `TERM_VERSION`.
 - **A grade não mostra horário insuficiente.** `GET /api/availability` não
@@ -129,14 +148,13 @@ zerado — as tabelas de teste são limpas pelo próprio Vitest a cada rodada. A
 **Integração de pagamento**
 - **Indicador de saúde da integração no `/admin` não construído** (seção 8-B).
   Sem ele, fila interrompida só aparece quando o cliente reclama.
-- **Cinco divergências entre a seção 8 e o que foi medido**, levantadas na
-  sessão anterior e ainda não resolvidas: (a) 8.2 lista dois eventos, mas o
-  webhook assina três e o Pix entrega `PAYMENT_CONFIRMED` junto; (b) 8-C diz
-  "sinaliza estorno pendente na reserva", sugerindo campo, e a implementação
-  usa estado derivado; (c) a regra 6 não cobre 404 do provedor, que também é
-  órfã; (d) a 8.3 não menciona que o registro do pagamento precisa sobreviver à
-  colisão, o que exige savepoint; (e) 8-B pede o indicador de saúde, não
-  construído.
+- **Cinco divergências entre a seção 8 e o que foi medido**, ainda não
+  resolvidas: (a) 8.2 lista dois eventos, mas o webhook assina três e o Pix
+  entrega `PAYMENT_CONFIRMED` junto; (b) 8-C diz "sinaliza estorno pendente na
+  reserva", sugerindo campo, e a implementação usa estado derivado; (c) a
+  regra 6 não cobre 404 do provedor, que também é órfã; (d) a 8.3 não
+  menciona que o registro do pagamento precisa sobreviver à colisão, o que
+  exige savepoint; (e) 8-B pede o indicador de saúde, não construído.
 - **Modo sinal (`deposit`) não é vendável:** o CRUD recusa com 422 e
   `receiveInCash` não foi implementado. Fora do MVP por decisão de 04/08.
 - Os testes do webhook mockam `getCharge` (a borda de rede). O banco é real.
@@ -155,10 +173,8 @@ zerado — as tabelas de teste são limpas pelo próprio Vitest a cada rodada. A
 - Chave SSH do VPS não configurada; acesso por senha de root.
 
 **Gerais**
-- `npm install` desta sessão reportou 10 vulnerabilidades (4 moderate, 6 high)
-  na árvore existente. Não relacionadas ao movimento do `tsx` — nada foi
-  introduzido, só que passou a aparecer com a reinstalação. Vale um `npm audit`
-  em outra sessão.
+- `npm install` da sessão de 18/08 reportou 10 vulnerabilidades (4 moderate, 6
+  high) na árvore existente. Vale um `npm audit` em outra sessão.
 - `instrumentation.ts` compila para Edge Runtime e falha lá (`node:crypto`),
   poluindo o log de dev a cada request.
 - Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`,
@@ -179,22 +195,21 @@ zerado — as tabelas de teste são limpas pelo próprio Vitest a cada rodada. A
 
 ## Deploy
 
-`main` está em `511b4d5` e foi pushed. Os dois commits desta sessão vieram para
-destravar o Easypanel: `799523d` faz o container migrar sozinho no boot e
-`511b4d5` faz o `db:seed` funcionar quando o Easypanel abrir um terminal no
-container para popular o tenant.
+`main` está em `5dca8b0` (pushed) mais as duas edições de documentação desta
+sessão, ainda não commitadas — ver passo 4 do ritual. Nenhum código novo desde
+`511b4d5`.
 
-Sequência esperada de produção, quando o Easypanel de fato subir a imagem
-nova: (1) o boot roda as 4 migrations em cima do banco vazio de produção; (2)
-`npm run db:seed` num terminal do container popula o tenant do Quadri Club;
-(3) antes de vender, gerar a chave de produção do Asaas (com escape do `$`),
-cadastrar o webhook de produção com token próprio e confirmar a chave Pix do
-Quadri Club.
+Sequência esperada de produção: (1) confirmar que as 4 migrations rodaram
+(PRÓXIMO PASSO, passo 1); (2) confirmar ou refazer o seed do catálogo seguindo
+o protocolo seguro da seção 19 do CLAUDE.md (passo 2); (3) antes de vender,
+gerar a chave de produção do Asaas (com escape do `$`), cadastrar o webhook de
+produção com token próprio e confirmar a chave Pix do Quadri Club.
 
 ## Prazo
 
-Go-live 24/08, 6 dias, ritmo de cerca de 2h/dia. O fluxo de compra funciona
-ponta a ponta em sandbox. O que falta para lançar é: destravar o Easypanel,
-construir a tela de status, resolver as pendências do cliente. Candidatos a
-corte já acordados com o cliente: agenda compartilhada, lista de clientes com
-faturas, CRUD de recursos e tela de configurações.
+Go-live 24/08, 5 dias, ritmo de cerca de 2h/dia. O fluxo de compra funciona
+ponta a ponta em sandbox. O que falta para lançar é: confirmar o estado real
+de produção (migrations + catálogo), construir a tela de status, resolver as
+pendências do cliente. Candidatos a corte já acordados com o cliente: agenda
+compartilhada, lista de clientes com faturas, CRUD de recursos e tela de
+configurações.

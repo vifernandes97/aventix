@@ -6,6 +6,10 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-19 — Console web do Easypanel não confirma COMMIT de SQL colado
+
+Registrado como seção nova no CLAUDE.md (**19. Armadilhas de infraestrutura (Easypanel)**), não aqui, porque é regra operacional a seguir toda vez que alguém precisar rodar SQL manual em produção, não só o porquê de uma escolha já tomada. Resumo: `psql -f` com script colado no console web reportou `INSERT`/`COMMIT` de sucesso e nada persistiu fora daquela sessão; só `psql -c` isolado (uma statement por chamada) gravou de verdade. Ver a seção para o diagnóstico completo e o protocolo de verificação.
+
 ## 2026-08-17 — Teste que envolve data ancora no fuso da REGRA, não em UTC
 
 **Lição de método, e é a segunda vez.** Um teste que mede tempo tem que usar o mesmo fuso que a regra de negócio usa para cortar. **Primeira ocorrência (03/08):** os casos de lead time montavam a grade em "hoje" e comparavam contra `Date.now()`, e passada certa hora nenhum candidato sobrevivia — resolvido com âncora absoluta. **Segunda (17/08):** o caso dos 18 anos exatos construía a data de nascimento com `new Date().toISOString()`, que é UTC, enquanto `createReservation` corta pela data de calendário de **São Paulo**; depois das 21h locais o UTC já virou o dia seguinte, a data saía um dia adiantada e o operador de 18 anos completos era recusado. **Sintoma comum às duas:** o teste passa de manhã e quebra à noite, e a suspeita cai no código de produção, que estava certo nas duas vezes. **Regra que fica:** se a regra corta por data de calendário em São Paulo, a fixture deriva de `todayLocalDate()`; se corta por instante, ancore num instante absoluto. `new Date().toISOString().slice(0,10)` num teste deste projeto é quase sempre bug. **De brinde, o mesmo erro apareceu fora do teste no mesmo dia:** o Asaas recusou uma baixa com "A data selecionada 18/08/2026 não pode ser posterior a data atual" porque mandamos a data em UTC — a borda com terceiro tem o mesmo cuidado.

@@ -710,3 +710,24 @@ Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **ante
 - **Asaas sandbox:** chave gerada, nome "aventix", sem expiração, sem permissão de saque. Salva em `ASAAS_API_KEY` no `.env` local. `ASAAS_BASE_URL=https://sandbox.asaas.com/api/v3`.
 - **Asaas produção:** ainda NÃO gerada. Gerar no painel do Asaas quando a Fase 4 (deploy) começar. Mesmas configurações: sem expiração, sem permissão de saque. Entrar no Easypanel como variável de ambiente, não em arquivo.
 - **Chave SSH do VPS:** ainda NÃO configurada. Login atual é por senha de root (guardada com o dev). Configurar chave SSH é tarefa do hardening da Fase 4.
+
+---
+
+## 19. Armadilhas de infraestrutura (Easypanel)
+
+### O console web (bash e PostgreSQL Client) mente sobre COMMIT em SQL colado (medido em 19/08/2026)
+
+**Nunca cole um script SQL multi-statement no console web do Easypanel esperando que ele persista.** Medido ao semear o catálogo de produção pela primeira vez: um arquivo criado com `cat > /tmp/seed.sql << EOF` e executado com `psql -f` reportou 19 `INSERT 0 1` e `COMMIT` — sucesso aparente completo. Um `SELECT count(*)` rodado **na mesma sessão do console**, logo em seguida, confirmou as linhas. Mas conexões novas depois disso (`psql -c` a partir de um bash recém-aberto) viram as tabelas **vazias**. Só sobreviveu o `INSERT` do tenant, que por acaso tinha sido feito à parte, como statement isolada via `psql -c`.
+
+**Diagnóstico:** o console web (tanto o `bash` quanto o `PostgreSQL Client` embutido) processa a colagem de um jeito que quebra a semântica de transação — a sessão morre antes do `COMMIT` persistir de verdade, mas as mensagens de sucesso (`INSERT 0 1`, `COMMIT`) são reais **dentro daquela sessão fantasma**. O `SELECT` seguinte, rodado na mesma sessão, ainda enxergava os dados — o que reforça a ilusão de que funcionou. Rollback silencioso, só visível de fora.
+
+**A prova:** um `INSERT` de teste rodado como `psql -c "INSERT ..."` isolado (conexão nova por chamada, autocommit implícito, sem `BEGIN`/`COMMIT` explícito) persistiu na hora e ficou visível para outras conexões e para a aplicação via HTTP. Repetir o mesmo `INSERT` com o mesmo id falhou por `duplicate key` — prova de que a primeira vez gravou de verdade.
+
+**Regra para qualquer SQL manual em produção via console do Easypanel:**
+1. Cria o arquivo com `cat > /tmp/x.sql << 'EOF' ... EOF`.
+2. Executa com `psql -U aventix -d aventix -f /tmp/x.sql`.
+3. **Imediatamente depois**, verifica numa conexão NOVA — comando `psql -c` separado, nunca continuação da mesma sessão: `psql -U aventix -d aventix -c "SELECT count(*) FROM ..."`.
+4. Conexão nova mostra os dados → persistiu, segue o jogo.
+5. Conexão nova mostra zero → o `psql -f` colado enganou. Cai para o padrão seguro: `psql -c` **linha a linha, uma statement por comando**, autocommit implícito. Verboso, mas garantido.
+
+**Caminho permanente (pós go-live, não agora):** uma rota `POST /api/admin/seed`, protegida por sessão, chamando a função de seed do próprio código Next — mesma lógica da migration-no-boot (seção 12), o `drizzle-orm` já bundlado. Elimina de vez a necessidade de SQL manual em produção. Registrar como tarefa pós go-live.
