@@ -67,6 +67,55 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 
 ---
 
+## 2-B. Topologia de URL
+
+**Estado final pretendido:**
+
+| Host | Serve |
+|---|---|
+| `aventix.com.br` | site comercial do Aventix (ainda não existe) |
+| `app.aventix.com.br` | a plataforma |
+
+**Endereços na plataforma:**
+
+- `app.aventix.com.br/agendamento/{slug}` — LP pública do tenant. Slug do
+  Quadri Club: `quadriclub`.
+- `app.aventix.com.br/agendamento/{slug}/reserva/{id}` — QR + polling.
+- `app.aventix.com.br/admin` — painel.
+- `app.aventix.com.br/api/*` — API. **Não recebe prefixo de slug**, em nenhuma
+  etapa. Tenant se resolve por corpo/sessão, nunca por segmento de URL aqui.
+
+**Estado em 20/08 (pré go-live):** só a metade de INFRA está feita — os dois
+hosts servem o MESMO serviço, sem redirect entre si, e a LP continua na raiz.
+`app.aventix.com.br/` é a URL que o cliente divulga no ManyChat.
+
+**Etapa 1, código (pós go-live):** a LP vai para a pasta LITERAL
+`app/(public)/agendamento/quadriclub/`, **não** `[slug]` dinâmico — com pasta
+literal um slug desconhecido responde 404 de graça; com `[slug]` sem guarda,
+qualquer slug serviria a página do Quadri Club. `getTenantId()` continua
+retornando `1`: o slug é **decorativo**, só reserva o formato.
+
+**Etapa 2 (depois da 1):** pasta vira `[slug]`, `tenants` ganha coluna `slug`,
+`getTenantId()` resolve do segmento, e os fluxos SEM requisição (cron de hold,
+job de reconciliação, seed) passam a iterar tenants.
+
+**Regras invioláveis desta topologia:**
+
+1. **Nenhum redirect é permanente.** `permanent: false` (307). Um 308 fica
+   cacheado no navegador praticamente para sempre e sequestra o endereço quando
+   o site comercial nascer.
+2. **O redirect de host do apex exclui `/api/`** (`source: '/:path((?!api/).*)'`).
+   O Asaas não segue redirect — ver seção 8.1. Relaxar esse regex derruba a fila
+   do webhook.
+3. **O redirect de host mora em `next.config.ts`, não em `proxy.ts`.** O
+   `proxy.ts` é a barreira de autenticação (seção 13) e seu `matcher` fica
+   escopado em `/admin` e `/api/admin`; alargá-lo por motivo de roteamento
+   mistura duas responsabilidades e põe o login em risco por uma mudança de URL.
+4. **A URL de produção do webhook é `https://app.aventix.com.br/api/webhooks/asaas`**,
+   exata, sem barra final. Substitui a URL antiga no apex.
+
+---
+
 ## 3. Convenções
 
 - **Timezone:** `America/Sao_Paulo` fixo. `timestamptz` (UTC) no banco; conversão só na grade e na exibição.
@@ -731,3 +780,18 @@ Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **ante
 5. Conexão nova mostra zero → o `psql -f` colado enganou. Cai para o padrão seguro: `psql -c` **linha a linha, uma statement por comando**, autocommit implícito. Verboso, mas garantido.
 
 **Caminho permanente (pós go-live, não agora):** uma rota `POST /api/admin/seed`, protegida por sessão, chamando a função de seed do próprio código Next — mesma lógica da migration-no-boot (seção 12), o `drizzle-orm` já bundlado. Elimina de vez a necessidade de SQL manual em produção. Registrar como tarefa pós go-live.
+
+**Domínio novo no mesmo serviço herda `https://` no destino interno, quebra com 500.**
+Ao adicionar um host extra na aba Domains de um serviço já existente, o campo de
+destino interno (`http://<container>:<porta>/`) às vezes vem preenchido como
+`https://`. O container Next só fala HTTP puro na porta interna — não tem TLS
+configurado ali, TLS é coisa do Traefik na borda. Com `https://` no destino, o
+Traefik tenta handshake TLS contra um servidor que não entende, e devolve `500`
+de upstream, fácil de confundir com falha do Let's Encrypt (que nesse caso emitiu
+normal). Sintoma: `/api/health` no domínio novo responde `500` mesmo com
+certificado válido e app saudável no domínio antigo. **Conserto:** editar a linha
+do domínio novo e trocar `https://` por `http://` no campo de destino interno.
+**Regra que fica:** ao adicionar QUALQUER domínio novo a um serviço existente
+(próximo tenant, por exemplo), conferir esse campo contra as linhas que já
+funcionam antes de testar — não assumir que o padrão do formulário replica o que
+já está configurado.

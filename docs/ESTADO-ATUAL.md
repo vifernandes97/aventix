@@ -1,7 +1,7 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-19
+> Última atualização: 2026-08-20
 
 ## Onde estamos
 
@@ -10,7 +10,7 @@
 (4/4) e catálogo semeado. O ciclo do dinheiro funciona ponta a ponta tanto
 local quanto em produção, em ambos os casos contra o **sandbox** do Asaas —
 QR gerado, webhook recebido, reserva confirmando sozinha, sem dinheiro real
-envolvido. Fase 3 continua em 6 de 9. Go-live: **24/08/2026** (faltam 5 dias).
+envolvido. Fase 3 continua em 6 de 9. Go-live: **24/08/2026** (faltam 4 dias).
 
 As duas perguntas que o estado anterior deixou em aberto estão **respondidas**:
 as migrations rodaram em produção e o catálogo persistiu. Detalhe de como em
@@ -86,10 +86,24 @@ depende só de código: o cliente paga o Pix, a reserva confirma no banco pelo
 webhook, e a tela dele continua dizendo "Falta pagar". O ponto de costura já
 está comentado em `steps.tsx` (`StepDone`).
 
+**SEGUNDO — verificar se o e-mail do Resend existe de fato.** Os documentos se
+contradizem e nenhum lado foi conferido contra o código: o `/inicio-de-sessao`
+reportou "Fase 4 deployada", o `CONTEXTO-NEGOCIO.md` diz "Resend ainda não
+integrado" e a seção 14 do CLAUDE.md marca `lib/notifications.ts` como
+inexistente. **Isto é pendência de VERIFICAÇÃO, não fato em nenhuma direção** —
+abrir `lib/` e o `package.json` antes de assumir que há ou que não há e-mail
+saindo. Se não houver, a decisão de construir ou cortar é do dono do prazo.
+
 **Alternativa, se a prioridade for autonomia do dono no dia 1:** os CRUDs
 operacionais que faltam — horários (`operating_hours`), bloqueios (`blackouts`)
 e exceções de agenda (`schedule_exceptions`). Sem eles, qualquer mudança de
 grade ou feriado no dia do lançamento passa pelo dev.
+
+**Fora do caminho crítico:** a **Etapa 1 da migração de URL** (mover a LP para
+`app.aventix.com.br/agendamento/quadriclub`) foi **adiada para pós go-live** —
+decisão de 20/08 no `DECISOES.md`. A premissa de 19/08 caiu: o link vai para um
+fluxo do ManyChat, editável a qualquer momento, não para material impresso. Só
+a metade de INFRA entra antes do go-live (abaixo, em pendências de painel).
 
 ## Migrations
 
@@ -130,6 +144,12 @@ está na rede.
   do CLAUDE.md. Solução permanente é a rota `POST /api/admin/seed`, pós go-live.
 - **Artefato solto `seed-producao.sql` na raiz do repo**, não commitado.
   Decidir se apaga ou arquiva fora do repo.
+- **Metade de INFRA da Etapa 1 de URL — pendência de PAINEL, antes do go-live.**
+  Registro DNS `app` e domínio `app.aventix.com.br` adicionado ao MESMO serviço
+  no Easypanel. Sem código, sem deploy, sem rebuild. Precisa estar de pé antes
+  de cadastrar o webhook de produção. Ao adicionar o domínio, conferir se o
+  destino interno ficou `http://` e não `https://` — armadilha medida, seção 19
+  do CLAUDE.md.
 - Chave SSH do VPS não configurada; acesso por senha de root.
 
 **Dependem do cliente (bloqueiam dinheiro real)**
@@ -138,7 +158,9 @@ está na rede.
   real. Trocar `ASAAS_API_KEY` e `ASAAS_BASE_URL` no Easypanel quando chegar,
   com escape `\$`, sem mudar código.
 - **Webhook de produção não cadastrado.** Depende da chave acima. URL definitiva
-  `https://aventix.com.br/api/webhooks/asaas`, exata, sem barra final.
+  `https://app.aventix.com.br/api/webhooks/asaas`, exata, sem barra final —
+  **no subdomínio, não no apex** (seção 2-B do CLAUDE.md). É cadastrada uma vez
+  e migrá-la depois acontece com dinheiro real em trânsito.
 - **Chave Pix do Quadri Club pendente.** Sem ela o QR só é pagável até 23:59 do
   mesmo dia.
 - **O nome no copia-e-cola é da conta sandbox** (`NEOSOLUTI COMERCIO E SERV`).
@@ -201,14 +223,16 @@ as duas trilhas.
 Para colocar dinheiro real no ar, quando o cliente destravar: (1) gerar a chave
 de produção do Asaas e pôr no Easypanel com escape `\$`; (2) trocar
 `ASAAS_BASE_URL` para a URL de produção; (3) cadastrar o webhook de produção
-com token próprio apontando para `https://aventix.com.br/api/webhooks/asaas`;
+com token próprio apontando para
+`https://app.aventix.com.br/api/webhooks/asaas` (subdomínio, seção 2-B);
 (4) confirmar a chave Pix do Quadri Club na conta.
 
 ## Prazo
 
-Go-live 24/08, 5 dias, ritmo de cerca de 2h/dia. **O deploy tirou o principal
-risco técnico da mesa** — o que sobra de código é a tela de status e,
-opcionalmente, os CRUDs operacionais. O caminho crítico agora é o cliente:
+Go-live 24/08, **4 dias**, ritmo de cerca de 2h/dia. **O deploy tirou o
+principal risco técnico da mesa** — o que sobra de código é a tela de status,
+a verificação do Resend e, opcionalmente, os CRUDs operacionais. A Etapa 1 de
+URL saiu do caminho crítico (só a metade de infra fica). O caminho crítico agora é o cliente:
 chaves de produção do Asaas e chave Pix. Candidatos a corte já acordados:
 agenda compartilhada, lista de clientes com faturas, CRUD de recursos e tela de
 configurações.

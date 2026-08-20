@@ -6,6 +6,40 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-20 — Etapa 1 da migração de URL adiada; só a metade de infra entra antes do go-live
+
+A decisão de 19/08 priorizou a Etapa 1 (mover a LP para
+`app.aventix.com.br/agendamento/quadriclub`) **antes** do go-live, sob a premissa
+de que o cliente divulgaria o link em material impresso — artefato que não se
+corrige com deploy. **A premissa estava errada:** o link vai viver num fluxo do
+ManyChat, editável a qualquer momento e sem custo. Com isso o custo de adiar cai
+de "dívida com terceiro" para "editar um campo depois", e a Etapa 1 perde a
+prioridade sobre o que falta do MVP — em especial a tela de status com polling,
+cujo buraco (cliente paga e a tela segue dizendo "falta pagar") atinge o primeiro
+cliente real e **não** se corrige editando link.
+
+**O que entra antes do go-live, mesmo assim:** apenas a parte de painel —
+registro DNS `app` e o domínio `app.aventix.com.br` adicionado ao MESMO serviço
+no Easypanel. Sem código, sem deploy, sem rebuild. **Por que essa metade não
+espera:** a URL do webhook de produção é cadastrada UMA vez no painel do Asaas, e
+migrá-la depois acontece com dinheiro real em trânsito. O modo de falha é surdo —
+o Asaas não segue redirect, 15 falhas interrompem a fila (seção 8.1) e reservas
+pagas deixam de confirmar sem erro visível. Cadastrando desde já em
+`https://app.aventix.com.br/api/webhooks/asaas`, a URL sobrevive às Etapas 1 e 2
+sem ser tocada, porque `/api/*` nunca recebe prefixo de slug.
+
+**Consequência assumida:** durante o go-live os dois hosts servem o mesmo app sem
+redirect entre si, e o link do ManyChat aponta para `app.aventix.com.br/` (raiz),
+que ainda serve a LP do Quadri Club. Muda uma vez, no ManyChat, quando a Etapa 1
+de código for feita.
+
+**Alternativa descartada:** fazer a Etapa 1 completa antes do go-live. Descartada
+porque consome uma sessão de ~2h em deploy e reverificação de produção, a quatro
+dias do prazo, para resolver um problema que um campo editável resolve — enquanto
+o fluxo de venda tem um buraco visível ao cliente pagante.
+
+**Reabrir quando:** primeira semana pós go-live, junto ou logo depois do CI/CD.
+
 ## 2026-08-19 — Standalone do Next tem consequências operacionais não mapeadas
 
 O `output: 'standalone'` reduz drasticamente a imagem Docker copiando **só o que o código importa em runtime**. Descoberto na prática que isso implica três coisas: (a) os `.sql` das migrations não vão para a imagem e precisam ser copiados explicitamente no `Dockerfile`, no caminho que o container enxerga como `/app/drizzle`; (b) `node_modules/.bin/` não é preservado, então nenhum `npm run x` que dependa de binário funciona no container, independente de `dependency` ou `devDependency`; (c) pastas como `scripts/` também são descartadas. **Por que vale registrar:** nada disso está na documentação do Next, e só aparece quando se tenta rodar comando operacional dentro do container. As três vezes em que esbarramos — path da migration, `tsx` faltando, `scripts/` faltando — foram diagnosticadas como três problemas separados quando são o **mesmo** problema, e essa é a parte cara: cada um custou uma investigação própria. **Regra que fica:** qualquer operação de manutenção em produção que dependa de arquivo do repo tem que rodar **via código do Next** (importado pela app, portanto bundlado) ou via conteúdo **explicitamente copiado no Dockerfile** — nunca por `npm run` genérico. **Reabrir quando:** a próxima operação de manutenção precisar de arquivo fora do bundle e a tentação for resolver por `npm run`. Vai falhar pelo mesmo motivo.

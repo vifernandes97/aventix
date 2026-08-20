@@ -152,8 +152,10 @@ do cliente e, se paga, exigiria estorno manual com taxa que não volta.
 - **Produção:** o webhook de sandbox continua ativo apontando para o ngrok
   temporário, inclusive com o deploy no ar. Quando a chave de produção for
   gerada, cadastrar **novo** webhook na conta de produção do Asaas apontando
-  para `https://aventix.com.br/api/webhooks/asaas`, **exata, sem barra final**:
-  medido que a variante com barra responde 308, e o Asaas não segue redirect.
+  para `https://app.aventix.com.br/api/webhooks/asaas`, **exata, sem barra
+  final**: medido que a variante com barra responde 308, e o Asaas não segue
+  redirect. (Host mudado em 20/08 — ver seção 2-B do CLAUDE.md; cadastrar já no
+  subdomínio evita remexer a URL com dinheiro real em trânsito.)
 - Configurar o **e-mail de alerta** do Asaas para avisar interrupção de fila.
 
 ### Pendências operacionais do Asaas
