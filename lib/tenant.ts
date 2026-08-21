@@ -57,6 +57,19 @@ export type SettingKey =
   | 'what_to_bring'
   | 'business_name'
   | 'reply_to_email'
+  // Canal de contato do TENANT com o cliente final, so digitos com DDI
+  // (ex.: '5511999998888') — o formato que o link wa.me exige.
+  //
+  // POR QUE WHATSAPP E NAO SO E-MAIL: o Quadri Club vende por ManyChat, entao a
+  // conversa com o cliente JA acontece no WhatsApp. Somado ao corte do e-mail de
+  // confirmacao (decisao de 21/08), a tela de status virou o unico retorno que o
+  // cliente recebe — e mandar para e-mail quem esta no WhatsApp e tirar a pessoa
+  // do canal onde o dono responde.
+  //
+  // VAZIO E ESTADO VALIDO, nao erro: a tela OMITE o bloco de contato quando a
+  // chave falta ou esta em branco, em vez de renderizar rotulo sem valor. Nasce
+  // vazia de proposito — o numero ainda nao foi informado pelo cliente.
+  | 'support_whatsapp'
   | 'deposit_policy_text'
   | 'single_experience_per_slot'
   | 'min_lead_minutes';
@@ -94,6 +107,8 @@ const SETTING_DEFAULTS: Record<SettingKey, string> = {
   // Vazio + warn e o comportamento correto ate o seed rodar.
   business_name: '',
   reply_to_email: '',
+  // Vazio = sem canal de WhatsApp; a UI omite o bloco. Ver a nota em SettingKey.
+  support_whatsapp: '',
   deposit_policy_text: '',
   // default explicito do CLAUDE.md secao 4.2
   single_experience_per_slot: 'false',

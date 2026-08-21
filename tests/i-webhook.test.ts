@@ -36,6 +36,9 @@ vi.mock('@/lib/payments/asaas', async (importOriginal) => ({
     createPixCharge: async () => {
       throw new Error('nao usado neste grupo');
     },
+    getPixQrCode: async () => {
+      throw new Error('nao usado neste grupo');
+    },
     cancelCharge: async () => {},
   },
 }));

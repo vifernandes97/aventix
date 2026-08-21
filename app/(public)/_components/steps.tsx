@@ -3,6 +3,7 @@
 // Os seis passos do formulario publico. A maquina de estados vive em
 // booking-wizard.tsx; aqui e so o corpo de cada passo.
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { formatCpf, normalizeCpf } from '@/lib/cpf';
@@ -815,145 +816,48 @@ function Row({ term, value, strong }: { term: string; value: string; strong?: bo
 }
 
 // ============================================================================
-// 6 — pagamento (Pix real — Fase 2 tarefa 1)
+// 6 — entrega: sai do wizard para a pagina da reserva
 // ============================================================================
 
 /**
- * Copia-e-cola do Pix com confirmacao visual.
+ * Passo final. NAO desenha mais o QR: entrega o cliente a /reserva/{id}.
  *
- * O feedback nao e enfeite: o cliente esta prestes a sair para o app do banco e
- * precisa saber que o codigo FOI para a area de transferencia antes de trocar de
- * tela. `navigator.clipboard` exige contexto seguro (https ou localhost) — o
- * fallback marca a falha em vez de fingir que copiou.
+ * >>> POR QUE MUDOU (21/08/2026) <<<
+ * Ate aqui este passo mostrava o QR do 201 e parava no tempo: pagamento caindo
+ * pelo webhook nao mexia na tela, e o cliente continuava lendo "Falta pagar"
+ * depois de pagar. Todo o estado vivia na memoria do wizard, entao um refresh ou
+ * um toque em voltar apagava o QR e qualquer noticia da reserva.
+ *
+ * A pagina /reserva/{id} resolve as duas coisas: ela faz polling do status e
+ * tem URL propria, que sobrevive a refresh e pode ser reaberta depois.
+ *
+ * >>> `replace`, NUNCA `push` <<<
+ * Com `push`, o botao voltar do navegador traria o cliente de volta a ESTE passo
+ * — com um QR que pode ja ter expirado e sem nenhuma nocao do que aconteceu
+ * desde entao. Com `replace`, o passo final sai do historico e voltar leva ao
+ * formulario, que e o unico destino anterior que ainda faz sentido.
  */
-function CopyPasteBox({ copyPaste }: { copyPaste: string }) {
-  const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
+export function StepDone({ reservation }: { reservation: CreatedReservation }) {
+  const router = useRouter();
+  const target = `/reserva/${reservation.reservationId}`;
 
   useEffect(() => {
-    if (copied === 'idle') return;
-    const timer = setTimeout(() => setCopied('idle'), 2500);
-    return () => clearTimeout(timer);
-  }, [copied]);
+    router.replace(target);
+  }, [router, target]);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(copyPaste);
-      setCopied('ok');
-    } catch {
-      setCopied('fail');
-    }
-  }
-
+  // Visivel so no intervalo ate a navegacao acontecer. Nao repete o QR de
+  // proposito: duas telas desenhando o mesmo pagamento divergem no dia em que
+  // uma das duas mudar, e esta e a que ninguem lembraria de atualizar.
   return (
-    <div className="mt-4">
-      <p className="text-xs font-medium text-stone-400">Pix copia e cola</p>
-      <p className="mt-1 max-h-20 overflow-y-auto break-all rounded-lg border border-stone-800 bg-stone-950/60 p-2 font-mono text-[11px] leading-relaxed text-stone-400">
-        {copyPaste}
-      </p>
-      <button
-        type="button"
-        onClick={copy}
-        className="mt-2 w-full rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-2.5 text-sm font-semibold text-orange-200 transition hover:bg-orange-500/20 active:scale-[0.99]"
-      >
-        {copied === 'ok' ? 'Código copiado!' : copied === 'fail' ? 'Não deu — copie na mão' : 'Copiar código'}
-      </button>
-    </div>
-  );
-}
-
-export function StepDone({
-  reservation,
-  experience,
-  labels,
-}: {
-  reservation: CreatedReservation;
-  experience: PublicExperience;
-  labels: PublicLabels;
-}) {
-  const [minutesLeft, setMinutesLeft] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!reservation.holdExpiresAt) return;
-
-    const tick = () => {
-      const ms = new Date(reservation.holdExpiresAt!).getTime() - Date.now();
-      setMinutesLeft(Math.max(0, Math.ceil(ms / 60_000)));
-    };
-
-    tick();
-    const timer = setInterval(tick, 30_000);
-    return () => clearInterval(timer);
-  }, [reservation.holdExpiresAt]);
-
-  const payment = reservation.payment;
-
-  return (
-    <section>
-      <h1 className="text-xl font-semibold text-orange-200">Falta pagar!</h1>
-      <p className="mt-1 text-sm text-stone-400">
-        Sua reserva está guardada. Pague o Pix abaixo para confirmá-la.
-      </p>
-
-      {/* ====================================================================
-          FASE 2 TAREFA 2 ENTRA AQUI: polling de GET /api/reservations/{id}/status,
-          que troca esta tela pela confirmacao quando o webhook marcar o
-          pagamento. Hoje o cliente paga e recebe a confirmacao por outro
-          caminho — a tela nao sabe sozinha que o Pix caiu.
-
-          No modo `deposit` entra tambem a frase obrigatoria da secao 7.1
-          ("Voce paga agora R$X e o restante (R$Y) no dia, direto com o guia").
-          Nenhuma experiencia vende em `deposit` hoje.
-          ==================================================================== */}
-      {payment ? (
-        <div className="mt-5 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-          <div className="flex justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element -- base64 do provedor, sem host externo para o next/image otimizar */}
-            <img
-              src={`data:image/png;base64,${payment.qrCodeBase64}`}
-              alt="QR Code do Pix para pagar a reserva"
-              className="h-56 w-56 rounded-lg bg-white p-2"
-            />
-          </div>
-
-          <p className="mt-3 text-center text-sm text-stone-300">
-            Abra o app do seu banco, escolha <strong className="text-stone-100">Pix</strong> e
-            aponte para o código — ou copie o código abaixo.
-          </p>
-
-          <CopyPasteBox copyPaste={payment.copyPaste} />
-        </div>
-      ) : (
-        <div className="mt-5 rounded-xl border border-dashed border-amber-700/60 bg-amber-950/20 px-4 py-6 text-center">
-          <p className="text-sm font-medium text-amber-200">
-            Não conseguimos gerar o QR Code agora
-          </p>
-          <p className="mt-1 text-xs text-amber-200/70">
-            Anote o código {reservation.reservationId.slice(0, 8)} e fale com a gente.
-          </p>
-        </div>
-      )}
-
-      <dl className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4 text-sm">
-        <Row term="Passeio" value={experience.name} />
-        <Row term="Valor" value={moneyLabel(reservation.totalCents)} strong />
-        {reservation.dueNowCents !== reservation.totalCents && (
-          <Row term="A pagar agora" value={moneyLabel(reservation.dueNowCents)} />
-        )}
-        {minutesLeft !== null && (
-          <Row
-            term="Reserva expira em"
-            value={minutesLeft > 0 ? `${minutesLeft} min` : 'expirada'}
-          />
-        )}
-        <Row term="Código" value={reservation.reservationId.slice(0, 8)} />
-      </dl>
-
-      <div className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-        <h2 className="text-sm font-semibold">Ponto de encontro</h2>
-        <p className="mt-1 text-sm text-stone-400">{labels.meeting_point}</p>
-        <h2 className="mt-3 text-sm font-semibold">O que levar</h2>
-        <p className="mt-1 text-sm text-stone-400">{labels.what_to_bring}</p>
-      </div>
+    <section className="py-10 text-center">
+      <h1 className="text-lg font-semibold text-orange-200">Reserva criada!</h1>
+      <p className="mt-2 text-sm text-stone-400">Levando você para o pagamento…</p>
+      {/* Rede de seguranca: se a navegacao programatica falhar (JS travado por
+          extensao, por exemplo), o cliente ainda tem como chegar la sozinho em
+          vez de ficar preso numa tela que so diz "levando voce". */}
+      <a href={target} className="mt-4 inline-block text-sm font-medium text-orange-300 underline">
+        Continuar
+      </a>
     </section>
   );
 }

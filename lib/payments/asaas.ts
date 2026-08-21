@@ -30,6 +30,7 @@ import {
   type PaymentProvider,
   type PaymentState,
   type PixCharge,
+  type PixQrCode,
   PaymentProviderApiError,
   PaymentProviderAuthError,
   PaymentProviderConfigError,
@@ -374,6 +375,25 @@ function toIsoOrNull(value: string | null | undefined): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+/**
+ * `GET /payments/{id}/pixQrCode` — a chamada crua, num ponto unico.
+ *
+ * O QR e uma chamada SEPARADA da criacao da cobranca: `POST /payments` devolve
+ * a cobranca sem QR nenhum. Os dois metodos publicos que precisam dele
+ * (createPixCharge, no fim do fluxo de criacao, e getPixQrCode, sob demanda)
+ * passam por aqui — duas copias da mesma URL e do mesmo mapeamento de campo
+ * divergiriam no dia em que o Asaas renomear `encodedImage`.
+ */
+async function fetchPixQrCode(chargeId: string): Promise<PixQrCode> {
+  const qr = await request<AsaasPixQrCode>(`/payments/${chargeId}/pixQrCode`, { method: 'GET' });
+
+  return {
+    qrCodeBase64: qr.encodedImage,
+    copyPaste: qr.payload,
+    expiresAt: toIsoOrNull(qr.expirationDate),
+  };
+}
+
 // -- implementacao -----------------------------------------------------------
 
 export const asaasProvider: PaymentProvider = {
@@ -424,18 +444,18 @@ export const asaasProvider: PaymentProvider = {
     });
 
     // -- 3. QR Code (chamada separada, obrigatoria) -----------------------
-    const qr = await request<AsaasPixQrCode>(`/payments/${payment.id}/pixQrCode`, {
-      method: 'GET',
-    });
+    const qr = await fetchPixQrCode(payment.id);
 
     return {
       chargeId: payment.id,
       providerCustomerId,
-      qrCodeBase64: qr.encodedImage,
-      copyPaste: qr.payload,
-      expiresAt: toIsoOrNull(qr.expirationDate),
+      ...qr,
       invoiceUrl: payment.invoiceUrl ?? null,
     };
+  },
+
+  async getPixQrCode(chargeId: string): Promise<PixQrCode> {
+    return fetchPixQrCode(chargeId);
   },
 
   async getCharge(chargeId: string): Promise<ChargeSnapshot> {

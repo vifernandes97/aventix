@@ -49,6 +49,20 @@ export const quadricicloTemplate: SegmentTemplate = {
     // cliente em 17/08/2026 — dominio e .com, NAO .com.br.
     reply_to_email: 'contato@quadriclub.com',
 
+    // >>> PENDENTE DO CLIENTE (tarefa aberta em 21/08/2026) <<<
+    // Numero de WhatsApp do Quadri Club, so digitos com DDI ('5511999998888').
+    // Nasce VAZIO de proposito: o numero ainda nao foi informado, e a tela de
+    // status OMITE o bloco de contato quando a chave esta em branco — melhor
+    // do que exibir um numero inventado que ninguem atende.
+    //
+    // ATENCAO AO PREENCHER: a casa definitiva do numero e AQUI, no template.
+    // seedTenant() SOBRESCREVE a linha de settings sempre que o valor do banco
+    // diverge do template (lib/seed.ts), entao um numero digitado direto no
+    // Postgres de producao sobrevive aos deploys (o boot so migra, nao semeia)
+    // mas seria apagado no dia em que alguem rodar o seed de novo. Se o numero
+    // for semeado a mao para nao esperar um rebuild, escreva-o tambem aqui.
+    support_whatsapp: '',
+
     // So aparece no termo quando a experiencia for 'deposit' (secao 10). Fica
     // preenchido para nao travar a troca de modo, mesmo com as duas experiencias
     // em 'full' hoje.

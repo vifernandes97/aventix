@@ -358,7 +358,7 @@ export function BookingWizard({
           )}
 
           {stepId === 'done' && created && state.experience && (
-            <StepDone reservation={created} experience={state.experience} labels={labels} />
+            <StepDone reservation={created} />
           )}
         </div>
       </main>

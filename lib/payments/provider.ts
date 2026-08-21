@@ -7,10 +7,16 @@
 // custar uma implementacao nova deste arquivo, nao uma varredura no repo.
 //
 // >>> INTERFACE MINIMA DE PROPOSITO <<<
-// Tres metodos: criar cobranca Pix, consultar cobranca, cancelar cobranca. E o
-// que o MVP usa. `receiveInCash` (modo sinal) e cartao (v2) estao FORA — metodo
-// que ninguem chama e codigo morto que envelhece sem ninguem perceber, e a
-// assinatura errada so aparece no dia em que alguem finalmente tenta usar.
+// Quatro metodos: criar cobranca Pix, reler o QR de uma cobranca ja criada,
+// consultar cobranca, cancelar cobranca. E o que o MVP usa. `receiveInCash`
+// (modo sinal) e cartao (v2) estao FORA — metodo que ninguem chama e codigo
+// morto que envelhece sem ninguem perceber, e a assinatura errada so aparece no
+// dia em que alguem finalmente tenta usar.
+//
+// O quarto (`getPixQrCode`) entrou em 21/08/2026 com a tela de status
+// (/reserva/[id]): a pagina sobrevive a refresh, entao o QR devolvido uma vez
+// no 201 de POST /api/reservations nao basta — ela precisa reler o atual. Tem
+// chamador real, que e o criterio do paragrafo acima.
 //
 // >>> STATUS E DOMINIO NOSSO <<<
 // `PaymentState` sai do enum `payment_state` do schema, nao do vocabulario do
@@ -85,6 +91,23 @@ export type PixCharge = {
   invoiceUrl: string | null;
 };
 
+/**
+ * QR Code Pix de uma cobranca. Subconjunto de `PixCharge` — os campos que
+ * mudam/expiram, sem os que so existem no instante da criacao (chargeId,
+ * providerCustomerId, invoiceUrl).
+ *
+ * NUNCA PERSISTIR (secao 7.2): tem validade, e QR guardado no banco vira um
+ * codigo que o app do banco recusa sem explicar por que.
+ */
+export type PixQrCode = {
+  /** imagem do QR Code em base64, SEM o prefixo `data:` */
+  qrCodeBase64: string;
+  /** payload copia-e-cola do Pix */
+  copyPaste: string;
+  /** ISO 8601; `null` quando o provedor nao informa validade */
+  expiresAt: string | null;
+};
+
 /** Estado atual de uma cobranca, ja traduzido. */
 export type ChargeSnapshot = {
   chargeId: string;
@@ -98,6 +121,14 @@ export type ChargeSnapshot = {
 export interface PaymentProvider {
   /** Cria (e garante o cliente de) uma cobranca Pix, com QR Code pronto. */
   createPixCharge(params: CreatePixChargeParams): Promise<PixCharge>;
+  /**
+   * QR Code ATUAL de uma cobranca ja criada.
+   *
+   * Existe porque o QR EXPIRA e por isso nunca e persistido (secao 7.2): quem
+   * precisa dele busca na hora. `createPixCharge` ja devolve um na criacao;
+   * este metodo e para todas as vezes seguintes.
+   */
+  getPixQrCode(chargeId: string): Promise<PixQrCode>;
   /** Estado atual da cobranca no provedor — fonte da verdade do pagamento. */
   getCharge(chargeId: string): Promise<ChargeSnapshot>;
   /** Remove/cancela a cobranca no provedor. */

@@ -116,6 +116,25 @@ export function addDays(date: string, n: number): string {
 const LOCAL_TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
 export const todayLocal = () => LOCAL_TODAY.format(new Date());
 
+/**
+ * Instante ISO -> 'Sabado, 23 de agosto de 2026', no fuso do tenant.
+ *
+ * Diferente de `fullDateLabel`, que formata uma data de CALENDARIO
+ * ('YYYY-MM-DD') ancorada em UTC. Aqui a entrada e um INSTANTE, e o fuso tem de
+ * ser America/Sao_Paulo explicitamente: deixar o Intl usar o do aparelho faria
+ * um cliente viajando (ou com o fuso errado no celular) ler outro dia no
+ * comprovante do proprio passeio.
+ */
+const FULL_DATE_TIME = new Intl.DateTimeFormat('pt-BR', {
+  weekday: 'long',
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+  timeZone: 'America/Sao_Paulo',
+});
+export const fullDateFromInstant = (iso: string) =>
+  capitalize(FULL_DATE_TIME.format(new Date(iso)));
+
 /** 'HH:mm' em Sao Paulo a partir de um instante ISO. */
 const TIME = new Intl.DateTimeFormat('pt-BR', {
   hour: '2-digit',
