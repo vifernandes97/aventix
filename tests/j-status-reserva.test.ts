@@ -120,7 +120,31 @@ describe('J — status publico da reserva', () => {
     expect(body.durationMinutes).toBeGreaterThan(0);
   });
 
-  it('46. depois de o pagamento devido ser pago, responde confirmed e settled', async () => {
+  it('46. reserva `full` pendente: paymentMode acompanha o balanceCents cheio', async () => {
+    // ======================================================================
+    // A ARMADILHA QUE ESTE TESTE TRANCA
+    //
+    // Numa reserva `full` ainda nao paga, `balanceCents` vale o PRECO INTEIRO —
+    // e semanticamente correto, e o que falta pagar. Mas quem renderizar
+    // "restante a pagar no dia" a partir de `balanceCents > 0` vai dizer ao
+    // cliente do Quadri Club, onde as duas trilhas sao `full`, que ele deve
+    // dinheiro no ponto de encontro. A mentira nao aparece em teste de tela
+    // nenhum: aparece no passeio.
+    //
+    // Por isso `paymentMode` vem no payload e e ele, nunca o valor, que
+    // autoriza a tela a falar em saldo (secao 5.3).
+    // ======================================================================
+    const reservationId = await novaReserva();
+
+    const { body } = await callStatus(reservationId);
+
+    expect(body.paymentMode).toBe('full');
+    expect(body.amountPaidCents).toBe(0);
+    // O campo existe e e o total. Nao ha nada de errado com o NUMERO.
+    expect(body.balanceCents).toBeGreaterThan(0);
+  });
+
+  it('47. depois de o pagamento devido ser pago, responde confirmed e settled', async () => {
     const reservationId = await novaReserva();
     await pagarEConfirmar(reservationId);
 
@@ -134,14 +158,14 @@ describe('J — status publico da reserva', () => {
     expect(body.balanceCents).toBe(0);
   });
 
-  it('47. id inexistente responde 404', async () => {
+  it('48. id inexistente responde 404', async () => {
     const { status, body } = await callStatus('11111111-2222-4333-8444-555555555555');
 
     expect(status).toBe(404);
     expect(body.error).toBeDefined();
   });
 
-  it('48. uuid malformado responde 404, nunca 500', async () => {
+  it('49. uuid malformado responde 404, nunca 500', async () => {
     // Sem a guarda de formato, `WHERE id = 'nao-e-uuid'::uuid` ABORTA no
     // Postgres com 22P02 e a rota viraria 500 — e um id digitado errado nao e
     // erro de servidor.
@@ -155,7 +179,7 @@ describe('J — status publico da reserva', () => {
     expect(rows[0].n).toBe(0);
   });
 
-  it('49. reserva de OUTRO tenant responde 404, nao 403', async () => {
+  it('50. reserva de OUTRO tenant responde 404, nao 403', async () => {
     const reservationId = await novaReserva();
 
     // 403 aqui confirmaria a existencia do id para quem esta sondando; o
@@ -168,7 +192,7 @@ describe('J — status publico da reserva', () => {
     expect(status).toBe(404);
   });
 
-  it('50. o payload NAO carrega nenhum dado pessoal', async () => {
+  it('51. o payload NAO carrega nenhum dado pessoal', async () => {
     const reservationId = await novaReserva();
     const { text, body } = await callStatus(reservationId);
 
@@ -196,7 +220,7 @@ describe('J — status publico da reserva', () => {
     }
   });
 
-  it('51. toda resposta traz Cache-Control: no-store', async () => {
+  it('52. toda resposta traz Cache-Control: no-store', async () => {
     const reservationId = await novaReserva();
 
     // Inclusive o 404: resposta cacheada aqui condena o polling a repetir para

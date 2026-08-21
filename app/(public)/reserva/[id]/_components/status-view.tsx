@@ -36,6 +36,7 @@ type ReservationStatus = 'pending_payment' | 'confirmed' | 'cancelled' | 'expire
 /** Espelha o payload de GET /api/reservations/{id}/status. Sem dado pessoal. */
 type StatusPayload = {
   status: ReservationStatus;
+  paymentMode: 'full' | 'deposit';
   paymentState: 'pending' | 'paid' | 'cancelled' | 'refunded' | null;
   amountPaidCents: number;
   balanceCents: number;
@@ -624,9 +625,14 @@ function Confirmed({
           {status.amountPaidCents > 0 && (
             <Row term="Pago" value={moneyLabel(status.amountPaidCents)} />
           )}
-          {/* Saldo so aparece quando existe (modo sinal, secao 5.3). Nenhuma
-              experiencia do Quadri Club vende assim hoje. */}
-          {status.balanceCents > 0 && (
+          {/* >>> O GATE E `paymentMode`, NUNCA `balanceCents > 0`. <<<
+              So o modo `deposit` tem saldo a pagar presencialmente (secao 5.3).
+              Numa reserva `full` o `balanceCents` vale o preco inteiro enquanto
+              o pagamento nao cai — derivar dele diria ao cliente do Quadri Club
+              (onde as duas trilhas sao `full`) que ele deve dinheiro no dia, e a
+              mentira so apareceria no ponto de encontro. O `> 0` fica junto para
+              nao anunciar saldo de sinal ja quitado. */}
+          {status.paymentMode === 'deposit' && status.balanceCents > 0 && (
             <Row
               term="A pagar no dia"
               value={`${moneyLabel(status.balanceCents)} — direto com o guia`}

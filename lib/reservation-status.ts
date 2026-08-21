@@ -44,6 +44,17 @@ export type DuePaymentState = 'pending' | 'paid' | 'cancelled' | 'refunded';
 export type PublicReservationView = {
   status: PublicReservationStatus;
   /**
+   * Como a reserva foi VENDIDA (snapshot, secao 4.6). Nao e enfeite: e o unico
+   * campo que autoriza a tela a falar em saldo.
+   *
+   * `balanceCents` sozinho NAO serve para essa decisao. Numa reserva `full`
+   * ainda nao paga ele vale o preco inteiro — semanticamente certo ("o que
+   * falta pagar"), mas renderizar "restante no dia" a partir dele diria ao
+   * cliente do Quadri Club, onde as duas trilhas sao `full`, que ele deve
+   * dinheiro na hora do passeio. Mentira que so aparece no ponto de encontro.
+   */
+  paymentMode: 'full' | 'deposit';
+  /**
    * Estado da cobranca que DECIDE a reserva: `full` no modo integral, `deposit`
    * no modo sinal. O `balance` (saldo do dia) tem ciclo proprio e NUNCA muda o
    * status da reserva (secao 5.3) — por isso nao entra aqui.
@@ -54,7 +65,12 @@ export type PublicReservationView = {
    */
   paymentState: DuePaymentState | null;
   amountPaidCents: number;
-  /** max(0, total - pago). Nunca negativo. */
+  /**
+   * max(0, total - pago). Nunca negativo.
+   *
+   * >>> NAO DERIVE "ha saldo a pagar no dia" DAQUI. <<< Use `paymentMode`:
+   * so o modo `deposit` tem saldo presencial (secao 5.3). Ver a nota acima.
+   */
   balanceCents: number;
   /** ISO 8601 ou null. So faz sentido enquanto pending_payment. */
   holdExpiresAt: string | null;
@@ -106,6 +122,7 @@ const DUE_PAYMENT = sql`
 
 type StatusRow = {
   status: PublicReservationStatus;
+  payment_mode: 'full' | 'deposit';
   payment_state: DuePaymentState | null;
   amount_paid_cents: number;
   total_price_cents: number;
@@ -142,6 +159,7 @@ export async function getPublicReservationStatus(
   const { rows } = await db.execute<StatusRow>(sql`
     SELECT
       r.status::text          AS status,
+      r.payment_mode::text    AS payment_mode,
       (SELECT d.state::text FROM (${DUE_PAYMENT}) d) AS payment_state,
       r.amount_paid_cents     AS amount_paid_cents,
       r.total_price_cents     AS total_price_cents,
@@ -170,6 +188,7 @@ export async function getPublicReservationStatus(
 
   return {
     status: row.status,
+    paymentMode: row.payment_mode,
     paymentState: row.payment_state,
     amountPaidCents: row.amount_paid_cents,
     balanceCents: Math.max(0, row.total_price_cents - row.amount_paid_cents),
