@@ -121,7 +121,7 @@ job de reconciliação, seed) passam a iterar tenants.
 - **Timezone:** `America/Sao_Paulo` fixo. `timestamptz` (UTC) no banco; conversão só na grade e na exibição.
 - **Serialização de datas:** o schema usa `timestamp mode:'string'`, então o driver devolve o **texto cru do Postgres** (`2026-07-27 23:09:14.518994-03`): espaço no lugar do `T`, offset sem minutos, microssegundos. Toda função de `lib/` que devolva `timestamptz` para a camada de API converte para **ISO 8601** (`new Date(v).toISOString()`). O V8 tolera o formato cru, outros motores devolvem `NaN` — o sintoma aparece só no navegador do cliente. Colunas `date` (`birthdate`, `due_date`) já saem como `YYYY-MM-DD` e **não** passam por `new Date()`.
 - **Dinheiro:** inteiro em centavos. Nunca float. Nunca calcule preço no cliente. A conversão para a unidade do provedor de pagamento (reais com decimal) passa **só** por `lib/payments/money.ts`, que faz manipulação de string sobre o inteiro — `cents / 100` erra em alguns valores e o erro aparece na serialização, virando um centavo de diferença entre o que o banco diz e o que o cliente paga.
-- **Valores com `$` no `.env`:** o `@next/env` aplica expansão de variáveis, e valores contendo `$` chegam **vazios ou truncados** dentro do Next. Aspas simples **não** protegem — só o escape `\$` funciona. Afeta `ADMIN_PASSWORD_HASH` (bcrypt) e `ASAAS_API_KEY` (chaves Asaas começam com `$aact_`). O sintoma é sempre "autenticação inválida", nunca "variável mal formatada" — por isso todo módulo que lê chave crítica tem **fail-fast no boot** distinguindo "ausente" de "presente mas vazia". Medido: `dotenv` puro (scripts, testes) lê certo mesmo sem escape, o que faz o problema aparecer **só dentro do Next**. Vale igual no Easypanel, que injeta env em runtime. Detalhe do hash bcrypt na seção 13.
+- **Valores com `$` no `.env`:** o `@next/env` aplica expansão de variáveis, e valores contendo `$` chegam **vazios ou truncados** dentro do Next. Aspas simples **não** protegem — só o escape `\$` funciona. Afeta `ADMIN_PASSWORD_HASH` (bcrypt) e `ASAAS_API_KEY` (chaves Asaas começam com `$aact_`). O sintoma é sempre "autenticação inválida", nunca "variável mal formatada" — por isso todo módulo que lê chave crítica tem **fail-fast no boot** distinguindo "ausente" de "presente mas vazia". Medido: `dotenv` puro (scripts, testes) lê certo mesmo sem escape, o que faz o problema aparecer **só dentro do Next**. **A regra NÃO se estende ao Easypanel:** o editor de variáveis do painel passa o valor literalmente ao container, então escapar lá grava a contrabarra DENTRO do valor e quebra a autenticação — armadilha medida em 21/08, detalhada na seção 19. Detalhe do hash bcrypt na seção 13.
 - **Multi-tenant-ready:** `tenant_id NOT NULL DEFAULT 1` em toda tabela de negócio; toda query filtra por tenant.
 - **Labels/textos de UI** sempre de `settings`, nunca hardcode.
 - **Segredos** em `.env`. **IDs** de negócio: UUID. **Código em inglês, UI em português.**
@@ -583,7 +583,9 @@ Um único login (o dono). Sem provider externo.
 
 **Armadilha do `$` no ambiente:** o hash bcrypt contém três `$` e o carregador de ambiente do Next expande variáveis. **Escape cada cifrão com `\`** (`ADMIN_PASSWORD_HASH=\$2b\$12\$...`) — medido: aspas simples e duplas **não** protegem, e o `dotenv` puro dos scripts lê certo mesmo sem escape, então o erro só aparece dentro do Next, com cara de "senha errada".
 
-**A expansão não é exclusiva do arquivo `.env`.** Medido: uma variável exportada no ambiente do processo, com os 60 caracteres confirmados em Node puro, chega ao `lib/auth.ts` com **52** dentro do Next; com os cifrões escapados, o login passa. Consequência operacional para o go-live: **no Easypanel, que injeta env em runtime, o hash vai escapado igual**, e o sintoma de esquecer é o painel respondendo "senha errada" com a senha certa.
+**A expansão não é exclusiva do arquivo `.env`.** Medido: uma variável exportada no ambiente do processo, com os 60 caracteres confirmados em Node puro, chega ao `lib/auth.ts` com **52** dentro do Next; com os cifrões escapados, o login passa.
+
+**>>> MAS O EASYPANEL É O CASO OPOSTO, E CONFUNDIR OS DOIS DERRUBOU PRODUÇÃO EM 21/08. <<<** O editor de variáveis do painel **não** expande e **não** escapa: ele entrega o valor literal ao container. Hash escapado lá vira um hash com contrabarra dentro, de 63 caracteres, e o fail-fast do boot acusa comprimento errado. A regra completa, com sintoma e diagnóstico, está na **seção 19** — leia antes de mexer em variável de ambiente em produção.
 
 **Fail-fast:** `instrumentation.ts` valida a configuração no boot do servidor e loga o que falta. Avisa e segue, não derruba o processo: o site público de reservas não depende de auth, e tirar a venda do ar por causa de variável do painel seria trocar um problema por outro pior. A validação é preguiçosa em `lib/auth.ts` (não no import) porque o Easypanel injeta env em runtime, e validar no import quebraria o `next build` dentro do Docker.
 
@@ -780,6 +782,59 @@ Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **ante
 5. Conexão nova mostra zero → o `psql -f` colado enganou. Cai para o padrão seguro: `psql -c` **linha a linha, uma statement por comando**, autocommit implícito. Verboso, mas garantido.
 
 **Caminho permanente (pós go-live, não agora):** uma rota `POST /api/admin/seed`, protegida por sessão, chamando a função de seed do próprio código Next — mesma lógica da migration-no-boot (seção 12), o `drizzle-orm` já bundlado. Elimina de vez a necessidade de SQL manual em produção. Registrar como tarefa pós go-live.
+
+**O escape `\$` vale para o `.env` local e NÃO vale para o Easypanel (medido em 21/08/2026).**
+
+Esta é a inversão que derrubou produção: os dois fail-fast do boot dispararam
+porque `ADMIN_PASSWORD_HASH` e `ASAAS_API_KEY` chegaram ao container com a
+**contrabarra literal dentro do valor**. A regra correta tem dois lados opostos,
+e generalizar um para o outro quebra nas duas direções:
+
+| Onde | Comportamento | O que escrever |
+|---|---|---|
+| Arquivo `.env` local | O carregador do Next (`@next/env`) **expande** `$`, inclusive dentro de aspas simples. Só o escape protege. | `ADMIN_PASSWORD_HASH=\$2b\$12\$...` |
+| Editor de variáveis do Easypanel | **Não expande e não escapa.** O painel passa o valor literalmente ao container. | `ADMIN_PASSWORD_HASH=$2b$12$...` (cru, sem contrabarra) |
+
+Afeta as duas chaves cujo valor começa ou contém `$`: o hash bcrypt do admin
+(três cifrões) e a chave do Asaas (`$aact_...`).
+
+**Sintoma quando erra:** o fail-fast do boot acusa **comprimento errado**, nunca
+"variável mal formatada". O bcrypt tem 60 caracteres e chega com **63** — uma
+contrabarra por cifrão do hash; a chave do Asaas "não começa com `$aact_`",
+porque começa com `\`.
+
+**Diagnóstico, no console do container:**
+
+```
+printf '%s' "$ADMIN_PASSWORD_HASH" | cut -c1-4
+```
+
+Se vier contrabarra, é isto. Não é senha errada, não é variável ausente.
+
+**Armadilha adicional do painel:** alguns editores do Easypanel **reescrevem
+sozinhos** um valor iniciado por `$` para `\$` ao salvar. Depois de salvar,
+**REABRA o campo e confira antes de fechar o modal** — o valor que você digitou
+não é necessariamente o que ficou gravado.
+
+**Custo real, e por que ele é surdo:** com isso quebrado, o painel admin não
+autentica e nenhuma reserva se completa em produção — mas **o site público
+continua no ar vendendo**. Do ponto de vista do cliente não há erro nenhum: ele
+preenche, paga, e a cobrança não é criada. A falha só aparece quando alguém tenta
+entrar no admin, ou quando o dinheiro não chega.
+
+**Settings têm duas casas, e a definitiva é o template (descoberto em 21/08/2026).**
+
+`seedTenant()` **sobrescreve** toda linha de `settings` cujo valor divirja de
+`lib/templates/quadriciclo.ts` (`lib/seed.ts`: se existe e difere, faz UPDATE).
+Um valor digitado direto no Postgres de produção sobrevive aos deploys — o boot
+só roda `migrate`, não semeia —, mas **some no dia em que alguém rodar o seed**,
+inclusive pela futura rota `POST /api/admin/seed`. Sem erro, sem log, e ninguém
+vai associar o sumiço ao seed que rodou por outro motivo.
+
+**Regra:** ao semear uma setting à mão em produção, escreva **também** no
+template. O banco é onde o valor passa a valer agora; o template é onde ele
+sobrevive. Descoberto ao adicionar `support_whatsapp`, que nasceu vazia
+justamente porque o número ainda não existe.
 
 **Domínio novo no mesmo serviço herda `https://` no destino interno, quebra com 500.**
 Ao adicionar um host extra na aba Domains de um serviço já existente, o campo de

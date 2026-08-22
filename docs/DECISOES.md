@@ -6,6 +6,42 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-22 — Duplicação da regra de precedência mantida deliberadamente
+
+`lib/calendar.ts:getDayGrid` reimplementa a mesma regra do passo 1 de
+`lib/availability.ts`: exceção de agenda tem precedência sobre `operating_hours`
+(seção 6). São duas cópias da mesma lógica, uma governando o que o motor VENDE e
+outra o que o calendário DESENHA. O comentário no próprio `getDayGrid` já
+registrava a dívida e dizia onde ela deveria ser paga — "quando o CRUD de
+horários da Fase 3 entrar e um terceiro consumidor aparecer". O CRUD entrou hoje.
+A dívida **fica**.
+
+**Por que não unificar agora:** unificar significa mexer em `availability.ts`,
+que é o motor de venda, a dois dias do go-live. A assimetria de risco decide
+sozinha: o modo de falha de manter as duas cópias é a grade DESENHADA divergir da
+grade VENDIDA — tela mentindo, nas duas direções, sem overbooking, porque a trava
+real é a exclusion constraint e a vaga vendida é congelada em
+`reservation_resources.period`. O modo de falha de refatorar o motor às pressas é
+não vender, ou vender errado. Trocar risco de UI por risco de receita na véspera
+não se paga.
+
+**O que foi feito no lugar:** a tela nova de exceções **consome** `getDayGrid` e
+`getWeeklyGrid` para montar o contraste "hoje × com a exceção", em vez de
+reimplementar a precedência pela quarta vez. O CRUD apenas escreve as linhas; a
+regra continua morando nos dois lugares que já existiam, e não em três.
+
+**Alternativa descartada:** extrair a precedência para um helper único e fazer
+`availability.ts` e `getDayGrid` passarem a consumi-lo, antes do go-live.
+Descartada pelo motivo acima — é a mudança certa, no momento errado.
+
+**Consequência assumida:** as duas cópias precisam andar juntas até lá. Quem
+mexer na precedência de um lado tem que mexer do outro, e a fonte da verdade em
+caso de divergência é `availability.ts`, porque é ela que decide a venda.
+
+**Reabrir quando:** primeira semana pós go-live, ou antes disso se um quarto
+consumidor da regra aparecer — o quarto é o sinal de que o custo de manter
+cópias sincronizadas passou o custo de extrair.
+
 ## 2026-08-20 — Etapa 1 da migração de URL adiada; só a metade de infra entra antes do go-live
 
 A decisão de 19/08 priorizou a Etapa 1 (mover a LP para
