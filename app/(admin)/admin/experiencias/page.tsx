@@ -7,11 +7,10 @@
 //
 // O proxy.ts ja barrou quem nao tem sessao antes de chegar aqui.
 
-import Link from 'next/link';
-
 import { listExperiences } from '@/lib/experiences';
 import { getSettings } from '@/lib/tenant';
 
+import { AdminNav } from '../_components/admin-nav';
 import { ExperienceManager } from './_components/experience-manager';
 
 // Catalogo muda quando o dono edita, e `router.refresh()` depois de cada
@@ -23,17 +22,16 @@ export default async function AdminExperiencesPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 sm:p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Experiências</h1>
-          {/* Regra de marca (rev 5): a UI exibe a marca do TENANT, nunca "Aventix". */}
-          <p className="text-xs text-neutral-500">{settings.business_name}</p>
-        </div>
-
-        <Link href="/admin" className="rounded border px-3 py-1.5 text-sm">
-          Voltar para a agenda
-        </Link>
+      <header>
+        <h1 className="text-lg font-semibold">Experiências</h1>
+        {/* Regra de marca (rev 5): a UI exibe a marca do TENANT, nunca "Aventix". */}
+        <p className="text-xs text-neutral-500">{settings.business_name}</p>
       </header>
+
+      {/* Substitui o "Voltar para a agenda" solto: ate 22/08 esta pagina nao
+          tinha link de ENTRADA nenhum, so de saida — so se chegava nela
+          digitando a URL. */}
+      <AdminNav current="experiencias" />
 
       <ExperienceManager experiences={experiences} />
     </main>

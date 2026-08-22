@@ -37,6 +37,7 @@ import {
 import { getSettings } from '@/lib/tenant';
 import { isValidCalendarDate, todayLocalDate } from '@/lib/time';
 
+import { AdminNav } from './_components/admin-nav';
 import { Calendar } from './_components/calendar';
 import { dayMonthLabel, fullDateLabel, monthYearLabel } from './_components/shared';
 
@@ -93,6 +94,8 @@ export default async function AdminCalendarPage({ searchParams }: { searchParams
           </button>
         </form>
       </header>
+
+      <AdminNav current="agenda" />
 
       <Calendar
         view={view}
