@@ -6,6 +6,102 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-23 — Etapa 1 usa `[slug]` dinâmico com guarda, não pasta literal
+
+A seção 2-B mandava a Etapa 1 pôr a LP na pasta **literal**
+`app/(public)/agendamento/quadriclub/`, com o argumento de que um slug
+desconhecido responderia 404 de graça, enquanto `[slug]` sem guarda serviria a
+página do Quadri Club para qualquer endereço. Fizemos `[slug]` dinâmico.
+
+**O argumento antigo está certo na segunda metade, e é ela que decide.** O
+problema do `[slug]` nunca foi o `[slug]`: era o "sem guarda". Com
+`findTenantBySlug()` + `notFound()`, o slug desconhecido dá exatamente o mesmo
+404, e o dinâmico entrega o que o literal não entrega — o slug deixa de ser
+**decorativo** e passa a resolver o tenant de verdade, no banco. A pasta literal
+teria reservado o formato da URL sem construir nada da multi-tenancy; seria
+trabalho de mudança de endereço pago duas vezes.
+
+**Alternativa descartada:** pasta literal agora, `[slug]` na Etapa 2. Descartada
+porque as duas mudanças mexem no mesmo arquivo e no mesmo teste, e fazer o
+movimento de endereço duas vezes é a única parte disto que tem risco real (link
+divulgado, histórico do git, rota de build).
+
+**Reabrir quando:** nunca, provavelmente. Se reabrir, é para tirar a guarda —
+e aí é porque a Etapa 2 entrou e ela virou desnecessária.
+
+## 2026-08-23 — A raiz do app é o login, e não redireciona para agendamento
+
+`app.aventix.com.br/` responde 307 para `/admin/login`. Não serve a LP, e
+**não** redireciona para `/agendamento/quadriclub`.
+
+**Por que não redirecionar para a LP do Quadri Club:** é o mesmo erro de
+"a raiz é do primeiro cliente", só que escondido atrás de um redirect — e
+escondido é pior, porque some da árvore de rotas e só aparece no dia do segundo
+cliente, quando já existe gente com o endereço salvo. Quem chega na raiz sem
+contexto é o dono (ou o dev); o cliente final chega pelo link do ManyChat, que
+aponta direto para a LP.
+
+**Custo assumido:** zero hoje, e o contexto é o que torna a decisão barata — o
+fluxo do ManyChat ainda não foi configurado, então não existe link em produção
+apontando para a raiz. Fazer isto depois custaria coordenar com material já
+divulgado.
+
+**307, nunca 308** (regra 1 da seção 2-B). Medido na origem: `redirect()` do App
+Router emite digest `NEXT_REDIRECT;replace;/admin/login;307;`, e o
+`prerender-manifest` do build grava `"status": 307` — o 307 sobrevive à
+prerenderização estática, que é como o Easypanel serve a raiz.
+`permanentRedirect()` emitiria 308 e ficaria cacheado no navegador praticamente
+para sempre, sequestrando a raiz quando o site comercial nascer.
+
+## 2026-08-23 — O slug mora em lib/seed.ts, não no template de segmento
+
+`SEED_TENANT_SLUG = 'quadriclub'` fica ao lado de `SEED_TENANT_ID` e
+`SEED_TENANT_NAME`. A instrução original mandava pôr em
+`lib/templates/quadriciclo.ts`, invocando a "regra das duas casas" (seção 19).
+
+**O template é dado de SEGMENTO; o slug é identidade de TENANT.** `quadriciclo`
+descreve um ramo de negócio e existe para ser reaplicado — o segundo, o terceiro
+e o décimo cliente de passeio de quadriciclo recebem o mesmo template, cada um
+com o seu slug. Gravar `'quadriclub'` lá dentro amarraria o segmento a um tenant
+e destruiria a razão de o template existir, justamente na véspera de o produto
+começar a procurar o cliente 2.
+
+**A regra das duas casas não se aplica aqui.** Ela existe porque `seedTenant()`
+**sobrescreve** toda `settings` cujo valor divirja do template, e um valor
+digitado à mão no banco sumiria no seed seguinte. A linha de `tenants` não é
+sobrescrita: o seed só a **insere** quando ausente. Não há segunda casa para
+manter em dia.
+
+**Consequência que virou regra:** o seed nunca reescreve slug de tenant
+existente, e é deliberado — slug é endereço público, e um seed que o mudasse
+alteraria a URL divulgada ao cliente sem ninguém pedir. Renomear slug é
+migration.
+
+## 2026-08-23 — A barreira da Etapa 2 testa a divergência, não conta linhas
+
+A Etapa 1 abriu uma janela: a URL resolve tenant por slug, `getTenantId()` ainda
+devolve 1 fixo. Com dois tenants isso serve dados do cliente 1 sob a marca do
+cliente 2, sem erro nenhum aparecendo. A barreira contra isso é
+`assertResolvedTenantIsCurrent()` (lança) mais o grupo O de testes.
+
+**Descartada:** um teste que conta linhas em `tenants` e falha se houver mais de
+uma. Ele depende de rodar **depois** dos cinco arquivos que criam tenant vizinho
+para provar isolamento (J..N) — ou seja, depende de ordem alfabética de arquivo.
+Uma barreira que some quando alguém renomeia um teste, e some em silêncio, é a
+mesma categoria de falha que ela existe para impedir.
+
+**O que foi feito:** a barreira cria um segundo tenant de verdade e prova que a
+LP dele **se recusa a renderizar** — a divergência em si, no componente de página
+real, independente de ordem e de paralelismo. O tripwire de catálogo continua
+existindo como complemento (pega quem acrescentar um tenant ao seed), mas
+distingue fixture de tenant real pelo **prefixo do slug**
+(`tenant-vizinho-`), não por ordem.
+
+**Critério de conclusão da Etapa 2:** `assertResolvedTenantIsCurrent()` e
+`tests/o-barreira-multi-tenant.test.ts` devem ser **apagados** no commit que
+fizer `getTenantId()` resolver o tenant da requisição. Poder apagá-los é como se
+sabe que a Etapa 2 terminou.
+
 ## 2026-08-22 — Duplicação da regra de precedência mantida deliberadamente
 
 `lib/calendar.ts:getDayGrid` reimplementa a mesma regra do passo 1 de

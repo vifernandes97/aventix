@@ -69,6 +69,11 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 
 ## 2-B. Topologia de URL
 
+> **Revisão de 23/08 (branch `feat/tenant-slug`, experimental).** A Etapa 1 foi
+> feita, e feita **diferente** do que esta seção previa. O texto abaixo substitui
+> a versão que mandava usar pasta literal `quadriclub`; o porquê da mudança está
+> em `docs/DECISOES.md`.
+
 **Estado final pretendido:**
 
 | Host | Serve |
@@ -78,41 +83,72 @@ O **Postgres é a única fonte da verdade** sobre disponibilidade e sobre o esta
 
 **Endereços na plataforma:**
 
+- `app.aventix.com.br/` — **LOGIN da plataforma** (307 para `/admin/login`).
+  A raiz **não pertence a tenant nenhum** e **nunca** redireciona para
+  agendamento: mandar a raiz para a LP de um cliente específico é o mesmo erro
+  escondido atrás de um redirect, e só apareceria no dia do segundo cliente.
 - `app.aventix.com.br/agendamento/{slug}` — LP pública do tenant. Slug do
   Quadri Club: `quadriclub`.
-- `app.aventix.com.br/agendamento/{slug}/reserva/{id}` — QR + polling.
+- `app.aventix.com.br/reserva/{id}` — QR + polling. **Fica na raiz, fora do
+  slug**, e é deliberado: o uuid já é credencial única e global, o endereço não
+  é divulgado (o cliente chega por `router.replace` vindo do wizard), e movê-lo
+  não compraria nada além de risco.
 - `app.aventix.com.br/admin` — painel.
 - `app.aventix.com.br/api/*` — API. **Não recebe prefixo de slug**, em nenhuma
   etapa. Tenant se resolve por corpo/sessão, nunca por segmento de URL aqui.
 
-**Estado em 20/08 (pré go-live):** só a metade de INFRA está feita — os dois
-hosts servem o MESMO serviço, sem redirect entre si, e a LP continua na raiz.
-`app.aventix.com.br/` é a URL que o cliente divulga no ManyChat.
+**Etapa 1 — FEITA em 23/08 (metade estrutural).** A LP vive em
+`app/(public)/agendamento/[slug]/page.tsx`, `tenants` ganhou coluna `slug`
+(migration 0004, `NOT NULL UNIQUE`), e a página **resolve o tenant no banco**:
+`findTenantBySlug()` + `notFound()` para slug desconhecido.
 
-**Etapa 1, código (pós go-live):** a LP vai para a pasta LITERAL
-`app/(public)/agendamento/quadriclub/`, **não** `[slug]` dinâmico — com pasta
-literal um slug desconhecido responde 404 de graça; com `[slug]` sem guarda,
-qualquer slug serviria a página do Quadri Club. `getTenantId()` continua
-retornando `1`: o slug é **decorativo**, só reserva o formato.
+`[slug]` dinâmico, **não** pasta literal. O argumento antigo a favor da pasta
+literal — "slug desconhecido responde 404 de graça; `[slug]` sem guarda serviria
+o Quadri Club para qualquer coisa" — está certo **na segunda metade**, e é a
+guarda que o resolve. Com ela, `[slug]` dá o mesmo 404 e ainda entrega o que a
+pasta literal não entrega: o slug deixa de ser **decorativo** e passa a resolver
+o tenant de verdade, que é o ponto da etapa.
 
-**Etapa 2 (depois da 1):** pasta vira `[slug]`, `tenants` ganha coluna `slug`,
-`getTenantId()` resolve do segmento, e os fluxos SEM requisição (cron de hold,
-job de reconciliação, seed) passam a iterar tenants.
+**Etapa 2 — NÃO FEITA. É onde mora o risco.** `getTenantId()` (`lib/tenant.ts`)
+continua devolvendo `1` fixo, e é ele que governa **todas** as consultas de
+negócio. Com um tenant só, URL e sistema concordam. Com dois, divergem em
+silêncio: `/agendamento/{slug-do-cliente-2}` renderiza a página certa e serve,
+por baixo, o catálogo, os horários e as reservas do Quadri Club — sem exceção,
+sem log, sem nada quebrado na tela.
+
+A Etapa 2 é: `getTenantId()` resolvendo o tenant da requisição, e os fluxos **sem
+requisição** ganhando caminho próprio — `lib/jobs/expire-holds.ts` (cron de 1 min)
+é o único que chama `getTenantId()` sem HTTP e precisa passar a iterar tenants.
+(`reconcile-payments.ts` não usa tenant; os dois scripts de seed declaram o id
+localmente.)
+
+**Barreira enquanto a Etapa 2 não vem:**
+`lib/tenant-slug.ts` → `assertResolvedTenantIsCurrent()` **lança** se a URL
+resolver um tenant diferente do que `getTenantId()` devolve, e a LP se recusa a
+renderizar. Provado em `tests/o-barreira-multi-tenant.test.ts`.
+**Poder APAGAR essa função é o critério de conclusão da Etapa 2** — enquanto ela
+precisar existir, a Etapa 2 não terminou.
 
 **Regras invioláveis desta topologia:**
 
 1. **Nenhum redirect é permanente.** `permanent: false` (307). Um 308 fica
    cacheado no navegador praticamente para sempre e sequestra o endereço quando
-   o site comercial nascer.
+   o site comercial nascer. Vale para o redirect da raiz: use `redirect()`
+   (emite 307), **nunca** `permanentRedirect()`.
 2. **O redirect de host do apex exclui `/api/`** (`source: '/:path((?!api/).*)'`).
    O Asaas não segue redirect — ver seção 8.1. Relaxar esse regex derruba a fila
-   do webhook.
+   do webhook. (Esse redirect **ainda não existe**; é pós go-live.)
 3. **O redirect de host mora em `next.config.ts`, não em `proxy.ts`.** O
    `proxy.ts` é a barreira de autenticação (seção 13) e seu `matcher` fica
    escopado em `/admin` e `/api/admin`; alargá-lo por motivo de roteamento
    mistura duas responsabilidades e põe o login em risco por uma mudança de URL.
 4. **A URL de produção do webhook é `https://app.aventix.com.br/api/webhooks/asaas`**,
    exata, sem barra final. Substitui a URL antiga no apex.
+5. **O slug é ENDEREÇO, não rótulo.** `UNIQUE` no banco, e o seed **nunca** o
+   reescreve — só insere quando o tenant não existe. Renomear slug é migration,
+   não seed. A casa canônica é `SEED_TENANT_SLUG` em `lib/seed.ts`, junto de
+   `SEED_TENANT_ID` e `SEED_TENANT_NAME`; **não** vai no template, que é dado de
+   *segmento* e precisa ser reutilizável pelo próximo cliente do mesmo ramo.
 
 ---
 
@@ -669,8 +705,9 @@ Um único login (o dono). Sem provider externo.
 ```
 /app
   /(public)
-    /page.tsx                         # experiencia → nº recursos → horario → participantes+doc → TERMO → pagamento (sinal ou integral)
-    /reserva/[id]/page.tsx            # QR + polling
+    /page.tsx                         # RAIZ = login da plataforma (307 -> /admin/login). NAO pertence a tenant, NAO leva a agendamento
+    /agendamento/[slug]/page.tsx      # LP do tenant: experiencia → nº recursos → horario → participantes+doc → TERMO → pagamento
+    /reserva/[id]/page.tsx            # QR + polling. FICA NA RAIZ, fora do slug (secao 2-B)
     /agenda/[token]/page.tsx          # agenda compartilhada (sem dados pessoais nem financeiros)
   /(admin)
     /admin/login/page.tsx
@@ -701,7 +738,8 @@ Um único login (o dono). Sem provider externo.
 /lib
   /db/schema.ts
   /db/client.ts
-  /tenant.ts                          # tenant atual + settings cacheadas (SERVER-ONLY)
+  /tenant.ts                          # tenant atual + settings cacheadas (SERVER-ONLY). getTenantId() = 1 FIXO (Etapa 2 pendente)
+  /tenant-slug.ts                     # resolve o tenant pelo slug da URL + barreira da Etapa 2 (SERVER-ONLY). APAGAR quando a Etapa 2 entrar
   /reservations.ts                    # find-or-create, criacao transacional, setReservationStatus, recalcReservationPayment
   /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
   /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
