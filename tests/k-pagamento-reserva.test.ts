@@ -23,7 +23,9 @@ import {
   EXP,
   VALID_CPF,
   assertCatalogSeeded,
+  insertFixtureTenant,
   nextSaturday,
+  removeFixtureTenant,
   reservationInput,
   wipeMovement,
 } from './helpers/db';
@@ -107,15 +109,12 @@ async function comCobranca(reservationId: string): Promise<string> {
 
 beforeAll(async () => {
   await assertCatalogSeeded();
-  await db.execute(sql`
-    INSERT INTO tenants (id, name) VALUES (${OTHER_TENANT_ID}, 'Tenant Vizinho K')
-    ON CONFLICT (id) DO NOTHING
-  `);
+  await insertFixtureTenant(OTHER_TENANT_ID, 'k');
 });
 
 afterAll(async () => {
   await wipeMovement();
-  await db.execute(sql`DELETE FROM tenants WHERE id = ${OTHER_TENANT_ID}`);
+  await removeFixtureTenant(OTHER_TENANT_ID);
 });
 
 beforeEach(async () => {

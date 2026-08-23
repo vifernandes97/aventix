@@ -35,6 +35,34 @@ const DEFAULT_TENANT_ID = 1;
  * Quando o tenant passar a vir do dominio (aventix.com.br vs. dominio proprio)
  * ou da sessao do admin, a resolucao entra AQUI e mais nada no codebase muda —
  * desde que ninguem tenha escrito `tenant_id = 1` a mao em outro lugar.
+ *
+ * ==========================================================================
+ * >>> ATENCAO — A URL JA RESOLVE TENANT POR SLUG; ESTA FUNCAO AINDA NAO. <<<
+ *
+ * Desde a Etapa 1 (23/08), `/agendamento/{slug}` consulta `tenants.slug` e
+ * devolve 404 para slug desconhecido: a URL e multi-tenant DE VERDADE. Esta
+ * funcao continua devolvendo 1 fixo, e e ela que governa TODAS as consultas de
+ * negocio — catalogo, settings, disponibilidade, reservas, calendario.
+ *
+ * Com um tenant so, os dois concordam. Com dois, divergem em silencio: a URL do
+ * tenant 2 renderiza a pagina certa e por baixo serve os dados do tenant 1.
+ * Nenhuma excecao, nenhum log — so o cliente errado vendo o catalogo do outro.
+ *
+ * Barreira que impede isso de nascer:
+ *   - lib/tenant-slug.ts -> assertResolvedTenantIsCurrent()
+ *   - tests/o-barreira-multi-tenant.test.ts
+ *
+ * A ETAPA 2 E AQUI. Quando esta funcao resolver o tenant da requisicao, a
+ * divergencia deixa de ser possivel e aquela guarda pode ser APAGADA — poder
+ * apaga-la e o criterio de conclusao da Etapa 2.
+ *
+ * Um chamador roda SEM requisicao HTTP e nao tem slug de onde resolver:
+ * lib/jobs/expire-holds.ts (cron de 1 min). A Etapa 2 tem que dar a ele um
+ * caminho proprio — iterar tenants — em vez de herdar um default silencioso.
+ * (lib/jobs/reconcile-payments.ts nao usa tenant; scripts/seed.ts e
+ * scripts/seed-demo-reservations.ts declaram o id localmente e nao passam por
+ * aqui.)
+ * ==========================================================================
  */
 export function getTenantId(): number {
   return DEFAULT_TENANT_ID;

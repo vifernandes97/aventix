@@ -79,6 +79,17 @@ export const reservationPaymentState = pgEnum('reservation_payment_state', [
 export const tenants = pgTable('tenants', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // "Quadri Club"
+  // Segmento da URL publica: /agendamento/{slug} (secao 2-B).
+  //
+  // UNIQUE porque e ENDERECO, nao rotulo: dois tenants com o mesmo slug fazem a
+  // LP de um servir o outro, e o banco e o unico lugar que consegue garantir
+  // isso sob concorrencia. NOT NULL porque tenant sem slug e tenant sem LP —
+  // um estado que nao existe no produto.
+  //
+  // >>> A URL JA RESOLVE POR SLUG; getTenantId() AINDA NAO. <<<
+  // Ver o comentario de Etapa 2 em lib/tenant.ts e a barreira em
+  // tests/o-barreira-multi-tenant.test.ts antes de inserir um segundo tenant.
+  slug: text('slug').notNull().unique(),
   createdAt: tstz('created_at').notNull().defaultNow(),
 });
 

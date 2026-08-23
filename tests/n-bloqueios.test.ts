@@ -14,7 +14,14 @@ import { listActiveResources } from '@/lib/resources';
 import { GET as listRoute, POST as createRoute } from '@/app/api/admin/blackouts/route';
 import { DELETE as deleteRoute, PUT as putRoute } from '@/app/api/admin/blackouts/[id]/route';
 
-import { EXP, assertCatalogSeeded, nextSaturday, wipeMovement } from './helpers/db';
+import {
+  EXP,
+  assertCatalogSeeded,
+  insertFixtureTenant,
+  nextSaturday,
+  removeFixtureTenant,
+  wipeMovement,
+} from './helpers/db';
 
 const SAT = nextSaturday();
 const OTHER_TENANT_ID = 81;
@@ -62,15 +69,12 @@ const MANHA = { inicio: `${SAT}T08:00`, fim: `${SAT}T12:00` };
 
 beforeAll(async () => {
   await assertCatalogSeeded();
-  await db.execute(sql`
-    INSERT INTO tenants (id, name) VALUES (${OTHER_TENANT_ID}, 'Tenant Vizinho N')
-    ON CONFLICT (id) DO NOTHING
-  `);
+  await insertFixtureTenant(OTHER_TENANT_ID, 'n');
 });
 
 afterAll(async () => {
   await wipeMovement();
-  await db.execute(sql`DELETE FROM tenants WHERE id = ${OTHER_TENANT_ID}`);
+  await removeFixtureTenant(OTHER_TENANT_ID);
 });
 
 beforeEach(wipeMovement);

@@ -20,7 +20,15 @@ import {
   PUT as putRoute,
 } from '@/app/api/admin/operating-hours/[id]/route';
 
-import { EXP, assertCatalogSeeded, nextSaturday, nextTuesday, wipeMovement } from './helpers/db';
+import {
+  EXP,
+  assertCatalogSeeded,
+  insertFixtureTenant,
+  nextSaturday,
+  nextTuesday,
+  removeFixtureTenant,
+  wipeMovement,
+} from './helpers/db';
 
 const SAT = nextSaturday();
 const TUE = nextTuesday();
@@ -81,17 +89,14 @@ async function restaurarGradeDoSeed() {
 beforeAll(async () => {
   await assertCatalogSeeded();
   await wipeMovement();
-  await db.execute(sql`
-    INSERT INTO tenants (id, name) VALUES (${OTHER_TENANT_ID}, 'Tenant Vizinho M')
-    ON CONFLICT (id) DO NOTHING
-  `);
+  await insertFixtureTenant(OTHER_TENANT_ID, 'm');
 });
 
 afterEach(restaurarGradeDoSeed);
 
 afterAll(async () => {
   await restaurarGradeDoSeed();
-  await db.execute(sql`DELETE FROM tenants WHERE id = ${OTHER_TENANT_ID}`);
+  await removeFixtureTenant(OTHER_TENANT_ID);
 });
 
 describe('M — grade semanal: escrita', () => {

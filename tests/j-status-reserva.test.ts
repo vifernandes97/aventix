@@ -27,7 +27,9 @@ import {
   EXP,
   VALID_CPF,
   assertCatalogSeeded,
+  insertFixtureTenant,
   nextSaturday,
+  removeFixtureTenant,
   reservationInput,
   wipeMovement,
 } from './helpers/db';
@@ -76,16 +78,13 @@ async function pagarEConfirmar(reservationId: string): Promise<void> {
 
 beforeAll(async () => {
   await assertCatalogSeeded();
-  await db.execute(sql`
-    INSERT INTO tenants (id, name) VALUES (${OTHER_TENANT_ID}, 'Tenant Vizinho')
-    ON CONFLICT (id) DO NOTHING
-  `);
+  await insertFixtureTenant(OTHER_TENANT_ID, 'j');
 });
 
 // O tenant extra nao e catalogo semeado: sai junto com o movimento no fim.
 afterAll(async () => {
   await wipeMovement();
-  await db.execute(sql`DELETE FROM tenants WHERE id = ${OTHER_TENANT_ID}`);
+  await removeFixtureTenant(OTHER_TENANT_ID);
 });
 
 beforeEach(wipeMovement);

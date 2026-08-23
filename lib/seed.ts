@@ -38,6 +38,26 @@ import type { SegmentTemplate } from './templates/types';
 export const SEED_TENANT_ID = 1;
 export const SEED_TENANT_NAME = 'Quadri Club';
 
+/**
+ * Segmento da URL publica do tenant: /agendamento/quadriclub (secao 2-B).
+ *
+ * >>> POR QUE AQUI, E NAO EM lib/templates/quadriciclo.ts <<<
+ * O slug e identidade de TENANT; o template e dado de SEGMENTO. `quadriciclo` e
+ * um segmento reutilizavel — o segundo, o terceiro e o decimo cliente de passeio
+ * de quadriciclo recebem o MESMO template, cada um com o SEU slug. Gravar
+ * 'quadriclub' dentro do template amarraria o segmento a um tenant e destruiria
+ * a razao de o template existir.
+ *
+ * Por isso ele mora ao lado de SEED_TENANT_ID e SEED_TENANT_NAME, que sao a
+ * mesma categoria de dado: quem e este tenant, nao o que ele vende.
+ *
+ * A "regra das duas casas" (secao 19) NAO se aplica: ela existe porque
+ * seedTenant() SOBRESCREVE settings divergentes, e um valor digitado a mao no
+ * banco sumiria no seed seguinte. A linha de `tenants` nao e sobrescrita — o
+ * seed so a INSERE quando ausente (ver abaixo).
+ */
+export const SEED_TENANT_SLUG = 'quadriclub';
+
 export type Tally = { created: number; updated: number; unchanged: number };
 const tally = (): Tally => ({ created: 0, updated: 0, unchanged: 0 });
 
@@ -78,9 +98,16 @@ export async function seedTenant(
     // -- tenant --------------------------------------------------------------
     const [existingTenant] = await tx.select().from(tenants).where(eq(tenants.id, SEED_TENANT_ID));
     if (!existingTenant) {
-      await tx.insert(tenants).values({ id: SEED_TENANT_ID, name: SEED_TENANT_NAME });
+      await tx
+        .insert(tenants)
+        .values({ id: SEED_TENANT_ID, name: SEED_TENANT_NAME, slug: SEED_TENANT_SLUG });
       report.tenantCreated = true;
     }
+    // NAO ha `else` que atualize o slug de um tenant existente, e e deliberado:
+    // o slug e ENDERECO PUBLICO. Um seed que o reescrevesse mudaria a URL
+    // divulgada ao cliente final sem ninguem pedir — o oposto do que o seed faz
+    // com settings, onde o template e a fonte da verdade justamente porque
+    // aqueles valores sao texto de UI. Renomear slug e migration, nao seed.
 
     // -- settings ------------------------------------------------------------
     // Chave natural existe no schema: PK (tenant_id, key). Upsert direto.

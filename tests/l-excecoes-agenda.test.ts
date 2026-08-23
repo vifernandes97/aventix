@@ -26,8 +26,10 @@ import {
 import {
   EXP,
   assertCatalogSeeded,
+  insertFixtureTenant,
   nextSaturday,
   nextTuesday,
+  removeFixtureTenant,
   reservationInput,
   wipeMovement,
 } from './helpers/db';
@@ -78,15 +80,12 @@ const camposComErro = (body: Corpo) =>
 
 beforeAll(async () => {
   await assertCatalogSeeded();
-  await db.execute(sql`
-    INSERT INTO tenants (id, name) VALUES (${OTHER_TENANT_ID}, 'Tenant Vizinho L')
-    ON CONFLICT (id) DO NOTHING
-  `);
+  await insertFixtureTenant(OTHER_TENANT_ID, 'l');
 });
 
 afterAll(async () => {
   await wipeMovement();
-  await db.execute(sql`DELETE FROM tenants WHERE id = ${OTHER_TENANT_ID}`);
+  await removeFixtureTenant(OTHER_TENANT_ID);
 });
 
 // wipeMovement ja zera schedule_exceptions: o seed as deixa vazias, entao

@@ -22,6 +22,43 @@ import { localToUtc, todayLocalDate } from '@/lib/time';
 
 export const TENANT_ID = 1;
 
+// -- tenant vizinho (fixture de isolamento) ----------------------------------
+
+/**
+ * Prefixo dos slugs de tenant criados por FIXTURE.
+ *
+ * >>> O PREFIXO E O QUE TORNA A BARREIRA CONFIAVEL. <<<
+ * Cinco arquivos (J, K, L, M, N) criam um segundo tenant para provar isolamento
+ * e o apagam no afterAll. A barreira de multi-tenancy
+ * (tests/o-barreira-multi-tenant.test.ts) precisa distinguir esses tenants
+ * descartaveis de um tenant DE VERDADE que alguem tenha cadastrado — e faz isso
+ * por este prefixo, nao por ordem de execucao de arquivo. Barreira que depende
+ * de ordem alfabetica some no dia em que alguem renomeia um arquivo, sem avisar.
+ *
+ * Por isso o slug e feio de proposito: 'tenant-vizinho-j', nunca algo plausivel
+ * como 'quadriclub-2'. Quem ler o teste daqui a seis meses tem que enxergar de
+ * relance que aquilo e fixture, e nao um segundo cliente real.
+ */
+export const FIXTURE_TENANT_SLUG_PREFIX = 'tenant-vizinho-';
+
+/**
+ * Cria o tenant vizinho do arquivo de teste. `suffix` identifica o grupo ('j',
+ * 'k', ...) e entra no slug, que e UNIQUE no banco desde a migration 0004.
+ */
+export async function insertFixtureTenant(id: number, suffix: string): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO tenants (id, name, slug)
+    VALUES (${id}, ${`Tenant Vizinho ${suffix.toUpperCase()}`},
+            ${FIXTURE_TENANT_SLUG_PREFIX + suffix.toLowerCase()})
+    ON CONFLICT (id) DO NOTHING
+  `);
+}
+
+/** Remove o tenant vizinho. Chamar no afterAll — ele nao e catalogo semeado. */
+export async function removeFixtureTenant(id: number): Promise<void> {
+  await db.execute(sql`DELETE FROM tenants WHERE id = ${id}`);
+}
+
 // -- experiencias do seed ----------------------------------------------------
 //
 // ============================================================================
