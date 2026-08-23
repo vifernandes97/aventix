@@ -42,6 +42,72 @@ caso de divergência é `availability.ts`, porque é ela que decide a venda.
 consumidor da regra aparecer — o quarto é o sinal de que o custo de manter
 cópias sincronizadas passou o custo de extrair.
 
+## 2026-08-22 — CRUDs de grade têm DELETE real; experiências continua sem
+
+`schedule_exceptions`, `operating_hours` e `blackouts` ganharam DELETE de
+verdade, enquanto o CRUD de experiências continua sem — lá desativar é
+`PATCH { ativo: false }`. A assimetria é deliberada e vale registrar, porque
+quem chegar depois vai ver duas famílias de CRUD com regras opostas no mesmo
+admin e presumir descuido.
+
+**O critério é a referência, não a prudência:** `reservations.experience_id`
+aponta para `experiences`, então apagar uma experiência quebraria histórico ou
+seria barrada pela FK. **Nenhuma FK aponta para as três tabelas de grade.**
+Apagar uma faixa de horário não deixa órfão nem quebra nada, e "desativar" ali
+seria uma coluna nova inventada para imitar um cuidado que não se aplica.
+
+**O que a decisão obriga a tela a dizer:** apagar grade **não cancela reserva já
+vendida**. A vaga vive em `reservation_resources.period`, congelada na venda
+(seção 4.6), e a grade governa apenas o que ainda pode ser vendido. Sem esse
+aviso o dono apaga o sábado achando que cancelou os passeios de sábado, não avisa
+ninguém, e os clientes aparecem no ponto de encontro. Por isso o texto aparece
+duas vezes na tela de horários: no topo e dentro da confirmação de exclusão, que
+é o instante em que ele age. Três testes provam o comportamento no banco.
+
+**Alternativa descartada:** replicar o `ativo: false` nas três por consistência
+visual entre telas. Descartada porque exigiria migration para adicionar a coluna,
+e porque uma faixa de horário "inativa" é um conceito que não existe no domínio —
+o dono pensa em "esse horário não existe mais", não em "esse horário está
+pausado".
+
+**Reabrir quando:** alguma tabela de grade passar a ser referenciada por outra
+(por exemplo, se um dia uma reserva guardar de qual faixa ela nasceu). Aí o
+DELETE vira o problema que hoje ele não é.
+
+## 2026-08-21 — E-mail de confirmação cortado do go-live
+
+Não existe Resend, não existe `lib/notifications.ts`, e não vai existir até
+depois de 24/08. Verificado no código antes de decidir: zero ocorrências de
+`resend`, `sendMail` ou `notification` em `lib/`, `app/`, `scripts/` e
+`instrumentation.ts`, e nenhuma dependência de e-mail no `package.json`. Os
+documentos se contradiziam sobre isso; nenhum lado tinha sido conferido.
+
+**Por quê:** a seção 9 prevê cinco e-mails (termo, confirmação, lembrete, saldo
+quitado, cancelamento), e construí-los a três dias do go-live competiria com a
+tela de status e com os CRUDs operacionais, que atingem o cliente e o dono no
+dia 1 de um jeito que e-mail nenhum substitui.
+
+**Consequência direta, e é grande:** a tela `confirmed` de `/reserva/[id]` passa
+a ser a **única** confirmação que o cliente recebe. Isso mudou o desenho dela:
+não é um visto verde, é um comprovante — data por extenso, horário com o fuso
+nomeado, duração, ponto de encontro, o que levar e contato, com o pedido
+explícito de printar a tela. Foi também o que justificou criar a setting
+`support_whatsapp`: o Quadri Club vende por ManyChat, então mandar para e-mail um
+cliente que já está no WhatsApp é tirá-lo do canal onde o dono responde.
+
+**Alternativa descartada:** construir só o e-mail de confirmação, deixando os
+outros quatro para depois. Descartada porque o custo não está no template e sim
+na infraestrutura — conta Resend, domínio verificado, SPF/DKIM, fila assíncrona,
+tratamento de falha que não derrube a reserva —, e esse custo é pago inteiro no
+primeiro e-mail.
+
+**Consequência assumida:** cliente que fechar a aba e perder o link fica sem
+comprovante nenhum. O mitigador é o link ser recuperável (`/reserva/{id}`
+sobrevive a refresh) e o WhatsApp existir na tela.
+
+**Reabrir quando:** primeira semana pós go-live. É a primeira coisa da lista
+depois que o dinheiro estiver entrando.
+
 ## 2026-08-20 — Etapa 1 da migração de URL adiada; só a metade de infra entra antes do go-live
 
 A decisão de 19/08 priorizou a Etapa 1 (mover a LP para

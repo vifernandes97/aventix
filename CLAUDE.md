@@ -158,7 +158,10 @@ CREATE TABLE tenants (
 
 -- Chaves do MVP: resource_label, resource_label_plural, operator_label, passenger_label,
 -- operator_document_required, operator_document_label, meeting_point, what_to_bring,
--- business_name, reply_to_email, deposit_policy_text
+-- business_name, reply_to_email, support_whatsapp, deposit_policy_text
+--  support_whatsapp: so digitos com DDI ('5511999998888'), para o link wa.me.
+--  VAZIO e estado valido: a UI OMITE o bloco de contato, nunca renderiza rotulo
+--  sem valor. Canal principal porque o tenant vende por ManyChat (secao 9).
 --  single_experience_per_slot ("true"/"false", default "false"),
 --  min_lead_minutes (inteiro >= 0 como string, default "60") — antecedencia minima para reservar
 CREATE TABLE settings (
@@ -450,7 +453,34 @@ Resposta `201`:
 ```
 No modo `deposit`, a tela **deve** deixar explícito: "Você paga agora R$X e o restante (R$Y) no dia, direto com o guia."
 
-**`GET /api/reservations/{id}/status`** → `{ status, paymentState, amountPaidCents, balanceCents }`
+**`GET /api/reservations/{id}/status`** — alvo do polling da tela `/reserva/[id]`. →
+```json
+{
+  "status": "pending_payment", "paymentMode": "full", "paymentState": "pending",
+  "amountPaidCents": 0, "balanceCents": 32549,
+  "holdExpiresAt": "...", "serverNow": "...",
+  "experienceName": "Trilha da Montanha", "startAt": "...", "durationMinutes": 90
+}
+```
+**PUBLICA: o uuid da URL e a unica credencial**, e ele circula por WhatsApp e
+print. O payload NAO carrega nome, telefone, e-mail, CPF, participante, documento
+nem contato de emergencia — a garantia e a query estreita de
+`lib/reservation-status.ts`, que nao BUSCA esses campos em vez de busca-los e
+filtrar. **`Cache-Control: no-store` em toda resposta, inclusive 404 e 500**:
+resposta cacheada faz o polling devolver "pendente" para sempre.
+**NAO consulta o Asaas** — a reconciliacao de 10 min ja e a rede de seguranca.
+`serverNow` existe porque o relogio do celular do cliente pode estar errado: a
+tela calcula o tempo restante pela diferenca entre os dois campos, nunca por
+`Date.now()` local. **`paymentMode` e o UNICO campo que autoriza a tela a falar
+em saldo** — numa reserva `full` nao paga o `balanceCents` vale o preco inteiro,
+e derivar "restante no dia" dele mentiria para o cliente.
+
+**`GET /api/reservations/{id}/payment`** → `{ qrCodeBase64, copyPaste, expiresAt, dueNowCents }`
+QR **atual**, buscado no provedor na hora, **nunca cacheado nem persistido** (ele
+expira). Uma chamada por carga da pagina, nunca no polling. `409` quando a
+reserva nao esta mais aguardando pagamento, com `code: 'sem_cobranca'` no caso de
+reserva pendente cuja cobranca falhou (borda 9). O `chargeId` do provedor **nao
+sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 - `GET /api/admin/customers` — clientes + histórico de agendamentos, com **status de pagamento** por reserva (lido do banco local, mantido pelo webhook) e **link para a fatura no Asaas** (`invoiceUrl` persistido na criação da cobrança). Sem chamada ao Asaas em tempo real.
 
 **`POST /api/webhooks/asaas`** → seção 8.
@@ -462,6 +492,36 @@ No modo `deposit`, a tela **deve** deixar explícito: "Você paga agora R$X e o 
   **Sinal fora do CRUD por ora:** `payment_mode` só aceita `full`, e `deposit_percent`/`deposit_fixed_cents` não são expostos. `deposit` responde 422 em vez de gravar experiência que ninguém consegue vender — gravar o modo sem os campos de sinal violaria `experiences_deposit_mode_check` e viraria 500. Reabre com a Fase 2 e a decisão de negócio sobre o sinal; o ponto único a mudar é `ACCEPTED_PAYMENT_MODES` em `lib/experiences.ts`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
 - **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento, **contato de emergência** e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF, número de documento ou contato de emergência:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas. `emergencyContact` vem `null` em reserva anterior à migration 0002 (coluna nullable).
+- **`GET|POST /api/admin/schedule-exceptions`, `PUT|DELETE /{id}`** — excecoes de
+  agenda. **PUT, nao PATCH:** os campos sao interdependentes (`closed=false` exige
+  `opens`/`closes` com `closes > opens`, o CHECK `schedule_exceptions_closed_check`),
+  e um patch parcial aceitaria corpo plausivel que o banco recusa com 500. Data
+  duplicada responde **409** com `code: 'data_ocupada'`, nao 422: o corpo esta
+  certo e o que conflita e o estado, entao a tela oferece editar a existente em vez
+  de acusar de invalida uma data digitada corretamente. Data no passado e recusada
+  (nao muda nada, e aceitar em silencio faz o dono crer que resolveu algo).
+- **`GET|POST /api/admin/operating-hours`, `PUT|DELETE /{id}`** — grade semanal.
+  **RECUSA FAIXAS SOBREPOSTAS** no mesmo weekday, com **409** e o `conflict` no
+  corpo para a tela dizer QUAL faixa atrapalha. Faixas que apenas **encostam**
+  (08:00-12:00 e 12:00-18:00) convivem — e o caso manha/tarde. A deduplicacao de
+  candidatos em `lib/availability.ts` permanece: as duas juntas sao defesa em
+  profundidade, e tirar aquela deixaria dado vindo de seed sem rede.
+- **`GET|POST /api/admin/blackouts`, `PUT|DELETE /{id}`** — bloqueios pontuais.
+  `recursoId: null` = todos os recursos. **O horario trafega LOCAL do tenant**
+  (`'AAAA-MM-DDTHH:MM'`, sem fuso) e sufixo de fuso e **recusado**: `'...T14:00Z'`
+  nasceria as 11h de Brasilia sem erro nenhum aparecendo. `fim <= inicio` responde
+  422 — `tstzrange` invertido produz range VAZIO, que o banco aceita e que nunca
+  bloqueia nada. Recurso inexistente ou de outro tenant e 422 (e campo do corpo),
+  nao 404.
+
+> **DELETE existe nos tres acima, e NAO existe em `experiences`.** O criterio e a
+> referencia: `reservations.experience_id` aponta para `experiences`, e nada aponta
+> para as tres tabelas de grade. **Apagar grade nunca cancela reserva ja vendida** —
+> a vaga vive em `reservation_resources.period`, congelada na venda (secao 4.6), e a
+> grade governa apenas o que ainda PODE SER VENDIDO. **A tela e obrigada a dizer
+> isso em voz alta**, no topo e dentro da confirmacao de exclusao: sem o aviso o dono
+> apaga o sabado achando que cancelou os passeios de sabado.
+
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
 - `GET /api/admin/customers` — clientes + histórico.
 - **`GET /api/admin/reservations/{id}/balance`** — retorna o saldo pendente e, sob demanda, o **QR Code Pix atual** da cobrança de saldo (buscado no Asaas **na hora**, nunca cacheado — QR expira).
@@ -517,7 +577,20 @@ Também exponha em `/admin` um indicador de saúde da integração (último webh
 
 ---
 
-## 9. Notificações (MVP: e-mail via Resend)
+## 9. Notificações (e-mail via Resend — CORTADO do go-live)
+
+> **ESTADO EM 23/08/2026: nada disto existe.** Sem Resend, sem
+> `lib/notifications.ts`, sem dependencia de e-mail no `package.json`. Cortado do
+> go-live em 21/08 (`docs/DECISOES.md`) e previsto para a primeira semana depois.
+>
+> **Consequencia que governa outra tela:** a tela `confirmed` de `/reserva/[id]` e
+> a **UNICA** confirmacao que o cliente recebe. Por isso ela nao e um visto verde:
+> carrega data por extenso, horario com o fuso nomeado, duracao, ponto de encontro,
+> o que levar e contato, e pede para o cliente printar. Quem for construir o e-mail
+> depois nao pode simplificar aquela tela por achar que o e-mail a substitui — ela
+> continua sendo o que sobrevive a refresh e volta pelo link.
+
+A lista abaixo e a especificacao de quando o e-mail existir:
 
 - **Termo reforçado** → cliente, após o aceite.
 - **Reserva confirmada** → cliente + dono. No modo `deposit`, o comprovante **destaca o saldo a pagar no dia** e a forma (com o guia, antes da saída).
@@ -602,12 +675,13 @@ Um único login (o dono). Sem provider externo.
   /(admin)
     /admin/login/page.tsx
     /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto)
-    /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento; `_` = pasta privada, nao vira rota
+    /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento + admin-nav; `_` = pasta privada, nao vira rota
     /admin/reservas/[id]/page.tsx     # detalhe como PAGINA, para link direto. O painel sobreposto (11.1) ja cobre o uso do dia a dia
     /admin/clientes/page.tsx
     /admin/experiencias/page.tsx      # incl. modo de pagamento e sinal
     /admin/recursos/page.tsx
-    /admin/horarios/page.tsx
+    /admin/excecoes/page.tsx          # excecoes de agenda; mostra o contraste "hoje x com a excecao"
+    /admin/horarios/page.tsx          # grade semanal; avisa que apagar faixa NAO cancela reserva
     /admin/bloqueios/page.tsx
     /admin/configuracoes/page.tsx
     /admin/compartilhar/page.tsx
@@ -616,9 +690,13 @@ Um único login (o dono). Sem provider externo.
     /availability/route.ts
     /experiences/route.ts             # catalogo PUBLICO: so ativas, sem `active` nem buffer_minutes
     /reservations/route.ts
-    /reservations/[id]/status/route.ts
+    /reservations/[id]/status/route.ts # PUBLICA; so banco, no-store, sem dado pessoal (secao 7.1)
+    /reservations/[id]/payment/route.ts # PUBLICA; QR atual do provedor, nunca cacheado
     /webhooks/asaas/route.ts          # SEM redirect; responde 200 rapido (401 por token e a UNICA excecao)
     /shared/[token]/agenda/route.ts
+    /admin/schedule-exceptions/       # + [id] (PUT/DELETE) e validation.ts de borda
+    /admin/operating-hours/           # idem; recusa faixas sobrepostas (409)
+    /admin/blackouts/                 # idem; horario LOCAL do tenant, sem fuso
     /admin/...                        # + reservations/[id]/balance, balance/receive-in-cash, integration/health
 /lib
   /db/schema.ts
@@ -628,8 +706,12 @@ Um único login (o dono). Sem provider externo.
   /availability.ts                    # motor de disponibilidade (SERVER-ONLY)
   /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
   /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento + contato de emergencia
+  /reservation-status.ts              # estado PUBLICO da reserva (secao 7.1) — SERVER-ONLY; query estreita, NAO reusa reservation-detail
   /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
   /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
+  /schedule-exceptions.ts             # CRUD de excecoes (secao 6) — SERVER-ONLY; TEM delete
+  /operating-hours.ts                 # CRUD da grade semanal (secao 6) — SERVER-ONLY; recusa sobreposicao
+  /blackouts.ts                       # CRUD de bloqueios (secao 6) — SERVER-ONLY; horario local -> UTC na borda
   /cpf.ts                             # validacao/normalizacao de CPF — modulo PURO, unico algoritmo, usado pelo servidor E pelo wizard
   /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
   /jobs/expire-holds.ts               # expiracao de hold (secao 12)
@@ -696,7 +778,7 @@ vitest.config.ts
 - Reserva de 1..N recursos (escolha do cliente); revezamento de operadores.
 - Motor de disponibilidade por `resourcesNeeded`; buffer; anti-overbooking.
 - Máquina de estados com hold 15min e pagamento tardio.
-- Horários recorrentes + blackouts.
+- Horários recorrentes + blackouts + exceções de agenda, com CRUD no admin (seção 7.2).
 - **Pagamento Pix via Asaas**: modo **integral** e modo **sinal** (percentual ou fixo, por experiência).
 - **`reservation_payments`** (sinal + saldo), com `recalcReservationPayment`.
 - **Cobrança do saldo no dia**: QR na hora + **`receiveInCash`** para recebimento por fora.
@@ -707,7 +789,7 @@ vitest.config.ts
 - Formulário público ponta a ponta.
 - **Calendário nativo** no admin (com marcador de saldo) + detalhe de reserva com ações de cobrança.
 - **Agenda compartilhada por link secreto** (sem dados pessoais nem financeiros).
-- Notificações por e-mail (Resend).
+- ~~Notificações por e-mail (Resend).~~ **CORTADO do go-live em 21/08** (seção 9 e `docs/DECISOES.md`); primeira semana pós go-live.
 - Timezone fixo.
 - **Exclusividade de experiência por horário**, configurável por tenant (`single_experience_per_slot`): bloqueia experiências diferentes sobrepostas; mesma experiência segue limitada por recurso. Quadri Club: ligado.
 - **Faturas do cliente no admin:** histórico de agendamentos do cliente com status de pagamento (banco local) e link para a fatura no Asaas.
