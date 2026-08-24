@@ -649,7 +649,7 @@ Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habil
 ### 11.1 Calendário do admin
 Visão do dia com uma coluna por recurso ativo, blocos com cliente/experiência/status, buffers visíveis, seletor de data e faixa semanal com contagem. **Rev 6:** blocos com saldo em aberto recebem marcador visual (ex. "Saldo R$175"), e o detalhe da reserva traz os botões **Cobrar saldo** (QR na hora) e **Recebi por fora**. Essa tela é usada **no celular, em campo** — priorize legibilidade e toque.
 
-**Detalhe e cancelamento são um painel sobreposto, não uma página.** Clicar num bloco abre um overlay sobre o calendário, que fecha por X, clique fora e Esc — o dono está olhando a agenda do dia e precisa continuar exatamente onde estava depois de cancelar. O clique carrega o **id da reserva**, nunca o do recurso: uma reserva multi-recurso vira um bloco por corrida contígua de colunas, então recursos não adjacentes produzem blocos separados, e todos abrem a mesma reserva. O detalhe é buscado **sob demanda, no clique** — isso não fere a regra da query única abaixo, que governa o render do período. Cancelar exige digitar `CANCELAR` (exato, maiúsculas) e não pede motivo.
+**Detalhe e cancelamento são um painel sobreposto, não uma página.** Clicar num bloco abre um overlay sobre o calendário, que fecha por X, clique fora e Esc — o dono está olhando a agenda do dia e precisa continuar exatamente onde estava depois de cancelar. O clique carrega o **id da reserva**, nunca o do recurso: uma reserva multi-recurso vira um bloco por corrida contígua de colunas, então recursos não adjacentes produzem blocos separados, e todos abrem a mesma reserva. O detalhe é buscado **sob demanda, no clique** — isso não fere a regra da query única abaixo, que governa o render do período. Cancelar exige digitar `CANCELAR` (exato, maiúsculas) e não pede motivo. O painel tem uma **segunda porta de entrada, aditiva ao clique**: `/admin?...&reserva={id}` abre-o já na carga (usada pelo link de `/admin/agendamentos`). O servidor valida a existência do id no tenant antes de mandar abrir — id ausente, malformado, inexistente ou de outro tenant renderiza a agenda normal, sem painel e sem erro; fechar o painel limpa o `reserva=` da URL para o refresh não reabrir.
 
 **Dados — uma query por render:** a tela lê de `GET /api/admin/calendar?from=&to=`, que devolve, para o período, todas as reservas ativas com recursos alocados, cliente (só nome), experiência e estado de pagamento — em UMA consulta. O front posiciona; nunca busca por reserva ou por recurso separadamente. A granularidade do payload acompanha a view: dia/semana trazem o detalhe de render (nome, trilha, buffer, pago/aguardando); mês traz só resumo (horário + trilha + status).
 
@@ -711,7 +711,8 @@ Um único login (o dono). Sem provider externo.
     /agenda/[token]/page.tsx          # agenda compartilhada (sem dados pessoais nem financeiros)
   /(admin)
     /admin/login/page.tsx
-    /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto)
+    /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto). Abre o painel por ?reserva=id (aditivo ao clique)
+    /admin/agendamentos/page.tsx      # lista consultavel de reservas: busca nome/telefone (ILIKE), filtros status/periodo; SOMENTE LEITURA; NAO exibe CPF/documento/contato
     /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento + admin-nav; `_` = pasta privada, nao vira rota
     /admin/reservas/[id]/page.tsx     # detalhe como PAGINA, para link direto. O painel sobreposto (11.1) ja cobre o uso do dia a dia
     /admin/clientes/page.tsx
@@ -745,6 +746,7 @@ Um único login (o dono). Sem provider externo.
   /calendar.ts                        # leitura do calendario do admin (secao 11.1) — SERVER-ONLY, so leitura
   /reservation-detail.ts              # detalhe de UMA reserva (secao 11.1) — SERVER-ONLY; unico ponto que devolve CPF + documento + contato de emergencia
   /reservation-status.ts              # estado PUBLICO da reserva (secao 7.1) — SERVER-ONLY; query estreita, NAO reusa reservation-detail
+  /reservation-list.ts                # busca/listagem de reservas p/ /admin/agendamentos (SERVER-ONLY); query NAO busca CPF/documento/contato; tambem resolve o ?reserva= do calendario
   /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
   /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
   /schedule-exceptions.ts             # CRUD de excecoes (secao 6) — SERVER-ONLY; TEM delete
@@ -826,6 +828,7 @@ vitest.config.ts
 - Cadastro de cliente + histórico; campo `channel`.
 - Formulário público ponta a ponta.
 - **Calendário nativo** no admin (com marcador de saldo) + detalhe de reserva com ações de cobrança.
+- **Lista consultável de reservas** no admin (`/admin/agendamentos`): busca por nome ou telefone, filtro por status e período, somente leitura, sem CPF/documento/contato na listagem.
 - **Agenda compartilhada por link secreto** (sem dados pessoais nem financeiros).
 - ~~Notificações por e-mail (Resend).~~ **CORTADO do go-live em 21/08** (seção 9 e `docs/DECISOES.md`); primeira semana pós go-live.
 - Timezone fixo.
