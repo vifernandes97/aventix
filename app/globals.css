@@ -24,3 +24,52 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ============================================================================
+   Sidebar do admin — estado recolhido/expandido (desktop, >= 1024px).
+   ----------------------------------------------------------------------------
+   A fonte da verdade e o atributo `data-collapsed` no shell (`[data-admin-shell]`,
+   definido por app/(admin)/admin/layout.tsx a partir do cookie `admin_sidebar`,
+   e alternado no cliente por sidebar-toggle.tsx). Concentrar aqui as regras que
+   dependem desse atributo evita depender de empilhamento de variantes do Tailwind
+   e mantem um lugar so para a logica de recolher/expandir.
+
+   O deslocamento do conteudo e condicionado a `:has([data-admin-sidebar])`, entao
+   /admin/login (que fica sob o mesmo layout, mas nao renderiza sidebar) NAO e
+   deslocado. Abaixo de 1024px nada disto vale: manda a navbar horizontal, e o
+   mobile fica inalterado.
+   ============================================================================ */
+@media (min-width: 1024px) {
+  /* Larguras casadas: deslocamento do conteudo == largura da sidebar. */
+  [data-admin-shell]:has([data-admin-sidebar]) {
+    padding-left: 4rem; /* recolhido */
+    transition: padding-left 150ms ease;
+  }
+  [data-admin-shell][data-collapsed="false"]:has([data-admin-sidebar]) {
+    padding-left: 16rem; /* expandido */
+  }
+
+  [data-admin-sidebar] {
+    width: 4rem; /* recolhido */
+    transition: width 150ms ease;
+  }
+  [data-admin-shell][data-collapsed="false"] [data-admin-sidebar] {
+    width: 16rem; /* expandido */
+  }
+
+  /* Recolhido: some o rotulo e centra o icone. */
+  [data-admin-shell][data-collapsed="true"] [data-admin-sidebar] .admin-nav-label {
+    display: none;
+  }
+  [data-admin-shell][data-collapsed="true"] [data-admin-sidebar] .admin-nav-item {
+    justify-content: center;
+  }
+
+  /* Icone do toggle conforme o estado (um icone por estado, o outro some). */
+  [data-admin-shell][data-collapsed="true"] .admin-toggle-when-expanded {
+    display: none;
+  }
+  [data-admin-shell][data-collapsed="false"] .admin-toggle-when-collapsed {
+    display: none;
+  }
+}
