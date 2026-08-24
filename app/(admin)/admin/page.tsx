@@ -34,6 +34,7 @@ import {
   periodForView,
   shiftPeriod,
 } from '@/lib/calendar';
+import { resolveOpenReservationId } from '@/lib/reservation-list';
 import { getSettings } from '@/lib/tenant';
 import { isValidCalendarDate, todayLocalDate } from '@/lib/time';
 
@@ -45,7 +46,7 @@ import { dayMonthLabel, fullDateLabel, monthYearLabel } from './_components/shar
 // serviria a pagina de um usuario para o proximo, com dados velhos.
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Promise<{ view?: string; date?: string }>;
+type SearchParams = Promise<{ view?: string; date?: string; reserva?: string }>;
 
 function periodLabel(view: CalendarView, date: string, from: string, to: string): string {
   if (view === 'day') return fullDateLabel(date);
@@ -68,14 +69,21 @@ export default async function AdminCalendarPage({ searchParams }: { searchParams
   const { from, to } = periodForView(view, date);
   const dates = datesBetween(from, to);
 
-  const [reservations, resources, experiences, settings, dayGrid] = await Promise.all([
-    getCalendarReservations({ from, to }),
-    getActiveResources(),
-    getActiveExperiences(),
-    getSettings(),
-    // A grade de funcionamento so desenha linhas na view de dia.
-    view === 'day' ? getDayGrid(date) : Promise.resolve(null),
-  ]);
+  // Parametro ADITIVO: `?reserva=` so ACRESCENTA uma forma de abrir o painel de
+  // detalhe (o clique no bloco continua igual). resolveOpenReservationId devolve
+  // null para param ausente, malformado, inexistente ou de outro tenant — nesses
+  // casos a agenda renderiza exatamente como hoje, sem painel e sem erro. Ausente
+  // nem toca o banco. Ver lib/reservation-list.ts.
+  const [reservations, resources, experiences, settings, dayGrid, openReservationId] =
+    await Promise.all([
+      getCalendarReservations({ from, to }),
+      getActiveResources(),
+      getActiveExperiences(),
+      getSettings(),
+      // A grade de funcionamento so desenha linhas na view de dia.
+      view === 'day' ? getDayGrid(date) : Promise.resolve(null),
+      resolveOpenReservationId(params.reserva),
+    ]);
 
   const href = (v: CalendarView, d: string) => `/admin?view=${v}&date=${d}`;
 
@@ -114,6 +122,9 @@ export default async function AdminCalendarPage({ searchParams }: { searchParams
         resources={resources}
         experiences={experiences}
         dayGrid={dayGrid}
+        // Null quando nao ha `?reserva=` valido: o painel nao abre e a tela e a
+        // de sempre. So um id existente do proprio tenant abre o painel.
+        openReservationId={openReservationId}
         resourceLabelPlural={settings.resource_label_plural}
         // Rotulos do TENANT para o painel (secao 3: texto de UI vem de
         // settings). Resolvidos aqui porque lib/tenant.ts e server-only; o

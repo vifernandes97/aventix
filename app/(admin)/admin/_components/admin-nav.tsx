@@ -15,6 +15,7 @@ import Link from 'next/link';
 
 const LINKS = [
   { key: 'agenda', href: '/admin', label: 'Agenda' },
+  { key: 'agendamentos', href: '/admin/agendamentos', label: 'Agendamentos' },
   { key: 'excecoes', href: '/admin/excecoes', label: 'Exceções' },
   { key: 'horarios', href: '/admin/horarios', label: 'Horários' },
   { key: 'bloqueios', href: '/admin/bloqueios', label: 'Bloqueios' },
@@ -28,7 +29,7 @@ export function AdminNav({ current }: { current: AdminNavKey }) {
     <nav
       aria-label="Seções do painel"
       // Rola na horizontal no celular: a tela do admin e usada EM CAMPO
-      // (secao 11.1), e cinco links quebrariam em duas linhas num aparelho
+      // (secao 11.1), e os links quebrariam em duas linhas num aparelho
       // estreito, comendo altura util da agenda.
       className="-mx-3 flex gap-1 overflow-x-auto px-3 pb-1 sm:mx-0 sm:px-0"
     >

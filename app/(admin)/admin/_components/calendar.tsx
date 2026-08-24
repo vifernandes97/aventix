@@ -39,6 +39,12 @@ type Props = {
   experiences: { id: number; name: string }[];
   /** Só na view de dia. */
   dayGrid: DayGrid | null;
+  /**
+   * Reserva a abrir no painel de detalhe já na carga (veio de `?reserva=` na URL,
+   * ex. um link da lista /admin/agendamentos). Null = nenhuma; a tela abre como
+   * sempre. O servidor já validou que o id existe e é deste tenant.
+   */
+  openReservationId: string | null;
   resourceLabelPlural: string;
   /** Rotulos do tenant para o painel (secao 3), resolvidos no servidor. */
   panelLabels: PanelLabels;
@@ -58,7 +64,12 @@ export function Calendar(props: Props) {
   // Reserva aberta no painel. Guarda o ID, nao o objeto: o painel busca o
   // detalhe completo por conta propria, e um objeto guardado aqui ficaria velho
   // no instante em que o estado da reserva mudasse.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  //
+  // Inicia de `openReservationId`: um link de /admin/agendamentos carrega a
+  // agenda ja com o painel daquela reserva aberto. Sem o param, nasce null —
+  // comportamento identico ao anterior (o clique no bloco continua sendo a outra
+  // porta de entrada).
+  const [selectedId, setSelectedId] = useState<string | null>(props.openReservationId);
 
   // Filtro por experiencia: TODAS marcadas por padrao. Um calendario que abre
   // escondendo reserva seria uma armadilha operacional.
@@ -73,6 +84,21 @@ export function Calendar(props: Props) {
       else next.add(id);
       return next;
     });
+  }
+
+  // Fecha o painel e LIMPA o `?reserva=` da URL: sem isso, um refresh reabriria o
+  // painel sozinho (requisito da tarefa). history.replaceState troca so a URL,
+  // sem re-buscar a agenda inteira a cada fechamento. Aberto por clique no bloco
+  // (que nunca pos nada na URL) tambem passa aqui e simplesmente nao tem o que
+  // limpar — o `has('reserva')` guarda esse caso.
+  function closePanel() {
+    setSelectedId(null);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('reserva')) {
+      url.searchParams.delete('reserva');
+      window.history.replaceState(null, '', url);
+    }
   }
 
   // FILTRO NO FRONT, sobre o que ja veio (secao 11.1: uma query por render).
@@ -216,7 +242,7 @@ export function Calendar(props: Props) {
           key={selectedId}
           reservationId={selectedId}
           labels={props.panelLabels}
-          onClose={() => setSelectedId(null)}
+          onClose={closePanel}
           // POR QUE router.refresh() E NAO REMOVER O BLOCO NO FRONT:
           // a pagina e Server Component com force-dynamic, entao o refresh
           // re-executa o render no servidor e a grade volta da MESMA unica query
