@@ -1,9 +1,24 @@
 # CLAUDE.md — Aventix · Plataforma de Agendamento de Experiências (aventix.com.br)
 
-> Produto: **Aventix**. Cliente 1 (e único no MVP): **Quadri Club / Terra Trilha**.
+> Produto: **Aventix**. Cliente 1 (e único no MVP): **Quadri Club**.
 > Documento-fonte do projeto. Leia por completo antes de escrever qualquer código.
 > Se algo neste documento conflitar com uma sugestão sua, este documento vence.
 > Escopo travado: implemente **apenas** o que está na seção MVP.
+>
+> **Revisão 7 (25/08/2026)** — **o modelo de pagamento foi redesenhado e o
+> lançamento foi adiado.** O cliente viu o sistema apresentado e decidiu só
+> lançar quando **todas as formas de pagamento** estiverem prontas — o combinado
+> anterior era lançar só com Pix integral. Consequências:
+> (a) **Seção 4-B (nova)** — preço cheio na experiência, **desconto configurável
+> no Pix**, cartão sem acréscimo, sinal de 50% só no Pix, arredondamento,
+> configuração financeira em **tabela própria** e **valores congelados** no
+> registro do pagamento.
+> (b) **Seção 4-C (nova)** — política de cancelamento, no-show e reagendamento.
+> (c) **Seção 17 refeita** — faseamento novo (Fase 0 e A..E). Sistema pronto em
+> **setembro**; uso real no **início de outubro**, quando sai o vídeo do
+> influenciador @grandecampinas e todos os leads caem de uma vez.
+> (d) O **go-live de 24/08 não aconteceu**, embora o sistema esteja em produção
+> e o ciclo do dinheiro tenha sido validado com **dinheiro real** naquele dia.
 >
 > **Revisão 6** — pagamento com sinal + robustez da integração Asaas:
 > (a) **Pagamento parcial (sinal)** configurável por experiência: cliente paga um percentual/valor no ato e o saldo é cobrado presencialmente no dia. Motivação real: parceiro Aventurando (compra coletiva do mesmo segmento e ticket) reportou abandono no checkout por receio de golpe ao pagar o valor integral.
@@ -36,12 +51,19 @@
 - **Buffer** entre reservas no mesmo recurso, configurável por experiência.
 - **Exclusividade de experiência por horário (configurável por tenant):** quando ativada (`settings.single_experience_per_slot=true`), o tenant não permite duas **experiências diferentes** com períodos sobrepostos — só uma trilha "rodando" por vez. A **mesma** experiência pode ter reservas sobrepostas, limitada apenas pela disponibilidade de recursos (quadris). Desligada (default do produto), vale só a disponibilidade por recurso. O **Quadri Club opera com ela ligada**.
 
-### Regra de pagamento (rev 6)
+### Regra de pagamento (rev 7 — o detalhe todo está na seção 4-B)
 
-Cada experiência tem um **modo de pagamento** configurável:
+> **A rev 7 substituiu o desenho de preço e de formas de pagamento.** O que vale
+> hoje: a experiência cadastra o **valor cheio**, o **Pix tem desconto**
+> configurável por tenant, o cartão paga o cheio **sem acréscimo**, e o sinal é
+> **50% fixo, só no Pix**. Nada disso é opcional para quem for implementar —
+> leia a **seção 4-B** antes de tocar em preço, cobrança ou checkout.
+
+Cada experiência tem um **modo de pagamento** configurável, que define o que é
+**oferecido** ao cliente:
 
 - **`full`** — cliente paga 100% no ato para confirmar. Padrão.
-- **`deposit`** — cliente paga um **sinal** (percentual ou valor fixo) no ato; o **saldo** é cobrado presencialmente no dia do passeio.
+- **`deposit`** — cliente pode pagar um **sinal** no ato; o **saldo** é cobrado presencialmente no dia do passeio.
 
 Regras invioláveis do modo `deposit`:
 - A reserva **confirma com o sinal pago**. O saldo em aberto **não** bloqueia a reserva nem libera a vaga.
@@ -397,6 +419,182 @@ CREATE INDEX idx_rp_open ON reservation_payments (state, due_date) WHERE state =
 - Find-or-create de `customers` por `(tenant_id, phone)`.
 - **Experiência gratuita não é suportada no MVP.** `price_cents = 0` produz `total = 0`, e a cobrança violaria `CHECK (amount_cents > 0)` na criação (erro 500); em `recalcReservationPayment` a reserva ficaria `pending` para sempre. O CRUD de experiências (Fase 3) deve recusar preço zero. O `CHECK (price_cents >= 0)` do schema fica como está — apertar para `> 0` exigiria migration e não se justifica antes do go-live.
 > **Regra de arquitetura inviolável:** a garantia do `FOR UPDATE` (trava de linha contra corrida entre cron e webhook) só existe enquanto **todo caminho de escrita de status passar por `setReservationStatus`**. Um `UPDATE reservations SET status` direto em qualquer outro lugar fura a trava e quebra a proteção contra double-booking silenciosamente. Nunca atualize `reservations.status` ou `reservation_resources.status` fora dessa função.
+
+---
+
+## 4-B. Modelo de pagamento (rev 7 — 25/08/2026)
+
+> Substitui o desenho anterior de preço e formas de pagamento. Vale sobre
+> qualquer texto conflitante em outra seção.
+
+### 4-B.1 Preço: o cheio é o cadastrado; o Pix é que é mais barato
+
+A experiência cadastra o **valor cheio**. O desconto do Pix é **configurável por
+tenant** (7% no Quadri Club) e o cartão paga o cheio.
+
+- **Trilha da Montanha:** R$ 349,99 cheio.
+- **Trilha da Fazenda:** R$ 249,99 cheio — **A CONFIRMAR** com o cliente. O
+  indício é aritmético: 249,99 − 7% = **232,49 exatos**, que é o valor que ele
+  citou. Com 249,00 daria 231,57, e não bateria.
+
+**>>> NÃO EXISTE TAXA SOMADA AO CLIENTE. <<<** O cartão **não** fica mais caro;
+o Pix fica mais barato. A diferença é a mesma, mas a leitura na tela não é: um
+acréscimo no cartão é percebido como punição e derruba conversão, além de
+esbarrar na expectativa (e na leitura corrente do CDC) de que o preço anunciado é
+o preço a pagar. Quem for implementar **nunca** deve calcular "cheio + taxa".
+
+### 4-B.2 As três formas de pagar
+
+Exemplo com a Trilha da Montanha (cheio R$ 349,99, desconto Pix 7%):
+
+| Forma | Cobrado agora | No dia | Total pago |
+|---|---|---|---|
+| Pix integral (−7%) | R$ 325,49 | — | R$ 325,49 |
+| Pix sinal 50% (−7%) | R$ 162,75 | R$ 162,74 | R$ 325,49 |
+| Cartão integral | R$ 349,99 | — | R$ 349,99 |
+
+Regras que a tabela não mostra e que são invioláveis:
+
+- **O sinal é 50% fixo.** Não é configurável por experiência.
+- **Sinal existe SOMENTE no Pix.** Não há sinal no cartão.
+- **O desconto do Pix incide TAMBÉM sobre o sinal**: o sinal é 50% de **325,49**
+  (o valor já com desconto), nunca 50% de 349,99. Calcular sobre o cheio faria o
+  cliente do sinal pagar mais que o do Pix integral, punindo justamente quem
+  aceitou pagar antes.
+
+> **Divergência conhecida com o schema atual:** `experiences.deposit_percent` e
+> `experiences.deposit_fixed_cents` (seção 4.3) existem e são **por experiência**,
+> enquanto esta seção fixa o sinal em 50%. Não foi resolvido em código; a Fase B
+> decide se as colunas somem, viram default ou passam a ser ignoradas. Enquanto
+> isso, **a regra de negócio que vale é a desta seção**.
+
+### 4-B.3 Reserva com sinal pago: `confirmed` + `partial`
+
+Reserva cujo **sinal** foi pago fica `status='confirmed'` com
+`payment_state='partial'`.
+
+**Por que não `pending_payment`:** a vaga **está garantida** e o recurso está
+alocado — o saldo é pendência **financeira**, não reserva incompleta. Manter
+`pending_payment` seria ativamente errado: o **cron de hold** (seção 12) expiraria
+a reserva e **liberaria a vaga de quem já pagou metade**. O cliente perderia o
+passeio por causa de uma classificação interna, tendo dinheiro nosso na conta.
+
+### 4-B.4 Regra de modelagem: oferecido vs. cobrado
+
+- **`experiences.payment_mode`** é atributo da **EXPERIÊNCIA** e define o que é
+  **OFERECIDO** ao cliente.
+- **O método escolhido no wizard** define o que é **COBRADO**.
+- **`reservations.payment_mode`** (coluna **já existe**) guarda o modo
+  **EFETIVO** daquela reserva.
+
+Confundir os três produz o erro clássico de ler a experiência para saber como uma
+reserva foi paga — e a reserva congela o que foi vendido (seção 4.6).
+
+### 4-B.5 Arredondamento — regra inviolável
+
+349,99 / 2 = **174,995**. Alguém fica com o centavo, e a única saída é decidir
+quem, por construção.
+
+- **A entrada arredonda para CIMA.**
+- **O saldo é sempre `total − já pago`**, nunca "metade" calculada de novo.
+
+Assim `entrada + saldo` fecha com o total **por construção, jamais por
+coincidência**. Calcular as duas metades independentemente produz um par que
+fecha na maioria dos valores e falha em alguns — e a falha aparece como um
+centavo de diferença entre o que o sistema diz e o que o cliente pagou, no
+extrato, semanas depois.
+
+### 4-B.6 Configuração financeira: tabela PRÓPRIA, nunca em `settings`
+
+**>>> NÃO PONHA ISTO EM `settings`. <<<** `seedTenant()` **sobrescreve** toda
+linha de `settings` cujo valor divirja do template (armadilha das duas casas,
+seção 19). O dono configuraria 7%, funcionaria por semanas, e o valor **sumiria**
+no dia em que alguém rodasse o seed — sem erro e sem log, com o preço voltando
+sozinho ao do template.
+
+A tabela própria também separa **o que a Neosoluti define** do **que o dono
+edita**, que hoje estão misturados em `settings`.
+
+O que ela configura:
+
+1. **Desconto por método** — Pix e cartão.
+2. **Taxas da maquininha POR MODALIDADE** — débito, crédito à vista, crédito
+   parcelado. **Tabela, não campo único:** a taxa muda com a modalidade, e um
+   campo só produziria número errado com **aparência de certo**, que é pior que
+   número obviamente errado.
+
+O DDL entra na **Fase 0** (seção 17) e ainda não existe — não presuma nomes de
+coluna a partir desta seção.
+
+### 4-B.7 Valor líquido — regra inviolável
+
+**Taxa muda com o tempo; registro de dinheiro NÃO pode mudar junto.**
+
+No momento do registro, gravar **congelados na linha do pagamento**: valor
+**bruto**, **modalidade**, **percentual aplicado** e **valor líquido**. Depois
+disso o sistema só **LÊ**, nunca recalcula. A configuração vale para o **próximo**
+registro, jamais para os anteriores.
+
+**O que acontece sem isso:** em setembro registra R$ 150 a 5% e mostra R$ 142,50.
+Em novembro a operadora reajusta para 6%, o dono atualiza a tela, e **a reserva
+de setembro passa a mostrar R$ 141,00**. O passado muda sozinho e a conferência
+com o extrato quebra — sem nada acusar erro.
+
+**Para pagamentos que passam pelo Asaas, o líquido é LIDO do Asaas** (eles
+informam na consulta da cobrança), não calculado. **Só a maquininha exige
+cálculo**, porque acontece fora do provedor.
+
+### 4-B.8 Cartão: via `invoiceUrl` do Asaas, nunca formulário próprio
+
+O cliente é **redirecionado para a fatura do Asaas** e digita o cartão lá. **Não
+existe formulário de cartão dentro do wizard.**
+
+**Por quê:** a documentação de PCI-DSS do Asaas diz que, na integração via API,
+"os dados passam pelo back-end da sua aplicação" e "sua infraestrutura permanece
+no escopo". E o Asaas **não oferece tokenização client-side** — não existe
+componente JS deles que capture o cartão no navegador e devolva só um token. Ou o
+cliente digita numa página do Asaas, ou **o número do cartão passa pelo nosso
+servidor**, com o escopo de conformidade que isso arrasta para um projeto de dev
+solo.
+
+**Alternativa descartada — Asaas Checkout:** traz objeto próprio, família própria
+de eventos de webhook e expiração própria. Seriam **dois sistemas de pagamento
+convivendo**. A `invoiceUrl` reaproveita os eventos `PAYMENT_*` que já funcionam
+e já estão testados (seção 8).
+
+### 4-B.9 Chargeback — estado que ainda NÃO existe
+
+Com cartão, o cliente pode **contestar a compra meses depois**: o dinheiro sai da
+conta do tenant e **o passeio já aconteceu**. O sistema passa a poder ter reserva
+`confirmed`, realizada, **com pagamento revertido** — combinação que hoje não
+existe na máquina de estados (seção 5).
+
+O Asaas tem eventos de webhook próprios para isso. **Lacuna conhecida**, a ser
+tratada na fase do cartão (Fase E). Não invente o estado antes disso.
+
+---
+
+## 4-C. Política de cancelamento e reagendamento (decidida com o cliente em 25/08)
+
+- **Cancelamento pelo cliente com sinal pago: NÃO devolve.** Sem escalonamento
+  por antecedência.
+- **No-show:** **não** devolve o sinal e **não** cobra o saldo restante.
+- **Estorno:** **manual**, pelo painel do Asaas. **Sem botão no sistema**
+  (seção 8-C).
+- **Reagendamento:** por **WhatsApp**, manual com o Quadri Club. **Não é
+  feature.**
+
+**O que isso simplifica**, e é a razão de estar escrito: não existe devolução
+parcial, não existe janela de tempo influenciando valor, não existe cálculo de
+retenção. Qualquer proposta futura que reintroduza um desses três está mudando a
+política, não "melhorando" a implementação.
+
+**>>> CONTRADIÇÃO A RESOLVER NO TEXTO OFICIAL <<<** O texto publicado pelo cliente
+promete **reagendamento com 48h de antecedência**, mas **não diz como**. Como
+nunca há devolução, a cláusula das 48h só faz sentido se der direito a
+**REMARCAR**. O texto precisa dizer que a remarcação é **pelo WhatsApp** — senão
+o cliente procura no sistema um botão que não existe, não acha, e conclui que
+perdeu o dinheiro. Entra na revisão do termo (Termo v2, seção 17).
 
 ---
 
@@ -835,7 +1033,7 @@ vitest.config.ts
 - Motor de disponibilidade por `resourcesNeeded`; buffer; anti-overbooking.
 - Máquina de estados com hold 15min e pagamento tardio.
 - Horários recorrentes + blackouts + exceções de agenda, com CRUD no admin (seção 7.2).
-- **Pagamento Pix via Asaas**: modo **integral** e modo **sinal** (percentual ou fixo, por experiência).
+- **Pagamento Pix via Asaas**: modo **integral** e modo **sinal**. **REDESENHADO na rev 7 (seção 4-B):** preço cheio na experiência, desconto do Pix configurável por tenant, cartão sem acréscimo, sinal de **50% fixo só no Pix**, configuração financeira em tabela própria e valores congelados no registro.
 - **`reservation_payments`** (sinal + saldo), com `recalcReservationPayment`.
 - **Cobrança do saldo no dia**: QR na hora + **`receiveInCash`** para recebimento por fora.
 - **Webhook robusto** (200 exato, sem redirect, assíncrono, tolerante, órfã ignorada) + **job de reconciliação**.
@@ -855,7 +1053,7 @@ vitest.config.ts
 
 ### Pós go-live / v2 (NÃO construir agora)
 
-- **Cartão de crédito** (Asaas). ATENÇÃO ao implementar: confirmar a reserva no evento **`PAYMENT_CONFIRMED`** (pago, saldo ainda não liberado) e **não** no `PAYMENT_RECEIVED`, que no crédito só chega ~32 dias depois. Tratar parcelamento (taxa cresce por parcela) e antecipação.
+- **Cartão de crédito** (Asaas) — **entra na Fase E da rev 7** (seção 17), via `invoiceUrl` (seção 4-B.8), com chargeback (4-B.9). ATENÇÃO ao implementar: confirmar a reserva no evento **`PAYMENT_CONFIRMED`** (pago, saldo ainda não liberado) e **não** no `PAYMENT_RECEIVED`, que no crédito só chega ~32 dias depois. Tratar parcelamento (taxa cresce por parcela) e antecipação.
 - **Asaas Tap** (celular do guia como maquininha) como caminho oficial do saldo, com baixa automática.
 - **WhatsApp** (Evolution + n8n).
 - **Google Calendar** (espelho opcional).
@@ -875,13 +1073,32 @@ vitest.config.ts
 2. **Fase 1 — Núcleo:** schema (13 tabelas) + constraint + `setReservationStatus` + tenant/settings + find-or-create + disponibilidade + criação transacional + cron. Marco: reserva de 1 e 2 recursos trava as vagas certas, com cliente cadastrado.
 3. **Fase 2 — Pagamento:** `PaymentProvider`/Asaas Pix + `reservation_payments` + modo integral e sinal + webhook robusto + reconciliação + pagamento tardio. Marco: Pix de teste confirma sozinho, e uma reserva com sinal fica `partial` com saldo em aberto.
 4. **Fase 3 — Interfaces + termo:** formulário público (com sinal explícito), termo scroll-to-end, tela QR/polling, admin com calendário nativo, detalhe com **Cobrar saldo**/**Recebi por fora**, CRUDs, links compartilhados, cancelar-e-liberar. Marco: reserva ponta a ponta + saldo quitado pelos dois caminhos.
-5. **Fase 4 — Integrações + go-live:** e-mails Resend (assíncronos) + timezone + bordas + hardening + saúde da integração + checklist de produção. Marco: **GO-LIVE 24/08**.
+5. **Fase 4 — Integrações:** timezone + bordas + hardening + saúde da integração + checklist de produção. Marco original era o **go-live de 24/08**, que **não aconteceu** — ver abaixo. O sistema foi para produção e o ciclo do dinheiro foi validado com dinheiro real em 24/08.
+
+### Faseamento da rev 7 (acordado em 25/08) — é este que vale agora
+
+O lançamento foi adiado: o cliente só quer lançar com **todas as formas de
+pagamento** prontas. **Sistema pronto em setembro; uso real no início de
+outubro**, quando sai o vídeo do influenciador **@grandecampinas** e os leads
+caem **de uma vez** — o primeiro volume real que o sistema vai ver.
+
+| Fase | O que entra |
+|---|---|
+| **Fase 0** | **Configuração financeira**: tabela própria (fora de `settings`), desconto do Pix por tenant, taxas da maquininha por modalidade (seção 4-B.6). É o alicerce das outras. |
+| **Fase A** | **Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2). |
+| **Fase B** | **Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`. |
+| **Fase C** | **Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças. |
+| **Fase D** | **Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7). |
+| **Fase E** | **Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9). |
+| **Transversal** | **Líquido lido do Asaas** em toda reserva (seção 4-B.7). Atravessa as fases, não é etapa isolada. |
+| **Termo v2** | Em **paralelo**: inclui a política de cancelamento e resolve a contradição das 48h (seção 4-C). |
+| **Antes do vídeo** | **Testes com clientes reais.** O vídeo é evento de volume; descobrir problema com ele no ar é caro. |
 
 ---
 
 ## 18. Pré-requisitos operacionais do Asaas (dependem do cliente)
 
-Sem estes itens o desenvolvimento da Fase 2 trava. Cobrar do Terra Trilha **antes** da Fase 2:
+Sem estes itens o desenvolvimento trava. Cobrar do **Quadri Club** antes da fase que depende de cada um:
 
 1. **Conta Asaas 100% aprovada, com prova de vida concluída** (a criação de chave Pix só habilita depois disso).
 2. **Chave Pix cadastrada na conta.** Sem chave, o Asaas usa chave temporária de instituição parceira e o QR só é pagável até 23:59 do mesmo dia — além do risco de conversão: o nome exibido no app do banco do pagador precisa ser o do Quadri Club, senão agrava o receio de golpe que o sinal quer resolver.
