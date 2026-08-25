@@ -57,6 +57,7 @@ export default async function ReservationStatusPage({
   const labels: StatusLabels = {
     business_name: settings.business_name,
     meeting_point: settings.meeting_point,
+    meeting_point_map_url: settings.meeting_point_map_url,
     what_to_bring: settings.what_to_bring,
     support_whatsapp: settings.support_whatsapp,
     reply_to_email: settings.reply_to_email,

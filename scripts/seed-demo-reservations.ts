@@ -56,6 +56,27 @@ function nextWeekday(weekday: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * CPF valido (digito verificador fecha) e datas de nascimento dos participantes.
+ *
+ * >>> POR QUE ISTO EXISTE (consertado em 24/08/2026) <<<
+ * Este script ficou QUEBRADO desde 17/08, criando 0 de 6 reservas: a venda
+ * passou a exigir CPF do responsavel (o Asaas recusa cobranca sem ele) e data de
+ * nascimento dos condutores (18+), e o script nunca foi atualizado. A falha era
+ * silenciosa no sentido que importa — ele imprime "FALHOU" por reserva e segue,
+ * entao quem rodasse veria a agenda vazia sem entender por que.
+ *
+ * As datas de nascimento sao de adultos: este script existe para POPULAR a tela
+ * do admin, nao para exercitar regra de idade (isso e o grupo R da suite).
+ */
+const DEMO_CPF = '24971563792';
+
+/** 'YYYY-MM-DD' de quem nasceu ha `years` anos, ancorado na data LOCAL. */
+function demoBirthdate(years: number): string {
+  const [y, m, d] = todayLocalDate().split('-');
+  return `${Number(y) - years}-${m}-${d}`;
+}
+
 type DemoReservation = {
   who: string;
   phone: string;
@@ -136,7 +157,7 @@ async function main() {
         experienceId,
         startAt,
         resourcesNeeded: item.resources,
-        customer: { name: item.who, phone: item.phone },
+        customer: { name: item.who, phone: item.phone, cpf: DEMO_CPF },
         participants: [
           ...Array.from({ length: item.resources }, (_, i) => ({
             name: i === 0 ? item.who : `Condutor ${i + 1} (${item.who.split(' ')[0]})`,
@@ -144,10 +165,15 @@ async function main() {
             // operator_document_required = 'true' no template: sem documento a
             // criacao recusa por composicao invalida.
             documentNumber: `${900000000 + created * 10 + i}`,
+            // 18+ na data do agendamento, exigido desde 17/08.
+            birthdate: demoBirthdate(30),
           })),
           ...Array.from({ length: item.passengers }, (_, i) => ({
             name: `Garupa ${i + 1} (${item.who.split(' ')[0]})`,
             role: 'passenger' as const,
+            // Idade minima do garupa e POR EXPERIENCIA (6 na Fazenda, 12 na
+            // Montanha) e conta na data do passeio. Adulto passa nas duas.
+            birthdate: demoBirthdate(25),
           })),
         ],
         termo: { version: 'demo-v1', acceptedAt: new Date().toISOString() },

@@ -43,6 +43,18 @@ export const quadricicloTemplate: SegmentTemplate = {
     what_to_bring:
       'Documento com foto, calca comprida, tenis fechado, protetor solar e agua.', // PROVISORIO — confirmar com o cliente
 
+    // URL de EMBED do Google Maps do ponto de encontro (fornecida pelo cliente
+    // em 24/08/2026). Vazia = a tela omite o bloco do mapa inteiro.
+    //
+    // >>> GUARDA SO A URL, NUNCA HTML <<<
+    // settings e DADO, renderizado como texto. Guardar o `<iframe ...>` inteiro
+    // obrigaria a renderizar marcacao crua vinda do banco (dangerouslySetInnerHTML),
+    // que e injecao de codigo (XSS) esperando acontecer: quem editar a setting
+    // passa a poder executar script na tela do cliente final. O iframe e montado
+    // no componente, que controla sandbox, loading e referrerpolicy.
+    meeting_point_map_url:
+      'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d4456.116253815707!2d-46.956300899999995!3d-22.8787841!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x94c8d043d946cc5d%3A0x2c32c5ac4a6ab6e0!2sQuadri%20Club!5e1!3m2!1spt-BR!2sbr!4v1787620105813!5m2!1spt-BR!2sbr',
+
     // ATENCAO: este e-mail aparece para o CLIENTE FINAL do tenant. Um endereco
     // @aventix.com.br expoe a plataforma onde a regra de marca (rev 5) manda
     // aparecer o tenant. Endereco do proprio Quadri Club, confirmado com o
@@ -112,6 +124,9 @@ export const quadricicloTemplate: SegmentTemplate = {
       priceMode: 'per_resource',
       priceCents: 32549, // PIX R$ 325,49 por quadriciclo (cartao seria 34999; ver nota acima)
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
+      // Publicado por escrito pelo cliente em 24/08/2026. Contado na DATA DO
+      // PASSEIO, nao na da reserva (ver createReservation).
+      minPassengerAge: 12,
       active: true,
     },
     {
@@ -121,6 +136,8 @@ export const quadricicloTemplate: SegmentTemplate = {
       priceMode: 'per_resource',
       priceCents: 23249, // PIX R$ 232,49 por quadriciclo (cartao seria 24999; ver nota acima)
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
+      // Publicado por escrito pelo cliente em 24/08/2026 (ver Trilha da Montanha).
+      minPassengerAge: 6,
       active: true,
     },
   ],

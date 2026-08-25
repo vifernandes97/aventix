@@ -11,6 +11,10 @@
 
 import { isValidCpf, normalizeCpf } from '@/lib/cpf';
 import type { PublicExperience } from '@/lib/experiences';
+// lib/time.ts e modulo PURO (so date-fns-tz), como lib/cpf.ts: pode ser
+// importado pelo Client Component. Nao confundir com lib/tenant.ts /
+// lib/reservations.ts, que sao server-only.
+import { ageOnDate, utcToLocalDate } from '@/lib/time';
 
 import { ageFromBirthdate } from './shared';
 
@@ -114,6 +118,13 @@ export function validatePeople(params: {
   // servidor faz a soma real dos recursos que ELE alocou, e e a dele que vale.
   const capacity = capacityPerResource * state.resourcesNeeded;
 
+  // Regra de idade do garupa: vem da EXPERIENCIA escolhida, nunca de constante
+  // (a Montanha exige 12 e a Fazenda 6). Sem experiencia ou sem horario
+  // escolhido a checagem nao roda — nos passos anteriores nao ha o que validar,
+  // e o servidor cobre o caso de qualquer jeito.
+  const minPassengerAge = state.experience?.minPassengerAge ?? 0;
+  const tripDate = state.startAt ? utcToLocalDate(new Date(state.startAt)) : null;
+
   const errors: string[] = [];
   const perPerson: Record<string, string[]> = {};
 
@@ -128,6 +139,25 @@ export function validatePeople(params: {
       addPersonError(person.key, 'Informe a data de nascimento.');
     } else if (ageFromBirthdate(person.birthdate) === null) {
       addPersonError(person.key, 'Data de nascimento inválida.');
+    }
+
+    // Idade minima do GARUPA, quando a experiencia exigir (0 = sem minimo).
+    //
+    // A conta e na DATA DO PASSEIO (`state.startAt`), nao hoje — uma crianca que
+    // completa a idade antes de viajar pode ir. Por isso usa `ageOnDate` e nao
+    // `ageFromBirthdate`, que ancora em hoje e serve para o condutor.
+    //
+    // ESPELHO do servidor (createReservation), nao a defesa: um POST direto e
+    // recusado com 422 de qualquer forma. Existe para o cliente descobrir no
+    // passo 4, e nao depois de preencher tudo e ir pagar.
+    if (person.role === 'passenger' && minPassengerAge > 0 && tripDate) {
+      const age = person.birthdate ? ageOnDate(person.birthdate, tripDate) : null;
+      if (age !== null && age < minPassengerAge) {
+        addPersonError(
+          person.key,
+          `${labels.passenger} precisa ter ${minPassengerAge} anos ou mais na data do passeio.`,
+        );
+      }
     }
 
     if (person.role === 'operator') {

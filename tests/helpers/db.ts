@@ -397,7 +397,7 @@ export async function removeDepositExperiences(): Promise<void> {
  * servidor corta a maioridade. Derivar do UTC erraria por um dia depois das
  * 21h locais.
  */
-function birthdateYearsAgo(years: number): string {
+export function birthdateYearsAgo(years: number): string {
   const [year, month, day] = todayLocalDate().split('-');
   return `${Number(year) - years}-${month}-${day}`;
 }
@@ -425,6 +425,14 @@ export function reservationInput(params: {
    */
   operatorBirthdate?: string | null;
   /**
+   * Data de nascimento aplicada a TODOS os garupas. Default: adulto — as duas
+   * experiencias do catalogo exigem idade minima do garupa (6 e 12), entao um
+   * garupa sem data de nascimento e RECUSADO, e o default precisa ser um valor
+   * que passe para os testes que nao estao testando idade. `null` explicito
+   * exercita a ausencia.
+   */
+  passengerBirthdate?: string | null;
+  /**
    * CPF do responsavel. Default: valido. Passe invalido ou vazio para exercitar
    * a recusa — o CPF e obrigatorio desde que o Asaas passou a exigi-lo para
    * emitir a cobranca.
@@ -440,6 +448,7 @@ export function reservationInput(params: {
     passengers = 0,
     withDocuments = true,
     operatorBirthdate = ADULT_BIRTHDATE,
+    passengerBirthdate = ADULT_BIRTHDATE,
     cpf = VALID_CPF,
   } = params;
 
@@ -458,6 +467,7 @@ export function reservationInput(params: {
       ...Array.from({ length: passengers }, (_, i) => ({
         name: `Garupa ${i + 1}`,
         role: 'passenger' as const,
+        birthdate: passengerBirthdate,
       })),
     ],
     termo: { version: 'v1', acceptedAt: new Date().toISOString() },

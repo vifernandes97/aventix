@@ -44,7 +44,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return NextResponse.json(validationErrorBody(parsed.error), { status: 422 });
   }
 
-  const { nome, duracaoMinutos, bufferMinutos, precoCentavos, modoPagamento, ativo } = parsed.data;
+  const { nome, duracaoMinutos, bufferMinutos, precoCentavos, modoPagamento, idadeMinimaGarupa, ativo } =
+    parsed.data;
 
   try {
     const experience = await updateExperience(experienceId, {
@@ -53,6 +54,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       bufferMinutes: bufferMinutos,
       priceCents: precoCentavos,
       paymentMode: modoPagamento,
+      minPassengerAge: idadeMinimaGarupa,
       active: ativo,
     });
 

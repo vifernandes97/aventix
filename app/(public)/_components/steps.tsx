@@ -50,7 +50,11 @@ export function StepExperience({
   return (
     <section>
       <h1 className="text-xl font-semibold">Escolha o passeio</h1>
-      <p className="mt-1 text-sm text-stone-400">{labels.meeting_point}</p>
+      {/* `meeting_point` NAO entra aqui (removido em 24/08/2026). O texto passou
+          a ser um bloco longo de varias linhas, e como subtitulo do primeiro
+          passo ele virava uma parede de texto ANTES de o cliente ver os passeios.
+          O ponto de encontro continua no passo de revisao (onde ele confere
+          antes de pagar) e na tela de confirmacao (onde ele volta no dia). */}
 
       {experiences.length === 0 && (
         <p className="mt-6 rounded-lg border border-stone-800 bg-stone-900/60 px-4 py-6 text-center text-sm text-stone-400">
@@ -700,10 +704,18 @@ export function StepTerms({
       </dl>
 
       <div className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+        {/* `whitespace-pre-line` preserva as quebras de linha vindas do banco
+            sem converter nada em HTML (o texto segue sendo texto — ver o
+            comentario equivalente em status-view.tsx). `break-words` impede que
+            uma URL ou palavra longa estoure a largura no celular. */}
         <h2 className="text-sm font-semibold">O que levar</h2>
-        <p className="mt-1 text-sm text-stone-400">{labels.what_to_bring}</p>
+        <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
+          {labels.what_to_bring}
+        </p>
         <h2 className="mt-3 text-sm font-semibold">Ponto de encontro</h2>
-        <p className="mt-1 text-sm text-stone-400">{labels.meeting_point}</p>
+        <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
+          {labels.meeting_point}
+        </p>
       </div>
 
       {/* ====================================================================

@@ -70,6 +70,34 @@ export function todayLocalDate(): string {
   return utcToLocalDate(new Date());
 }
 
+/**
+ * Idade em anos COMPLETOS numa data de referencia. Ambas 'YYYY-MM-DD'.
+ *
+ * @returns `null` se qualquer uma das datas nao for data de calendario valida.
+ *
+ * >>> POR QUE ARITMETICA DE CALENDARIO PURA, SEM `Date` <<<
+ * Idade nao tem fuso: e a diferenca entre duas datas de calendario. Quem
+ * constroi `Date` para isso reintroduz a armadilha registrada em DECISOES.md
+ * (17/08) — `new Date().toISOString()` e UTC, e depois das 21h em Sao Paulo ja
+ * virou o dia seguinte, adiantando a data em um dia e recusando quem tem a
+ * idade exata. Comparar (ano, mes, dia) como numeros nao tem essa borda.
+ *
+ * A DATA DE REFERENCIA e escolha de quem chama, e as duas regras do produto
+ * divergem de proposito (ver `createReservation`): o condutor conta na data do
+ * AGENDAMENTO, o garupa na data do PASSEIO.
+ */
+export function ageOnDate(birthdate: string, onDate: string): number | null {
+  if (!isValidCalendarDate(birthdate) || !isValidCalendarDate(onDate)) return null;
+
+  const [by, bm, bd] = birthdate.split('-').map(Number);
+  const [ry, rm, rd] = onDate.split('-').map(Number);
+
+  let age = ry - by;
+  // Ainda nao fez aniversario ate a data de referencia: compara mes/dia direto.
+  if (rm * 100 + rd < bm * 100 + bd) age -= 1;
+  return age;
+}
+
 /** Rotulo 'HH:mm' em horario de Sao Paulo, para exibicao ao cliente. */
 export function utcToLocalLabel(instant: Date): string {
   return formatTz(toZonedTime(instant, TIMEZONE), 'HH:mm', { timeZone: TIMEZONE });

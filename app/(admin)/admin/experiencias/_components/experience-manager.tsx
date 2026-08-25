@@ -38,9 +38,19 @@ type FormState = {
   duracao: string;
   buffer: string;
   preco: string;
+  idadeMinima: string;
 };
 
-const EMPTY_FORM: FormState = { editingId: null, nome: '', duracao: '', buffer: '15', preco: '' };
+// idadeMinima nasce '0' (sem minimo) em vez de vazio: campo numerico em branco
+// viraria NaN no Number() do submit.
+const EMPTY_FORM: FormState = {
+  editingId: null,
+  nome: '',
+  duracao: '',
+  buffer: '15',
+  preco: '',
+  idadeMinima: '0',
+};
 
 function formFor(experience: ExperienceRow): FormState {
   return {
@@ -49,6 +59,7 @@ function formFor(experience: ExperienceRow): FormState {
     duracao: String(experience.durationMinutes),
     buffer: String(experience.bufferMinutes),
     preco: centsToReaisInput(experience.priceCents),
+    idadeMinima: String(experience.minPassengerAge),
   };
 }
 
@@ -130,6 +141,7 @@ export function ExperienceManager({ experiences }: Props) {
       duracaoMinutos: Number(form.duracao),
       bufferMinutos: Number(form.buffer),
       precoCentavos,
+      idadeMinimaGarupa: Number(form.idadeMinima),
     };
 
     setSaving(true);
@@ -269,6 +281,10 @@ export function ExperienceManager({ experiences }: Props) {
                 <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
                   {moneyLabel(experience.priceCents)} · {experience.durationMinutes} min
                   {experience.bufferMinutes > 0 && ` + ${experience.bufferMinutes} min de intervalo`}
+                  {/* So aparece quando ha regra: "sem idade minima" nao e
+                      informacao util na listagem, e poluiria as duas linhas. */}
+                  {experience.minPassengerAge > 0 &&
+                    ` · garupa a partir de ${experience.minPassengerAge} anos`}
                 </p>
               </div>
 
@@ -349,6 +365,7 @@ const FIELD_OF: Record<string, keyof FormState> = {
   duracaoMinutos: 'duracao',
   bufferMinutos: 'buffer',
   precoCentavos: 'preco',
+  idadeMinimaGarupa: 'idadeMinima',
 };
 
 function ExperienceForm({
@@ -447,6 +464,25 @@ function ExperienceForm({
             onChange={(e) => set({ buffer: e.target.value.replace(/\D/g, '') })}
             inputMode="numeric"
             placeholder="15"
+            className="w-full rounded border px-3 py-2 text-sm sm:max-w-[12rem]"
+          />
+        </Field>
+
+        {/* Regra de SEGURANCA, e por isso ela e visivel e editavel aqui: uma
+            constante em codigo faria a proxima trilha herdar o numero da
+            anterior, e ninguem perceberia ate alguem aparecer com uma crianca
+            no ponto de encontro. */}
+        <Field
+          label="Idade mínima do garupa (anos)"
+          hint="Contada na data do passeio. Use 0 para não exigir idade mínima."
+          error={errorFor('idadeMinima')}
+          className="sm:col-span-2"
+        >
+          <input
+            value={form.idadeMinima}
+            onChange={(e) => set({ idadeMinima: e.target.value.replace(/\D/g, '') })}
+            inputMode="numeric"
+            placeholder="0"
             className="w-full rounded border px-3 py-2 text-sm sm:max-w-[12rem]"
           />
         </Field>

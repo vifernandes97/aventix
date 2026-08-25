@@ -49,7 +49,8 @@ export async function POST(request: Request) {
     return NextResponse.json(validationErrorBody(parsed.error), { status: 422 });
   }
 
-  const { nome, duracaoMinutos, bufferMinutos, precoCentavos, modoPagamento } = parsed.data;
+  const { nome, duracaoMinutos, bufferMinutos, precoCentavos, modoPagamento, idadeMinimaGarupa } =
+    parsed.data;
 
   try {
     const experience = await createExperience({
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
       bufferMinutes: bufferMinutos,
       priceCents: precoCentavos,
       paymentMode: modoPagamento,
+      minPassengerAge: idadeMinimaGarupa,
     });
 
     return NextResponse.json({ experience }, { status: 201 });

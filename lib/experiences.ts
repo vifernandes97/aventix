@@ -57,6 +57,8 @@ export type ExperienceRow = {
   bufferMinutes: number;
   priceCents: number;
   paymentMode: 'full' | 'deposit';
+  /** idade minima do garupa em anos completos NA DATA DO PASSEIO; 0 = sem minimo */
+  minPassengerAge: number;
   active: boolean;
 };
 
@@ -66,6 +68,7 @@ export type ExperienceInput = {
   bufferMinutes: number;
   priceCents: number;
   paymentMode: AcceptedPaymentMode;
+  minPassengerAge: number;
 };
 
 /** PATCH e parcial: o toggle de active manda `{ active: false }` e nada mais. */
@@ -96,6 +99,7 @@ export async function listExperiences(): Promise<ExperienceRow[]> {
       bufferMinutes: experiences.bufferMinutes,
       priceCents: experiences.priceCents,
       paymentMode: experiences.paymentMode,
+      minPassengerAge: experiences.minPassengerAge,
       active: experiences.active,
     })
     .from(experiences)
@@ -116,6 +120,12 @@ export type PublicExperience = {
   durationMinutes: number;
   priceCents: number;
   paymentMode: 'full' | 'deposit';
+  /**
+   * Idade minima do garupa. SAI no catalogo publico de proposito: sem ela o
+   * wizard nao teria como avisar o cliente ANTES do pagamento, e a recusa so
+   * apareceria no POST — depois de ele preencher os seis passos.
+   */
+  minPassengerAge: number;
 };
 
 /**
@@ -141,6 +151,7 @@ export async function listPublicExperiences(): Promise<PublicExperience[]> {
       durationMinutes: experiences.durationMinutes,
       priceCents: experiences.priceCents,
       paymentMode: experiences.paymentMode,
+      minPassengerAge: experiences.minPassengerAge,
     })
     .from(experiences)
     .where(and(eq(experiences.tenantId, getTenantId()), eq(experiences.active, true)))
@@ -169,6 +180,7 @@ export async function createExperience(input: ExperienceInput): Promise<Experien
       bufferMinutes: input.bufferMinutes,
       priceCents: input.priceCents,
       paymentMode: input.paymentMode,
+      minPassengerAge: input.minPassengerAge,
       // price_mode fica no default 'per_resource' (unico valor do enum hoje), e
       // deposit_percent / deposit_fixed_cents ficam NULL — que e o que o CHECK
       // experiences_deposit_mode_check exige quando payment_mode = 'full'.
@@ -181,6 +193,7 @@ export async function createExperience(input: ExperienceInput): Promise<Experien
       bufferMinutes: experiences.bufferMinutes,
       priceCents: experiences.priceCents,
       paymentMode: experiences.paymentMode,
+      minPassengerAge: experiences.minPassengerAge,
       active: experiences.active,
     });
 
@@ -209,6 +222,7 @@ export async function updateExperience(
   if (patch.bufferMinutes !== undefined) values.bufferMinutes = patch.bufferMinutes;
   if (patch.priceCents !== undefined) values.priceCents = patch.priceCents;
   if (patch.paymentMode !== undefined) values.paymentMode = patch.paymentMode;
+  if (patch.minPassengerAge !== undefined) values.minPassengerAge = patch.minPassengerAge;
   if (patch.active !== undefined) values.active = patch.active;
 
   // PATCH vazio nao vira UPDATE sem SET (que e erro de sintaxe no Postgres).
@@ -230,6 +244,7 @@ export async function updateExperience(
       bufferMinutes: experiences.bufferMinutes,
       priceCents: experiences.priceCents,
       paymentMode: experiences.paymentMode,
+      minPassengerAge: experiences.minPassengerAge,
       active: experiences.active,
     });
 
@@ -246,6 +261,7 @@ async function findExperience(experienceId: number): Promise<ExperienceRow | nul
       bufferMinutes: experiences.bufferMinutes,
       priceCents: experiences.priceCents,
       paymentMode: experiences.paymentMode,
+      minPassengerAge: experiences.minPassengerAge,
       active: experiences.active,
     })
     .from(experiences)

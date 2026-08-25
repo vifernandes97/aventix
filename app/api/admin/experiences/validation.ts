@@ -65,6 +65,18 @@ const paymentMode = z.enum(ACCEPTED_PAYMENT_MODES, {
     'modoPagamento: no MVP só `full` é aceito. Pagamento com sinal depende da Fase 2 (Asaas).',
 });
 
+/**
+ * Idade minima do garupa, em anos completos NA DATA DO PASSEIO. `0` = sem
+ * minimo.
+ *
+ * O teto de 120 espelha o CHECK experiences_min_passenger_age_check: sem ele um
+ * digito a mais ('60' virando '600') gravaria uma experiencia que ninguem
+ * consegue comprar, e o erro chegaria como falha do driver em vez de 422.
+ */
+const minPassengerAge = boundedInt('idadeMinimaGarupa')
+  .min(0, 'idadeMinimaGarupa: não pode ser negativa')
+  .max(120, 'idadeMinimaGarupa: valor implausível (máximo 120)');
+
 export const createSchema = z.object({
   nome: name,
   duracaoMinutos: durationMinutes,
@@ -72,6 +84,10 @@ export const createSchema = z.object({
   precoCentavos: priceCents,
   // Ausente vira 'full': o unico valor valido hoje, e a tela nao envia o campo.
   modoPagamento: paymentMode.default('full'),
+  // Ausente vira 0 (sem idade minima) em vez de obrigar o campo: manter o
+  // corpo compativel evita quebrar chamador existente. Quem cria pela TELA ve o
+  // campo e escolhe — e e la que a regra de seguranca fica visivel.
+  idadeMinimaGarupa: minPassengerAge.default(0),
 });
 
 /**
@@ -84,6 +100,7 @@ export const patchSchema = z.object({
   bufferMinutos: bufferMinutes.optional(),
   precoCentavos: priceCents.optional(),
   modoPagamento: paymentMode.optional(),
+  idadeMinimaGarupa: minPassengerAge.optional(),
   ativo: z.boolean({ message: 'ativo: esperado true ou false' }).optional(),
 });
 

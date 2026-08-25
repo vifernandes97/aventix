@@ -82,6 +82,13 @@ export type SettingKey =
   | 'operator_document_required'
   | 'operator_document_label'
   | 'meeting_point'
+  // URL de EMBED do mapa do ponto de encontro (Google Maps). SO A URL, nunca
+  // HTML: settings e dado renderizado como TEXTO, e guardar marcacao obrigaria a
+  // injeta-la crua na pagina (XSS). O <iframe> e montado no componente.
+  //
+  // VAZIO E ESTADO VALIDO: a tela omite o bloco do mapa inteiro, mesma regra de
+  // support_whatsapp.
+  | 'meeting_point_map_url'
   | 'what_to_bring'
   | 'business_name'
   | 'reply_to_email'
@@ -129,6 +136,7 @@ const SETTING_DEFAULTS: Record<SettingKey, string> = {
   operator_document_required: 'true',
   operator_document_label: 'Documento',
   meeting_point: '',
+  meeting_point_map_url: '',
   what_to_bring: '',
   // NUNCA 'Aventix' aqui. Regra de marca (rev 5): a UI publica exibe a marca do
   // TENANT; "Aventix" e o nome da plataforma e nao substitui a marca do cliente.

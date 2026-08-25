@@ -27,7 +27,7 @@ import {
   resources,
 } from './db/schema';
 import { getBooleanSetting, getTenantId } from './tenant';
-import { todayLocalDate, utcToLocalDate } from './time';
+import { ageOnDate, todayLocalDate, utcToLocalDate } from './time';
 
 /** Status de reserva, derivado do enum do Drizzle — nunca string solta. */
 export type ReservationStatus = (typeof reservationStatus.enumValues)[number];
@@ -707,6 +707,7 @@ async function applyCreateReservation(
       paymentMode: experiences.paymentMode,
       depositPercent: experiences.depositPercent,
       depositFixedCents: experiences.depositFixedCents,
+      minPassengerAge: experiences.minPassengerAge,
     })
     .from(experiences)
     .where(
@@ -718,6 +719,43 @@ async function applyCreateReservation(
     );
 
   if (!experience) throw new ExperienceNotFoundError(input.experienceId, tenantId);
+
+  // -- data do PASSEIO, em Sao Paulo -----------------------------------------
+  // Usada pela idade minima do garupa (logo abaixo) e pelo recheck de
+  // disponibilidade (passo 2). Uma variavel so: duas conversoes do mesmo
+  // instante poderiam divergir se alguem trocasse uma delas por `toISOString`.
+  const date = utcToLocalDate(startInstant);
+
+  // -- idade minima do GARUPA (regra POR EXPERIENCIA) ------------------------
+  //
+  // >>> A CONTA E NA DATA DO PASSEIO, NAO NA DA RESERVA. <<<
+  // Uma crianca que completa a idade entre reservar e viajar PODE ir — recusa-la
+  // seria recusar dinheiro por um tecnicismo de calendario. E o oposto da regra
+  // do CONDUTOR (acima, fora da transacao), que conta na data do agendamento:
+  // divergencia deliberada, registrada em docs/DECISOES.md em 24/08/2026.
+  //
+  // `0` = experiencia sem idade minima; o filtro nem roda.
+  //
+  // Sem `birthdate` nao ha como verificar, entao RECUSA em vez de deixar passar —
+  // mesma escolha da regra do condutor. O zod da rota aceita birthdate nulo, e e
+  // aqui que a ausencia vira 422 quando a experiencia exige idade.
+  if (experience.minPassengerAge > 0) {
+    const underage = input.participants.filter((p) => {
+      if (p.role !== 'passenger') return false;
+      const age = p.birthdate ? ageOnDate(p.birthdate, date) : null;
+      return age === null || age < experience.minPassengerAge;
+    });
+
+    if (underage.length > 0) {
+      // A mensagem DIZ A IDADE EXIGIDA: o cliente precisa saber contra o que
+      // errou. Nao ecoa nome nem data de nascimento (dado pessoal em corpo de
+      // erro que pode ir para log).
+      throw new InvalidCompositionError(
+        `${underage.length} participante(s) sem data de nascimento comprovando a idade minima ` +
+          `de ${experience.minPassengerAge} anos exigida por esta experiencia na data do passeio`,
+      );
+    }
+  }
 
   const [{ activeResources }] = await tx
     .select({ activeResources: sql<number>`count(*)::int` })
@@ -749,7 +787,7 @@ async function applyCreateReservation(
   // poderia divergir do motor — a grade mostraria horario que o POST recusa, ou
   // aceitaria um que a grade escondeu. De brinde, cobre lead time, blackouts,
   // excecoes de agenda e exclusividade de experiencia sem duplicar nada.
-  const date = utcToLocalDate(startInstant);
+  // `date` ja foi calculado junto da experiencia (idade minima do garupa).
   const availability = await getAvailability(
     { experienceId: input.experienceId, date, resourcesNeeded: input.resourcesNeeded },
     tx,

@@ -36,6 +36,13 @@
       "when": 1787520130967,
       "tag": "0004_tenant_slug",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787621136041,
+      "tag": "0005_min_passenger_age",
+      "breakpoints": true
     }
   ]
 }

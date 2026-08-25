@@ -20,6 +20,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { MeetingPointMap } from '@/app/(public)/_components/meeting-point-map';
+
 import {
   durationLabel,
   fullDateFromInstant,
@@ -62,6 +64,7 @@ type QrPayload = {
 export type StatusLabels = {
   business_name: string;
   meeting_point: string;
+  meeting_point_map_url: string;
   what_to_bring: string;
   support_whatsapp: string;
   reply_to_email: string;
@@ -654,7 +657,15 @@ function Confirmed({
           {meetingPoint && (
             <>
               <h2 className="text-sm font-semibold text-stone-100">Ponto de encontro</h2>
-              <p className="mt-1 whitespace-pre-line text-sm text-stone-400">{meetingPoint}</p>
+              {/* `whitespace-pre-line` preserva as quebras de linha do texto do
+                  banco SEM converter nada em HTML: o texto continua sendo texto,
+                  e um `<script>` digitado na setting aparece como caracteres na
+                  tela. Renderizar marcacao aqui seria XSS pela mesma porta que o
+                  mapa evita ao guardar so a URL. */}
+              <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
+                {meetingPoint}
+              </p>
+              <MeetingPointMap url={labels.meeting_point_map_url} title="Mapa do ponto de encontro" />
             </>
           )}
           {whatToBring && (

@@ -6,6 +6,97 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-24 — Idade do garupa conta na data do PASSEIO; a do condutor continua na data da RESERVA
+
+`createReservation` passou a ter **duas regras de idade com bases de data
+diferentes**, e as duas são deliberadas:
+
+| Papel | Regra | Base da conta | Desde |
+|---|---|---|---|
+| Condutor | 18 anos (habilitação) | data do **agendamento** (`todayLocalDate()`) | 17/08 |
+| Garupa | idade mínima **por experiência** (6 na Fazenda, 12 na Montanha) | data do **passeio** (`start_at`) | 24/08 |
+
+**Isto está escrito aqui porque a divergência parece bug.** Quem abrir o arquivo
+daqui a seis meses vê duas contas de idade lado a lado, uma ancorada em hoje e
+outra no passeio, e a leitura natural é "descuido, vou alinhar". Alinhar é
+exatamente o que não pode ser feito sem decisão própria — ver o último bloco.
+
+**Por que o garupa conta no passeio:** é regra de **segurança operacional**, e o
+que importa é a idade de quem vai subir no quadriciclo **no dia**. Uma criança
+que faz 12 anos entre reservar e viajar tem 12 no passeio — recusá-la seria
+recusar dinheiro por tecnicismo de calendário, e a mãe que reservou não teria
+como entender o "não". O caso é real e barato de suportar: a conta usa
+`ageOnDate(birthdate, start_at)` em vez de `ageFromBirthdate`, que ancora em hoje.
+
+**Por que o condutor continua na data da reserva:** é regra de **habilitação
+legal** (CNH), não de segurança operacional, e a decisão de 17/08 escolheu
+explicitamente a forma simples — o comentário original diz "regra
+deliberadamente simples — sem cálculo de 'faz aniversário antes do passeio'".
+Nada mudou desde então que justifique reabrir isso de carona numa tarefa sobre
+garupa.
+
+**Alternativa descartada: alinhar os dois em `start_at`.** É a opção mais
+limpa de ler, e foi considerada. Descartada porque **não é refatoração, é
+mudança de comportamento numa regra legal**: contar no passeio é estritamente
+mais permissivo, então passaria a aceitar quem faz 18 **entre reservar e
+viajar**. Isso é defensável (no dia ele tem 18 e pode ter CNH), mas é decisão de
+negócio — envolve o tenant, o termo e o risco de alguém aparecer sem carteira
+porque a tirou na semana do passeio. Merece decisão própria, não um efeito
+colateral.
+
+**Consequência assumida:** as duas bases convivem, e quem mexer numa precisa
+saber da outra. A defesa contra o "conserto" silencioso são três coisas, nesta
+ordem: esta entrada, os comentários nos dois pontos de `createReservation`, e o
+caso **R4** do grupo R — que constrói uma criança que faz aniversário
+exatamente na data do passeio e **afirma que hoje ela tem um ano a menos**.
+Alinhar as regras na data da reserva quebra R4 com uma mensagem que aponta para
+a regra, não para o teste.
+
+**Reabrir quando:** o tenant pedir para aceitar condutor que completa 18 antes
+do passeio — e aí a mudança é a do condutor, decidida por si, não "para ficar
+igual ao garupa".
+
+## 2026-08-24 — Idade mínima é coluna por experiência, com `0` significando "sem mínimo"
+
+A regra veio do cliente por escrito (6 na Trilha da Fazenda, 12 na Trilha da
+Montanha) e virou `experiences.min_passenger_age`, não constante de código.
+
+**Por que por experiência:** os dois números diferem **entre trilhas do mesmo
+tenant**, então a regra é do passeio e não do negócio. Uma constante faria a
+próxima trilha herdar o número da anterior — errado, e silencioso até alguém
+aparecer com uma criança no ponto de encontro.
+
+**`NOT NULL DEFAULT 0`, com `0` = sem idade mínima.** Contraste deliberado com
+`emergency_contact_*` (0002), que nasceu nullable porque **não havia valor
+retroativo possível**; aqui há default com significado, então nenhum consumidor
+precisa tratar ausência. **Custo reconhecido:** `0` é valor **sentinela** — a
+coluna diz "idade zero" para significar "regra ausente", e uma coluna anulável
+expressaria isso com mais honestidade. Aceito por ora; **reabrir se** a
+semântica confundir alguém na prática.
+
+**A proteção contra "esqueci de configurar" mora no CRUD**, que expõe o campo com
+o texto "Use 0 para não exigir idade mínima" — e não no banco, porque um default
+mais restritivo (12, digamos) bloquearia venda de trilha que não precisa de
+mínimo, que é o erro mais caro dos dois.
+
+**>>> RISCO DE DEPLOY, VERIFICAR EM PRODUÇÃO <<<** O backfill da migration 0005
+casa por **nome** (`WHERE name = 'Trilha da Fazenda'`), mesma chave de
+reconciliação do seed — id não serve, as trilhas já foram recriadas uma vez (ids
+3 e 4) quando o template as renomeou em 28/07. **Se o nome em produção divergir
+minimamente** (espaço, acento, maiúscula), o `UPDATE` não casa, as duas ficam com
+`0`, e `0` é "sem mínimo": a migration passa, o boot passa, o sistema aceita
+criança de qualquer idade e **nada acusa erro**. Falha surda, da mesma família
+das três desta semana. Depois do deploy, obrigatoriamente:
+
+```sql
+SELECT id, name, min_passenger_age FROM experiences;
+```
+
+Esperado: `Trilha da Fazenda | 6` e `Trilha da Montanha | 12`. Qualquer `0` ali
+significa que a regra **não está valendo**, e o conserto é um `UPDATE` manual
+com o nome real (protocolo da seção 19: `psql -c` isolado, conferido em conexão
+nova).
+
 ## 2026-08-23 — Etapa 1 usa `[slug]` dinâmico com guarda, não pasta literal
 
 A seção 2-B mandava a Etapa 1 pôr a LP na pasta **literal**

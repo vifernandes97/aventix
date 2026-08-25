@@ -205,6 +205,11 @@ export async function seedTenant(
         paymentMode: item.paymentMode,
         depositPercent: item.depositPercent ?? null,
         depositFixedCents: item.depositFixedCents ?? null,
+        // Entra na reconciliacao (e nao so no INSERT) de proposito: a idade
+        // minima e regra de SEGURANCA publicada pelo cliente, entao o template e
+        // a casa definitiva. Valor divergente no banco volta para o do template
+        // no proximo seed, como ja acontece com preco e duracao.
+        minPassengerAge: item.minPassengerAge,
         active: item.active,
       };
 

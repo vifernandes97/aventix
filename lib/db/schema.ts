@@ -144,12 +144,29 @@ export const experiences = pgTable(
     depositPercent: integer('deposit_percent'), // usado se payment_mode='deposit'
     depositFixedCents: integer('deposit_fixed_cents'), // alternativa ao percentual
 
+    // Idade minima do GARUPA, em anos completos NA DATA DO PASSEIO.
+    //
+    // >>> POR EXPERIENCIA, NUNCA CONSTANTE DE CODIGO <<<
+    // O cliente publicou 6 anos na Trilha da Fazenda e 12 na Trilha da Montanha:
+    // a regra e do passeio, nao do tenant. Uma constante faria a proxima trilha
+    // herdar o numero da anterior — errado e silencioso.
+    //
+    // NOT NULL DEFAULT 0, e `0` significa SEM IDADE MINIMA. Contraste com
+    // emergency_contact_* (migration 0002), que nasceu nullable porque nao havia
+    // valor retroativo possivel; aqui ha default com significado, entao a coluna
+    // nunca precisa admitir null e nenhum consumidor precisa tratar ausencia.
+    // A protecao contra "esqueci de configurar" mora no CRUD, que expoe o campo.
+    minPassengerAge: integer('min_passenger_age').notNull().default(0),
+
     active: boolean('active').notNull().default(true),
   },
   (t) => [
     check('experiences_duration_check', sql`${t.durationMinutes} > 0`),
     check('experiences_buffer_check', sql`${t.bufferMinutes} >= 0`),
     check('experiences_price_check', sql`${t.priceCents} >= 0`),
+    // Teto de 120 barra digito extra ('60' virando '600') no CRUD, que criaria
+    // uma experiencia que ninguem consegue comprar.
+    check('experiences_min_passenger_age_check', sql`${t.minPassengerAge} BETWEEN 0 AND 120`),
     check('experiences_deposit_percent_check', sql`${t.depositPercent} BETWEEN 1 AND 99`),
     check('experiences_deposit_fixed_check', sql`${t.depositFixedCents} > 0`),
     // modo 'deposit' exige EXATAMENTE um dos dois (percentual XOR fixo)

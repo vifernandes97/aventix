@@ -56,6 +56,13 @@ export type TemplateExperience = {
    */
   depositPercent?: number;
   depositFixedCents?: number;
+  /**
+   * Idade minima do GARUPA em anos completos NA DATA DO PASSEIO. `0` = sem
+   * minimo. Obrigatorio no template (nao opcional) pelo mesmo motivo de
+   * TemplateSettings ser Record completo: um segmento novo nao pode ESQUECER a
+   * regra de idade e herdar em silencio o default do banco.
+   */
+  minPassengerAge: number;
   active: boolean;
 };
 
