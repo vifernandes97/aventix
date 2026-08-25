@@ -200,6 +200,11 @@ CREATE TABLE tenants (
 --  sem valor. Canal principal porque o tenant vende por ManyChat (secao 9).
 --  single_experience_per_slot ("true"/"false", default "false"),
 --  min_lead_minutes (inteiro >= 0 como string, default "60") — antecedencia minima para reservar
+--  meeting_point_map_url: URL de EMBED do mapa do ponto de encontro. SO A URL,
+--  NUNCA HTML: settings e dado renderizado como TEXTO, e guardar marcacao
+--  obrigaria a injeta-la crua na pagina (XSS). O <iframe> e montado no
+--  componente, e a URL passa por lista de permissao http(s) (lib/maps.ts) antes
+--  de virar src. VAZIO e estado valido: a tela omite o bloco do mapa.
 CREATE TABLE settings (
   tenant_id int NOT NULL REFERENCES tenants(id),
   key text NOT NULL,
@@ -232,6 +237,11 @@ CREATE TABLE experiences (
   payment_mode payment_mode NOT NULL DEFAULT 'full',
   deposit_percent int CHECK (deposit_percent BETWEEN 1 AND 99),  -- usado se payment_mode='deposit'
   deposit_fixed_cents int CHECK (deposit_fixed_cents > 0),       -- alternativa ao percentual
+
+  -- Idade minima do GARUPA, em anos completos NA DATA DO PASSEIO (secao 4.6).
+  -- 0 = sem idade minima. POR EXPERIENCIA, nunca constante: Quadri Club opera
+  -- com 6 na Trilha da Fazenda e 12 na Trilha da Montanha.
+  min_passenger_age int NOT NULL DEFAULT 0 CHECK (min_passenger_age BETWEEN 0 AND 120),
   CHECK (
     payment_mode = 'full'
     OR (deposit_percent IS NOT NULL) <> (deposit_fixed_cents IS NOT NULL)  -- exatamente um dos dois
@@ -382,6 +392,7 @@ CREATE INDEX idx_rp_open ON reservation_payments (state, due_date) WHERE state =
 - **A reserva congela o que foi vendido.** `total_price_cents`, `payment_mode`, `duration_minutes` e `buffer_minutes` são gravados na criação a partir da experiência e **nunca** são relidos dela depois. Toda leitura de duração ou buffer de uma reserva existente (calendário, painel, e-mail, recibo) sai de `reservations`, **jamais de um JOIN com `experiences`** — ler do JOIN faz uma edição de catálogo redesenhar retroativamente reserva já vendida. A vaga ocupada (`reservation_resources.period`) já era congelada, então o erro não produz overbooking: produz tela mentindo, nas duas direções. Quem lê da experiência **atual** e está certo assim: `lib/availability.ts` e o cálculo do `period` em `createReservation`, porque reserva **nova** usa a duração vigente.
 - **`resources_needed` é escolha do cliente**; teto = recursos ativos (validação no app, não em CHECK).
 - **Preço e valor do sinal são calculados no servidor.** `deposit = round(total × deposit_percent/100)` ou `deposit_fixed_cents`; `balance = total − deposit`. Nunca confie em valor vindo do cliente.
+- **>>> AS DUAS REGRAS DE IDADE USAM BASES DE DATA DIFERENTES, DE PROPÓSITO. <<<** O **condutor** precisa de 18 anos na **data do agendamento** (habilitação legal/CNH; regra simples escolhida em 17/08). O **garupa** precisa de `experiences.min_passenger_age` na **data do passeio** (`start_at`), porque é segurança operacional e a criança que completa a idade entre reservar e viajar pode ir. Ler os dois lado a lado sugere descuido; **não alinhe um ao outro** — alinhar em `start_at` passaria a aceitar condutor que faz 18 no intervalo, o que é mudança de comportamento em regra legal e pede decisão própria (`docs/DECISOES.md`, 2026-08-24). Ambas as regras são **fail-closed**: sem `birthdate` o participante é recusado, nunca ignorado. A idade sai de `ageOnDate()` (`lib/time.ts`), aritmética de calendário pura — construir `Date` aqui reintroduz a armadilha de UTC de 17/08.
 - **`external_reference` é único e determinístico** (`"{uuid}:{kind}"`). É o que permite reconciliar mesmo se o `asaas_payment_id` se perder.
 - Find-or-create de `customers` por `(tenant_id, phone)`.
 - **Experiência gratuita não é suportada no MVP.** `price_cents = 0` produz `total = 0`, e a cobrança violaria `CHECK (amount_cents > 0)` na criação (erro 500); em `recalcReservationPayment` a reserva ficaria `pending` para sempre. O CRUD de experiências (Fase 3) deve recusar preço zero. O `CHECK (price_cents >= 0)` do schema fica como está — apertar para `> 0` exigiria migration e não se justifica antes do go-live.
@@ -469,11 +480,11 @@ ORDER BY r.id;
 **`GET /api/availability?experienceId=&date=&resourcesNeeded=`** → `{ slots: [{ startAt, label }], dayState }`
 `dayState` ∈ `'open' | 'closed_exception' | 'closed_weekday'`. Distingue "o tenant não opera nesse dia" (fechado por grade semanal), "fechado por exceção" (recesso/feriado) e "opera, mas sem horários livres" — três situações que colapsariam numa lista vazia indistinguível e produziriam a mensagem errada na tela.
 
-**`GET /api/experiences`** → inclui `paymentMode`, `priceCents` e, quando `deposit`, `depositCents` e `balanceCents` **já calculados no servidor** para exibir no checkout.
+**`GET /api/experiences`** → inclui `paymentMode`, `priceCents` e, quando `deposit`, `depositCents` e `balanceCents` **já calculados no servidor** para exibir no checkout. Inclui também **`minPassengerAge`**: sem ele o wizard não teria como avisar sobre idade antes do pagamento, e a recusa só apareceria no POST, depois dos seis passos preenchidos.
 
 **Termo:** não existe `GET /api/termo`. O texto e a versão vigente (`TERM_VERSION`, `TERM_TEXT`) vivem em `lib/terms/quadriciclo-v1.ts` e entram no bundle do cliente por import direto — o formulário é `'use client'`, então buscar por API seria uma volta ao servidor sem necessidade. Versão nova = arquivo novo (`quadriciclo-v2.ts`); a reserva antiga mantém o registro do que aceitou, gravando só a versão (`termo_version`), nunca o texto.
 
-**`POST /api/reservations`** — cria cliente, reserva, alocações, participantes e pagamentos. Corpo igual à rev 5, sem campo de pagamento (o modo vem da experiência), **mais `emergencyContact: { name, phone }`** (obrigatório — passo 5 do formulário público, seção 10). `createReservation` valida presença de `termo.version`/`acceptedAt`, mas **não** que a versão seja a vigente — divida registrada em `docs/ESTADO-ATUAL.md`.
+**`POST /api/reservations`** — cria cliente, reserva, alocações, participantes e pagamentos. Corpo igual à rev 5, sem campo de pagamento (o modo vem da experiência), **mais `emergencyContact: { name, phone }`** (obrigatório — passo 5 do formulário público, seção 10). `createReservation` valida presença de `termo.version`/`acceptedAt`, mas **não** que a versão seja a vigente — divida registrada em `docs/ESTADO-ATUAL.md`. Garupa abaixo de `experiences.min_passenger_age` na data do passeio responde **422**, com a idade exigida na mensagem e **sem ecoar nome ou data de nascimento** (corpo de erro pode ir para log).
 Resposta `201`:
 ```json
 {
@@ -525,6 +536,7 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 
 - CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/quadriciclo-v1.ts` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
 - **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
+  **Idade mínima do garupa entra no CRUD** (`idadeMinimaGarupa`, inteiro 0..120; `0` = sem mínimo): é regra de segurança publicada pelo tenant, e escondê-la do dono faria a próxima trilha nascer sem regra em silêncio. Ausente no POST vira `0`, para não quebrar chamador existente.
   **Sinal fora do CRUD por ora:** `payment_mode` só aceita `full`, e `deposit_percent`/`deposit_fixed_cents` não são expostos. `deposit` responde 422 em vez de gravar experiência que ninguém consegue vender — gravar o modo sem os campos de sinal violaria `experiences_deposit_mode_check` e viraria 500. Reabre com a Fase 2 e a decisão de negócio sobre o sinal; o ponto único a mudar é `ACCEPTED_PAYMENT_MODES` em `lib/experiences.ts`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
 - **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento, **contato de emergência** e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF, número de documento ou contato de emergência:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas. `emergencyContact` vem `null` em reserva anterior à migration 0002 (coluna nullable).
@@ -708,6 +720,7 @@ Um único login (o dono). Sem provider externo.
     /page.tsx                         # RAIZ = login da plataforma (307 -> /admin/login). NAO pertence a tenant, NAO leva a agendamento
     /agendamento/[slug]/page.tsx      # LP do tenant: experiencia → nº recursos → horario → participantes+doc → TERMO → pagamento
     /reserva/[id]/page.tsx            # QR + polling. FICA NA RAIZ, fora do slug (secao 2-B)
+    /_components/meeting-point-map.tsx # iframe do mapa + link de fallback; some se a setting estiver vazia
     /agenda/[token]/page.tsx          # agenda compartilhada (sem dados pessoais nem financeiros)
   /(admin)
     /admin/login/page.tsx
@@ -753,6 +766,7 @@ Um único login (o dono). Sem provider externo.
   /operating-hours.ts                 # CRUD da grade semanal (secao 6) — SERVER-ONLY; recusa sobreposicao
   /blackouts.ts                       # CRUD de bloqueios (secao 6) — SERVER-ONLY; horario local -> UTC na borda
   /cpf.ts                             # validacao/normalizacao de CPF — modulo PURO, unico algoritmo, usado pelo servidor E pelo wizard
+  /maps.ts                            # URL de embed do mapa: lista de permissao http(s) — modulo PURO (secao 4.2)
   /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
   /jobs/expire-holds.ts               # expiracao de hold (secao 12)
   /jobs/reconcile-payments.ts         # job de 10 min (secao 8-B); vizinho do expire-holds, mesmo padrao
@@ -807,6 +821,8 @@ vitest.config.ts
 17. **Cliente recorrente** → find-or-create por (tenant, phone).
 18. **Timezone** → `America/Sao_Paulo` nas bordas; UTC no banco.
 19. **Duas experiências diferentes sobrepostas (tenant com `single_experience_per_slot`)** → bloqueado na disponibilidade (passo 2b) + recheck na criação sob `pg_advisory_xact_lock(tenant_id)`; a segunda experiência sobreposta é recusada (`409`). Mesma experiência não é afetada. Tenant sem o flag: comportamento inalterado.
+20. **Garupa abaixo da idade mínima da experiência** → `422` antes de qualquer escrita, com a idade exigida na mensagem; o wizard espelha a checagem para o cliente errar antes de pagar. Sem `birthdate` também é recusa (fail-closed). A conta é na **data do passeio**, então quem completa a idade no intervalo é aceito.
+21. **Setting de mapa vazia, ausente ou malformada** → a tela **omite o bloco inteiro**, sem erro. URL com esquema não-http(s) é tratada como ausente (`lib/maps.ts`): guardar URL em vez de HTML fecha a porta larga do XSS, e a lista de permissão fecha a estreita (`javascript:` no `src`).
 
 ---
 
@@ -825,6 +841,8 @@ vitest.config.ts
 - **Webhook robusto** (200 exato, sem redirect, assíncrono, tolerante, órfã ignorada) + **job de reconciliação**.
 - Coleta de documento dos operadores.
 - Termo de aceite digital (com política de sinal quando aplicável).
+- **Idade mínima do garupa por experiência**, validada no servidor e espelhada no wizard, contada na data do passeio.
+- **Mapa do ponto de encontro** na tela de confirmação (iframe + link de fallback), a partir de `settings.meeting_point_map_url`.
 - Cadastro de cliente + histórico; campo `channel`.
 - Formulário público ponta a ponta.
 - **Calendário nativo** no admin (com marcador de saldo) + detalhe de reserva com ações de cobrança.
