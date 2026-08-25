@@ -5,7 +5,7 @@
 > resposta. O `CLAUDE.md` cobre a especificação técnica; o `docs/DECISOES.md`
 > cobre o porquê das escolhas de arquitetura. Este cobre o negócio.
 >
-> Última atualização: 19/08/2026 (deploy do MVP em sandbox)
+> Última atualização: 25/08/2026 (escopo do pagamento redesenhado; lançamento adiado)
 
 ---
 
@@ -18,9 +18,14 @@ desenvolvedor (solo, ~2h/dia).
 infraestrutura. **Nunca aparece na interface pública do cliente final** — regra
 de marca da rev 5 do CLAUDE.md.
 
-**Quadri Club** — cliente 1 e único no MVP. Operado pela **Terra Trilha**.
-Passeios de quadriciclo off-road em Joaquim Egídio / Sousas, Campinas–SP.
+**Quadri Club** — cliente 1 e único no MVP. Passeios de quadriciclo off-road em
+Joaquim Egídio / Sousas, Campinas–SP.
 É a marca que aparece para o cliente final (`settings.business_name`).
+
+**@grandecampinas** — influenciador. Publica no **início de outubro de 2026** um
+vídeo recomendando o passeio. **É o marco de negócio que define o prazo do
+projeto:** todos os leads do vídeo caem na plataforma **de uma vez**, e esse é o
+primeiro volume real que o sistema vai ver.
 
 **Aventurando** — parceiro de compra coletiva, mesmo segmento e ticket. Vende
 passeios de terceiros. Reportou que clientes abandonam o checkout por receio de
@@ -42,13 +47,23 @@ pagamento com sinal (implementada, mas **desligada no MVP**).
 |---|---|---|
 | Duração | 90 min (1h30) | 60 min (1h) |
 | Buffer entre passeios | 15 min | 15 min |
-| **Preço Pix** (o que o sistema usa) | **R$ 325,49** | **R$ 232,49** |
-| Preço cartão (não usado no MVP) | R$ 349,99 | R$ 249,99 |
-| Modo de pagamento | integral (`full`) | integral (`full`) |
+| **Valor CHEIO** (o que a experiência cadastra) | **R$ 349,99** | **R$ 249,99** ⚠️ |
+| Pix integral (−7%) | R$ 325,49 | R$ 232,49 |
+| Pix sinal 50% (−7%) | R$ 162,75 + R$ 162,74 no dia | R$ 116,25 + R$ 116,24 no dia |
+| Cartão integral (sem acréscimo) | R$ 349,99 | R$ 249,99 ⚠️ |
 
-O Quadri Club pratica **preço por método**: cartão é ~7% mais caro que Pix.
-Como o MVP só aceita Pix, `price_cents` guarda **o preço Pix**. O preço de
-cartão não é armazenado — entra na v2 junto com a modalidade cartão.
+**>>> MODELO REDESENHADO EM 25/08 (CLAUDE.md seção 4-B). <<<** A experiência passa
+a cadastrar o **valor cheio**; o **Pix tem desconto** de 7% (configurável por
+tenant) e o **cartão paga o cheio, sem acréscimo**. Não existe taxa somada ao
+cliente: o cartão não fica mais caro, o Pix fica mais barato.
+
+⚠️ **O cheio da Fazenda (249,99) precisa de confirmação do cliente.** O indício é
+aritmético: 249,99 − 7% = **232,49 exatos**, que é o valor que ele citou. Com
+249,00 daria 231,57 e não bateria. Enquanto não confirmar, o número fica marcado
+como provisório.
+
+O sinal é **50% fixo** e existe **somente no Pix**, com o desconto incidindo
+também sobre ele (50% de 325,49, nunca de 349,99).
 
 Descrições de marketing das trilhas (adrenalina, mirante etc.) **não estão no
 sistema** — o schema não tem campo `description`. Decisão consciente de 03/08:
@@ -64,7 +79,7 @@ adicionar quando fizer falta.
   A mesma trilha pode ter reservas simultâneas, limitada pelos quadriciclos.
 - **Condutor precisa de CNH.** Documento coletado no agendamento e conferido
   fisicamente no dia.
-- **Sem pagamento com sinal no MVP.** Cliente paga 100% no ato.
+- ~~**Sem pagamento com sinal no MVP.**~~ **MUDOU EM 25/08:** o sinal de **50% via Pix** entra no escopo de lançamento (CLAUDE.md seção 4-B), junto com Pix integral com desconto e cartão.
 - **Agenda compartilhada por link secreto** pode sair do MVP se o prazo apertar.
 
 ---
@@ -97,7 +112,13 @@ por jurídico.**
 
 ## 4. Pagamento
 
-- **Somente Pix no MVP.** Cartão é v2.
+- **TRÊS formas de pagar** a partir da rev 7 (25/08): **Pix integral com desconto
+  de 7%**, **sinal de 50% via Pix**, e **cartão pelo valor cheio, sem acréscimo**.
+  Detalhe completo no CLAUDE.md seção 4-B. O cartão sai via `invoiceUrl` do Asaas
+  (Fase E) — o cliente digita o cartão numa página do Asaas, nunca no wizard.
+- **Cancelamento:** sinal **não devolve**, no-show não devolve e não cobra o
+  saldo, estorno é **manual** no painel do Asaas, reagendamento é **por WhatsApp**
+  (CLAUDE.md seção 4-C).
 - **O dinheiro nunca passa pelo Aventix.** Cai direto na conta do Quadri Club no
   Asaas. O sistema não é intermediário de recebíveis.
 - **Conta Asaas:** aberta com o CNPJ do cliente. O desenvolvedor tem acesso à
@@ -110,8 +131,11 @@ por jurídico.**
   de saque**. Em `ASAAS_API_KEY` no `.env` local, **com escape `\$`**.
   `ASAAS_BASE_URL=https://sandbox.asaas.com/api/v3`. **Funcionando**: cobrança
   criada, QR gerado e pagamento confirmado ponta a ponta.
-- **Produção:** ainda **não gerada**. Criar na Fase 4 com as mesmas
-  configurações. Entra como variável de ambiente no Easypanel, nunca em arquivo.
+- **Produção: GERADA e EM USO desde 24/08.** Está no Easypanel como variável de
+  ambiente (**sem** o escape `\$` — a regra do escape vale para o `.env` local e
+  **não** para o painel; ver CLAUDE.md seção 19). **O ciclo do dinheiro foi
+  validado com dinheiro real em 24/08**: cobrança criada, paga pelo app do banco,
+  webhook entregue, sistema confirmou sozinho.
 
 **Deploy em produção com chaves de sandbox (19/08).** Enquanto as chaves de
 produção não são geradas pelo cliente, o sistema roda no domínio real
@@ -174,9 +198,34 @@ do cliente e, se paga, exigiria estorno manual com taxa que não volta.
 
 ## 5. Prazo e escopo
 
-**Go-live: 24/08/2026.**
+**>>> PRAZO REDEFINIDO EM 25/08. O go-live de 24/08 NÃO aconteceu. <<<**
 
-### O que é inegociável para lançar
+- **Sistema pronto: setembro/2026.**
+- **Uso real: início de outubro/2026**, quando sai o vídeo do **@grandecampinas**.
+
+**O que mudou e por quê:** o combinado era lançar com **Pix integral apenas**,
+porque ~90% dos pagamentos do Quadri Club são Pix. Em 25/08, depois de ver o
+sistema apresentado, o cliente **voltou atrás**: só quer lançar quando **todas as
+formas de pagamento** estiverem prontas e integradas.
+
+**O marco deixou de ser data e passou a ser evento.** O vídeo despeja os leads de
+uma vez, e é o primeiro volume real que o sistema vai ver — daí a exigência de
+**testes com clientes reais antes dele** (CLAUDE.md seção 17).
+
+**Situação de fato em 25/08:** o sistema está **em produção e funcionando**, com
+o **ciclo do dinheiro validado com dinheiro real em 24/08** (cobrança criada,
+paga pelo app do banco, webhook entregue, sistema confirmou sozinho). O que falta
+não é estabilidade — é escopo de pagamento.
+
+### O que é inegociável para lançar (revisado em 25/08)
+- As **três formas de pagar** funcionando: Pix integral com desconto, sinal de
+  50% via Pix, e cartão via `invoiceUrl` (CLAUDE.md seção 4-B)
+- **Configuração financeira** do tenant (Fase 0): desconto do Pix e taxas da
+  maquininha por modalidade
+- **Termo v2**, com a política de cancelamento e a regra de remarcação
+- Testes com clientes reais **antes** do vídeo
+
+### O que era inegociável para o go-live antigo (tudo entregue)
 - Formulário público de agendamento (pronto)
 - Termo de aceite (pronto)
 - **Pagamento Pix funcionando** (Fase 2 — **concluída em sandbox**: cobrança,
@@ -190,15 +239,31 @@ do cliente e, se paga, exigiria estorno manual com taxa que não volta.
 - Tela de configurações (settings) — o dev ajusta no banco na largada
 
 ### Acordo sobre atraso
-Se o Asaas atrasar por dependência do cliente, o Terra Trilha aceita prazo maior.
-Registrado em 03/08.
+Se o Asaas atrasar por dependência do cliente, o **Quadri Club** aceita prazo
+maior. Registrado em 03/08. (O registro original nomeava o cliente errado; nome
+corrigido em 25/08 — o acordo é exatamente o mesmo.)
 
 ---
 
 ## 6. Pendências de resposta do cliente
 
-Valores ainda **provisórios** no seed (`lib/templates/quadriciclo.ts`), marcados
-com `// PROVISÓRIO`:
+### >>> PENDENTE DO CLIENTE — bloqueia a Fase 0 e a Fase D <<<
+
+| Item | Situação | Por que bloqueia |
+|---|---|---|
+| **Percentuais reais da maquininha, POR MODALIDADE** (débito, crédito à vista, crédito parcelado) | **NÃO ENVIADO** | Sem eles a Fase D registra líquido errado. **Não inventar**: taxa chutada vira número com aparência de certo, e o erro só aparece na conferência com o extrato. A tabela de configuração (Fase 0) pode ser construída sem os valores; o registro de pagamento não. |
+| **Preço cheio da Trilha da Fazenda: 249,99 ou 249,00?** | **NÃO CONFIRMADO** | 249,99 − 7% = 232,49 exatos, que é o valor que o cliente citou; 249,00 daria 231,57. O indício é forte, mas é indício. Erra o preço de venda se estiver errado. |
+
+### Resolvido em 25/08
+
+| Item | Valor |
+|---|---|
+| `support_whatsapp` | **+55 19 99901-5663** — chegou em 25/08. **AINDA NÃO ESTÁ NO BANCO**: a chave existe em `settings` com valor **vazio**, e a tela omite o bloco de contato enquanto assim for. Precisa entrar **nas duas casas** (template `lib/templates/quadriciclo.ts` **e** banco), pela regra da seção 19 — só no banco, some no próximo seed. Formato: só dígitos com DDI (`5519999015663`), que é o que o link `wa.me` exige. |
+
+### Valores provisórios no seed
+
+Ainda **provisórios** em `lib/templates/quadriciclo.ts`, marcados com
+`// PROVISÓRIO`:
 
 | Item | Valor atual | Precisa confirmar |
 |---|---|---|
