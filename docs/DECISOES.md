@@ -6,6 +6,212 @@
 > até a criação deste arquivo; as datas individuais não foram preservadas.
 
 
+## 2026-08-25 — Lançamento adiado para outubro; escopo do pagamento redesenhado
+
+O combinado era lançar com **Pix integral apenas**, porque ~90% dos pagamentos do
+Quadri Club são Pix. Em 25/08, depois de ver o sistema apresentado, o cliente
+voltou atrás: só quer lançar quando **todas as formas de pagamento** estiverem
+prontas e integradas. **Sistema pronto em setembro; uso real no início de
+outubro.**
+
+**Por que aceitar o adiamento em vez de defender o lançamento parcial:** o marco
+de negócio deixou de ser uma data e passou a ser um **evento** — o vídeo do
+influenciador **@grandecampinas** no início de outubro, que despeja os leads
+**de uma vez**. Lançar antes com meia forma de pagamento não antecipa receita
+relevante (o movimento atual é pequeno), e chegar no vídeo com o cliente pedindo
+cartão no meio do pico é o pior dos dois mundos. O adiamento troca pressa por
+uma janela real de teste.
+
+**Alternativa descartada:** lançar em agosto só com Pix integral e adicionar
+cartão depois, em produção. Descartada porque o cliente **explicitamente não
+quer** — e porque o cartão não é um acréscimo isolado: ele arrasta preço por
+método, chargeback e conciliação de líquido, que mexem no mesmo código do Pix.
+Fazer isso com venda real correndo é mais caro que fazer antes.
+
+**Consequência assumida:** o sistema fica **pronto e parado** por semanas, em
+produção, sem uso real. O risco disso é conhecido e tem nome: código que não roda
+com gente de verdade acumula bug que só aparece no volume. O mitigador acordado
+são os **testes com clientes reais antes do vídeo** (seção 17).
+
+**Reabrir quando:** o vídeo mudar de data, ou o cliente pedir para vender antes.
+Aí a pergunta é qual fase mínima entrega venda completa — hoje, Fase A.
+
+## 2026-08-25 — Preço cheio na experiência, com desconto do Pix configurável por tenant
+
+A experiência cadastra o **valor cheio** (Montanha 349,99). O Pix ganha um
+**desconto configurável** (7% no Quadri Club) e o cartão paga o cheio, **sem
+acréscimo**.
+
+**Por que desconto no Pix e não taxa no cartão**, sendo a diferença aritmética a
+mesma: as duas formas produzem números idênticos e leituras opostas. Acréscimo no
+cartão é percebido como punição, derruba conversão e esbarra na expectativa (e na
+leitura corrente do CDC) de que o preço anunciado é o preço a pagar. Desconto no
+Pix é percebido como vantagem. Como o valor final é o mesmo, escolher a moldura
+melhor é de graça.
+
+**Por que CONFIGURÁVEL e não 7% em código:** o Aventix é produto **multi-tenant**
+(seção 1). Um `0.07` chumbado faria o **segundo cliente exigir deploy** para
+mudar o próprio desconto — transformando configuração de negócio em tarefa de
+desenvolvedor, que é exatamente o que o produto existe para evitar. O custo de
+tornar configurável agora é uma coluna; depois, é uma migration com dado vivo.
+
+**Alternativa descartada:** cadastrar o preço já com desconto e somar taxa no
+cartão. Descartada pela moldura acima, e porque tornaria o valor cadastrado
+dependente do método — o dono não saberia mais responder "quanto custa a
+trilha?" olhando o cadastro.
+
+**Consequência assumida:** o número que o dono cadastra **não é** o número que a
+maioria dos clientes paga (90% pagam Pix, com desconto). A tela do CRUD precisa
+mostrar os dois, senão ele cadastra 349,99 achando que é o que vai receber.
+
+**Reabrir quando:** algum tenant precisar de desconto **por experiência** e não
+por tenant. Hoje não há caso, e a coluna por tenant é o suficiente.
+
+## 2026-08-25 — Reserva com sinal pago é `confirmed` + `partial`, nunca `pending_payment`
+
+Sinal pago → `status='confirmed'` com `payment_state='partial'`.
+
+**Por quê:** a vaga **está garantida** e o recurso alocado. O saldo é pendência
+**financeira**, não reserva incompleta — e os dois eixos já são separados no
+modelo de propósito (`status` vs. `payment_state`, seção 4.6).
+
+**Manter `pending_payment` seria ativamente errado, não só impreciso:** o **cron
+de hold** (seção 12) varre `pending_payment` com `hold_expires_at` vencido e
+expira a reserva, **liberando a vaga**. Ou seja, o cliente que pagou metade
+perderia o passeio 15 minutos depois de pagar, por classificação interna, com
+dinheiro dele já na conta do tenant. O bug seria silencioso do lado do sistema e
+brutal do lado do cliente.
+
+**Alternativa descartada:** criar um status novo (`partially_paid`) no enum
+`reservation_status`. Descartada porque duplicaria no eixo de **reserva** uma
+informação que já existe no eixo **financeiro**, e obrigaria toda query de agenda,
+calendário e disponibilidade a conhecer mais um valor — com o risco clássico de
+alguma delas esquecer e passar a ignorar reservas legítimas.
+
+**Consequência assumida:** "confirmada" deixa de significar "paga". Toda tela que
+mostrar reserva confirmada precisa olhar `payment_state` antes de dizer qualquer
+coisa sobre dinheiro, e o painel precisa do marcador de saldo em aberto
+(seção 11.1).
+
+## 2026-08-25 — Configuração financeira em tabela própria, fora de `settings`
+
+Desconto por método e taxas da maquininha vão para **tabela própria**, não para
+`settings`.
+
+**O motivo é uma armadilha medida, não preferência de estilo:** `seedTenant()`
+**sobrescreve** toda linha de `settings` cujo valor divirja do template (regra das
+duas casas, seção 19, descoberta em 21/08). O dono configuraria 7%, funcionaria
+por semanas, e o valor **sumiria** no dia em que alguém rodasse o seed — sem
+erro, sem log, e ninguém associaria o preço mudado ao seed que rodou por outro
+motivo. Dinheiro é o pior lugar possível para esse tipo de falha.
+
+**Segundo motivo, independente do primeiro:** separa **o que a Neosoluti define**
+do **que o dono edita**. Hoje `settings` mistura rótulo de UI com regra de
+negócio, e configuração financeira do lado errado dessa fronteira é convite a
+alguém editar taxa achando que edita texto.
+
+**Taxas em TABELA, não campo único:** débito, crédito à vista e crédito parcelado
+têm percentuais diferentes. Um campo só produziria número errado com **aparência
+de certo** — que é pior que número obviamente errado, porque ninguém confere.
+
+**Alternativa descartada:** `settings` com prefixo (`fin_pix_discount`), que
+seria mais rápido. Descartada pelo primeiro motivo: o prefixo não protege de
+nada, o seed sobrescreve igual.
+
+**Reabrir quando:** nunca, provavelmente — mas se `seedTenant()` deixar de
+sobrescrever settings, o primeiro motivo cai e sobra só o segundo.
+
+## 2026-08-25 — Valores de dinheiro são congelados no registro do pagamento
+
+No momento do registro, gravam-se **congelados** na linha do pagamento: valor
+bruto, modalidade, percentual aplicado e valor líquido. Depois disso o sistema só
+**lê**. A configuração vale para o **próximo** registro, jamais para os
+anteriores.
+
+**Por quê, com o cenário concreto:** em setembro registra R$ 150 a 5% e mostra
+R$ 142,50. Em novembro a operadora reajusta para 6%, o dono atualiza a tela, e **a
+reserva de setembro passa a mostrar R$ 141,00**. O passado muda sozinho, a
+conferência com o extrato bancário quebra, e nada acusa erro — o sistema está
+"apenas" aplicando a configuração vigente.
+
+**É a mesma família de decisão da seção 4.6** ("a reserva congela o que foi
+vendido"), aplicada ao lado financeiro: registro de dinheiro é **fato histórico**,
+não valor derivado.
+
+**Alternativa descartada:** guardar só bruto e modalidade, recalculando o líquido
+na leitura a partir da configuração vigente. Descartada pelo cenário acima. É a
+opção que parece mais limpa (menos colunas, uma fonte de verdade) e é justamente a
+que corrompe o histórico.
+
+**Para o Asaas o líquido é LIDO, não calculado:** eles informam o líquido na
+consulta da cobrança, e recalcular por fora produziria divergência com o extrato
+deles na primeira mudança de tarifa. **Só a maquininha exige cálculo**, porque
+acontece fora do provedor.
+
+## 2026-08-25 — Cartão via `invoiceUrl` do Asaas, sem formulário próprio
+
+O cliente é redirecionado para a fatura do Asaas e digita o cartão lá.
+
+**Por quê:** a documentação de PCI-DSS do Asaas diz que, na integração via API,
+"os dados passam pelo back-end da sua aplicação" e "sua infraestrutura permanece
+no escopo". E o Asaas **não oferece tokenização client-side** — não existe
+componente JS deles que capture o cartão no navegador e devolva um token. Não há
+terceira opção: **ou o cliente digita numa página do Asaas, ou o número do cartão
+passa pelo nosso servidor**, com todo o escopo de conformidade que isso arrasta
+para um projeto tocado por um dev solo.
+
+**Alternativa descartada 1 — formulário de cartão no wizard (API):** melhor
+experiência, sem redirect, e é o que a maioria dos concorrentes faz. Descartada
+pelo escopo de PCI acima. O ganho de conversão não paga a responsabilidade.
+
+**Alternativa descartada 2 — Asaas Checkout:** resolveria o PCI do mesmo jeito,
+mas traz **objeto próprio, família própria de eventos de webhook e expiração
+própria**. Seriam **dois sistemas de pagamento convivendo** no mesmo código, com
+dois conjuntos de estado para manter idempotentes — sendo dev solo. A
+`invoiceUrl` reaproveita os eventos `PAYMENT_*` que já funcionam e já foram
+exercitados (seção 8).
+
+**Consequência assumida:** o cliente **sai do nosso domínio** para pagar, e a
+página que ele vê é do Asaas, com a marca deles. É custo de conversão e de marca,
+aceito conscientemente.
+
+**Lacuna que isto abre:** **chargeback**. Com cartão, a compra pode ser contestada
+meses depois, e o sistema passa a poder ter reserva `confirmed`, **realizada**,
+com pagamento revertido — combinação que a máquina de estados (seção 5) não
+conhece. Tratada na Fase E; registrada aqui para não ser descoberta em produção.
+
+## 2026-08-25 — Política de cancelamento: sinal não devolve, reagendamento por WhatsApp
+
+Decidido com o cliente: cancelamento pelo cliente com sinal pago **não devolve**,
+sem escalonamento por antecedência; **no-show** não devolve o sinal e não cobra o
+saldo; **estorno** é manual pelo painel do Asaas; **reagendamento** é por
+WhatsApp, manual, e **não é feature**.
+
+**Por que registrar uma política de negócio aqui:** ela **remove requisitos** de
+software, e essa é a parte que se perde. Sem devolução parcial não há cálculo de
+retenção; sem escalonamento por antecedência não há janela de tempo influenciando
+valor; sem reagendamento no sistema não há realocação de vaga, que é a
+funcionalidade mais cara da lista (envolve disponibilidade, hold e a exclusion
+constraint ao mesmo tempo). Qualquer proposta futura que reintroduza um desses
+três está **mudando a política**, não melhorando a implementação.
+
+**Alternativa descartada:** devolução escalonada por antecedência (padrão do
+setor: 100% acima de 7 dias, 50% acima de 48h, 0% depois). Descartada pelo
+cliente, e o efeito colateral é bem-vindo: escalonamento exigiria estorno
+automático, que a seção 8-C mantém manual justamente porque as taxas do Pix **não
+voltam** e um estorno integral pode ser recusado por saldo insuficiente.
+
+**Contradição herdada, que precisa ser resolvida no texto:** o texto oficial
+publicado pelo cliente promete **reagendamento com 48h de antecedência** mas não
+diz **como**. Como nunca há devolução, a cláusula das 48h só faz sentido se der
+direito a **remarcar** — e o texto precisa dizer que a remarcação é pelo
+**WhatsApp**, senão o cliente procura no sistema um botão que não existe e conclui
+que perdeu o dinheiro. Entra no **Termo v2**.
+
+**Reabrir quando:** o volume do vídeo de outubro mostrar que cancelamento manual
+por WhatsApp não escala. Aí o que entra primeiro é reagendamento self-service, não
+devolução.
+
 ## 2026-08-24 — Idade do garupa conta na data do PASSEIO; a do condutor continua na data da RESERVA
 
 `createReservation` passou a ter **duas regras de idade com bases de data
