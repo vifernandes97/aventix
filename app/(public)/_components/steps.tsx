@@ -23,6 +23,7 @@ import {
   timeLabel,
   todayLocal,
   totalCents,
+  unitPayableCents,
   weekdayLabel,
 } from './shared';
 import {
@@ -79,8 +80,13 @@ export function StepExperience({
                 </span>
               </div>
               {/* Sem descricao: o schema nao tem o campo (secao 4.3). */}
+              {/* O valor A PAGAR (Pix), nao o cheio de experiences.price_cents.
+                  SEM "de R$ 349,99 por R$ 325,49": hoje so o Pix e comprável, e
+                  anunciar economia contra um preco que ninguem pode escolher e
+                  propaganda de um desconto que nao e opcao. O de/por entra na
+                  Fase E, quando o cartao puser as duas lado a lado (secao 4-B.2). */}
               <p className="mt-2 text-lg font-semibold text-orange-200">
-                {moneyLabel(experience.priceCents)}
+                {moneyLabel(unitPayableCents(experience))}
                 <span className="ml-1.5 text-xs font-normal uppercase tracking-wide text-stone-500">
                   por {labels.resource_label.toLowerCase()}
                 </span>

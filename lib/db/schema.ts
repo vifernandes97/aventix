@@ -429,8 +429,43 @@ export const reservations = pgTable(
       .references(() => experiences.id),
 
     resourcesNeeded: integer('resources_needed').notNull(), // escolha do cliente; teto validado no app
-    totalPriceCents: integer('total_price_cents').notNull(), // price_cents * resources_needed (servidor)
+    // O que o cliente PAGA: total cheio menos o desconto do metodo (secao 4-B.1).
+    // Calculado no servidor, congelado aqui (secao 4.6).
+    totalPriceCents: integer('total_price_cents').notNull(),
     startAt: tstz('start_at').notNull(),
+
+    // rev 7 / Fase A: como o preco vendido foi FORMADO (secao 4-B.1 e 4-B.7).
+    //
+    // >>> SEM ESTES DOIS, UMA RESERVA ANTIGA VIRA DADO INEXPLICAVEL <<<
+    // O dono muda o desconto de 7% para 5% em novembro. A reserva de setembro
+    // tem total 32549, que nao bate com o preco cheio (34999) nem com o
+    // preco-Pix-de-hoje (33249). Ninguem consegue reconstruir de onde saiu
+    // aquele numero, e a conferencia com o extrato trava numa reserva por vez.
+    //
+    // Com os dois, a linha se explica sozinha, sem depender do catalogo nem da
+    // configuracao ATUAL, que e exatamente a propriedade que a secao 4-B.7
+    // exige de todo registro de dinheiro:
+    //     full_price_cents - round(full_price_cents * discount_bp / 10000)
+    //       = total_price_cents
+    //
+    // POR QUE AQUI E NAO EM reservation_payments, apesar de a 4-B.7 falar em
+    // "linha do pagamento": la o assunto e LIQUIDO RECEBIDO (bruto, modalidade,
+    // taxa da adquirente) — o caso da maquininha, Fase D. Isto aqui e o PRECO
+    // VENDIDO, que e atributo da venda. E, decisivo: no modo 'deposit' (Fase B)
+    // a mesma venda tera DUAS linhas de pagamento, e guardar o percentual em
+    // cada uma cria a chance de discordarem sobre um numero que e um so.
+    //
+    // NULLABLE pelo mesmo motivo de emergency_contact_* (migration 0002):
+    // reserva anterior a esta funcionalidade nao tem o dado e NAO HA COMO
+    // RETROAGIR — o desconto vigente na epoca nao foi registrado em lugar
+    // nenhum. A migration 0007 NAO faz backfill de proposito: inventar 700 para
+    // o passado seria fabricar um fato. Obrigatorios para reserva NOVA na
+    // aplicacao (createReservation), nunca no banco.
+    //
+    // full_price_cents e o TOTAL cheio (preco por recurso x recursos), nao o
+    // unitario: e sobre o total que o desconto incide (secao 4-B.2).
+    fullPriceCents: integer('full_price_cents'),
+    discountBasisPoints: integer('discount_basis_points'),
 
     // SNAPSHOT de como foi vendido, junto com total_price_cents e payment_mode:
     // os tres congelam na venda e NUNCA acompanham edicao do catalogo.

@@ -16,6 +16,7 @@ import {
   movementCounts,
   nextSaturday,
   reservationInput,
+  precoEsperado,
   wipeMovement,
 } from './helpers/db';
 
@@ -122,7 +123,7 @@ describe('D — composicao e validacao', () => {
     expect(await movementCounts()).toEqual(antes);
   });
 
-  it('15. o preco vem do servidor: price_cents x resourcesNeeded', async () => {
+  it('15. o preco vem do servidor: (price_cents x resourcesNeeded) menos o desconto', async () => {
     // ANCORA NO TEMPLATE, nao em numero solto nem no banco.
     //
     // Numero solto e o que estava aqui antes (12000 / 18000, os precos
@@ -134,8 +135,15 @@ describe('D — composicao e validacao', () => {
     //
     // O template e a terceira fonte, independente das outras duas: e o que o
     // negocio DECIDIU cobrar.
-    const precoCurta = TEMPLATE_EXP.curta.priceCents;
-    const precoLonga = TEMPLATE_EXP.longa.priceCents;
+    //
+    // FASE A: o template passou a guardar o VALOR CHEIO, e o que o cliente paga
+    // e ele menos o desconto do Pix. `precoEsperado` refaz a conta a partir das
+    // DUAS decisoes de negocio (preco cheio do template + desconto semeado),
+    // sem ler o total do banco nem perguntar a configuracao ao codigo que esta
+    // sendo testado. A assercao foi ATUALIZADA, nao afrouxada: continua havendo
+    // um valor exato esperado.
+    const precoCurta = precoEsperado(TEMPLATE_EXP.curta.priceCents);
+    const precoLonga = precoEsperado(TEMPLATE_EXP.longa.priceCents);
 
     const um = await createReservation(
       reservationInput({
@@ -159,7 +167,14 @@ describe('D — composicao e validacao', () => {
         phone: '11977770000',
       }),
     );
-    expect(dois.totalCents).toBe(precoCurta * 2);
+    // >>> NAO E `precoCurta * 2` <<<
+    // O desconto incide sobre o TOTAL (secao 4-B.2), entao o esperado sai de
+    // precoEsperado(cheio, 2). Com os precos do Quadri Club os dois caminhos dao
+    // o mesmo numero, mas nao em geral: com preco 33333 e 7%, unitario
+    // descontado x2 = 62000 e desconto sobre o total = 61999. Escrever a
+    // assercao da forma errada aqui congelaria a conta errada no dia em que o
+    // dono cadastrasse a terceira trilha.
+    expect(dois.totalCents).toBe(precoEsperado(TEMPLATE_EXP.curta.priceCents, 2));
 
     await wipeMovement();
 
@@ -296,7 +311,7 @@ describe('D — composicao e validacao', () => {
 
     // Mesma ancora do teste 15: o preco do template, nao os 1 centavo que o
     // corpo malicioso mandou nem um numero fixo que envelhece.
-    expect(criada.totalCents).toBe(TEMPLATE_EXP.curta.priceCents);
-    expect(criada.dueNowCents).toBe(TEMPLATE_EXP.curta.priceCents);
+    expect(criada.totalCents).toBe(precoEsperado(TEMPLATE_EXP.curta.priceCents));
+    expect(criada.dueNowCents).toBe(precoEsperado(TEMPLATE_EXP.curta.priceCents));
   });
 });

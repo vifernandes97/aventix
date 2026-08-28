@@ -50,6 +50,13 @@
       "when": 1787924034763,
       "tag": "0006_awesome_anita_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787927482113,
+      "tag": "0007_gifted_gambit",
+      "breakpoints": true
     }
   ]
 }

@@ -23,10 +23,23 @@ import { useState } from 'react';
 
 import type { ExperienceRow } from '@/lib/experiences';
 
+import { applyDiscount, formatBasisPoints } from '@/lib/basis-points';
+
 import { moneyLabel } from '../../_components/shared';
 import { centsToReaisInput, parseReaisToCents } from './money';
 
-type Props = { experiences: ExperienceRow[] };
+type Props = {
+  experiences: ExperienceRow[];
+  /**
+   * Desconto do Pix em basis points, so para EXIBIR o valor resultante.
+   *
+   * >>> O CAMPO DE PRECO MUDOU DE SIGNIFICADO NA FASE A <<<
+   * Ate a rev 6 o dono digitava o preco do Pix. Agora digita o VALOR CHEIO, e o
+   * Pix e derivado. Sem mostrar o resultado ao lado, ele digita 349,99 achando
+   * que e o que recebe, e so descobre a diferenca na primeira venda.
+   */
+  discountBasisPoints: number;
+};
 
 /** Campo em erro -> mensagem, como a API devolve em `fields`. */
 type FieldErrors = Record<string, string>;
@@ -63,7 +76,15 @@ function formFor(experience: ExperienceRow): FormState {
   };
 }
 
-export function ExperienceManager({ experiences }: Props) {
+/** "R$ 349,99 · no Pix R$ 325,49" — a MESMA applyDiscount do servidor. */
+function priceLabel(fullPriceCents: number, discountBasisPoints: number): string {
+  const cheio = moneyLabel(fullPriceCents);
+  if (discountBasisPoints === 0) return cheio;
+  const { payableCents } = applyDiscount(fullPriceCents, discountBasisPoints);
+  return `${cheio} · no Pix ${moneyLabel(payableCents)}`;
+}
+
+export function ExperienceManager({ experiences, discountBasisPoints }: Props) {
   const router = useRouter();
 
   const [form, setForm] = useState<FormState | null>(null);
@@ -238,6 +259,7 @@ export function ExperienceManager({ experiences }: Props) {
           key={form.editingId ?? 'nova'}
           form={form}
           setForm={setForm}
+          discountBasisPoints={discountBasisPoints}
           fieldErrors={fieldErrors}
           formError={formError}
           saving={saving}
@@ -279,7 +301,7 @@ export function ExperienceManager({ experiences }: Props) {
                 </div>
 
                 <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                  {moneyLabel(experience.priceCents)} · {experience.durationMinutes} min
+                  {priceLabel(experience.priceCents, discountBasisPoints)} · {experience.durationMinutes} min
                   {experience.bufferMinutes > 0 && ` + ${experience.bufferMinutes} min de intervalo`}
                   {/* So aparece quando ha regra: "sem idade minima" nao e
                       informacao util na listagem, e poluiria as duas linhas. */}
@@ -371,6 +393,7 @@ const FIELD_OF: Record<string, keyof FormState> = {
 function ExperienceForm({
   form,
   setForm,
+  discountBasisPoints,
   fieldErrors,
   formError,
   saving,
@@ -379,6 +402,7 @@ function ExperienceForm({
 }: {
   form: FormState;
   setForm: (form: FormState) => void;
+  discountBasisPoints: number;
   fieldErrors: FieldErrors;
   formError: string | null;
   saving: boolean;
@@ -420,8 +444,12 @@ function ExperienceForm({
         </Field>
 
         <Field
-          label="Preço por veículo (Pix)"
-          hint="O MVP vende só por Pix. Digite em reais: 325,49"
+          label="Valor cheio por veículo"
+          hint={
+            discountBasisPoints > 0
+              ? `Digite o valor CHEIO, em reais: 349,99. O desconto de ${formatBasisPoints(discountBasisPoints)}% do Pix é aplicado em cima dele — não desconte à mão.`
+              : 'Digite o valor cheio, em reais: 349,99.'
+          }
           error={errorFor('preco')}
         >
           <div className="flex items-center gap-2">
@@ -437,10 +465,14 @@ function ExperienceForm({
                 if (cents !== null) set({ preco: centsToReaisInput(cents) });
               }}
               inputMode="decimal"
-              placeholder="325,49"
+              placeholder="349,99"
               className="w-full rounded border px-3 py-2 text-sm"
             />
           </div>
+          {/* Previa AO VIVO do que o cliente vai pagar. Sem ela o dono digita
+              349,99 achando que e o que recebe e so ve a diferenca na primeira
+              venda — que e exatamente o momento em que corrigir sai caro. */}
+          <PixPreview preco={form.preco} discountBasisPoints={discountBasisPoints} />
         </Field>
 
         <Field label="Duração (minutos)" error={errorFor('duracao')}>
@@ -515,6 +547,35 @@ function ExperienceForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * "No Pix o cliente paga R$ 325,49" enquanto o dono digita.
+ *
+ * Some quando nao ha desconto configurado (cheio = Pix, nada a mostrar) e
+ * quando o campo ainda nao e um valor valido — previa sobre entrada
+ * incompleta piscaria numero errado a cada tecla.
+ */
+function PixPreview({
+  preco,
+  discountBasisPoints,
+}: {
+  preco: string;
+  discountBasisPoints: number;
+}) {
+  if (discountBasisPoints === 0) return null;
+
+  const cents = parseReaisToCents(preco);
+  if (cents === null || cents <= 0) return null;
+
+  const { payableCents, discountCents } = applyDiscount(cents, discountBasisPoints);
+
+  return (
+    <p className="mt-1.5 text-xs text-neutral-600 dark:text-neutral-400">
+      No Pix o cliente paga <strong>{moneyLabel(payableCents)}</strong> (
+      {formatBasisPoints(discountBasisPoints)}% de desconto, {moneyLabel(discountCents)} a menos).
+    </p>
   );
 }
 

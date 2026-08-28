@@ -3,6 +3,7 @@
 // Pasta `_components`: o underscore a torna privada no App Router — nao vira
 // rota, mesmo dentro do route group (public).
 
+import { applyDiscount } from '@/lib/basis-points';
 import type { PublicExperience } from '@/lib/experiences';
 import type { SettingKey } from '@/lib/tenant';
 
@@ -62,14 +63,34 @@ export function durationLabel(minutes: number): string {
 }
 
 /**
- * Preco total = preco POR RECURSO x numero de recursos.
+ * O que o cliente PAGA: (valor cheio x recursos) menos o desconto do metodo.
  *
  * price_mode e 'per_resource' (unico valor do enum hoje, secao 4.1). O servidor
  * refaz esta conta em createReservation e e a dele que vale — aqui e so para
  * exibir. Nunca mandamos valor calculado no cliente para o POST.
+ *
+ * >>> A MESMA applyDiscount DO SERVIDOR, DE PROPOSITO <<<
+ * `lib/basis-points.ts` e modulo PURO (sem `server-only`) exatamente para poder
+ * ser chamado dos dois lados. Reimplementar a conta aqui — ou receber da API um
+ * preco unitario ja descontado e multiplicar — produz divergencia de um centavo
+ * em alguns precos: com 33333 e 7%, unitario descontado x2 da 62000 e desconto
+ * sobre o total da 61999. O cliente veria um valor no wizard e outro na
+ * cobranca, e ninguem ligaria uma coisa a outra.
+ *
+ * O desconto incide sobre o TOTAL (secao 4-B.2), nunca sobre o unitario.
  */
 export const totalCents = (experience: PublicExperience, resourcesNeeded: number) =>
-  experience.priceCents * resourcesNeeded;
+  applyDiscount(experience.priceCents * resourcesNeeded, experience.discountBasisPoints)
+    .payableCents;
+
+/**
+ * O que o cliente paga por UM recurso — o numero do cartao da experiencia.
+ *
+ * Passa pela mesma funcao, e nao por `totalCents(exp, 1)` reescrito a mao, pelo
+ * motivo acima. Com um recurso so as duas contas coincidem por definicao; a
+ * funcao existe para o rotulo nao virar o lugar onde alguem reintroduz `* 0.93`.
+ */
+export const unitPayableCents = (experience: PublicExperience) => totalCents(experience, 1);
 
 // ============================================================================
 // Datas

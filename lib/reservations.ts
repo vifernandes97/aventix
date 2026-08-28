@@ -13,6 +13,7 @@ import {
   InvalidResourcesNeededError,
   getAvailability,
 } from './availability';
+import { applyDiscount } from './basis-points';
 import { isValidCpf, normalizeCpf } from './cpf';
 import { db } from './db/client';
 import {
@@ -26,6 +27,7 @@ import {
   reservationStatus,
   resources,
 } from './db/schema';
+import { getDiscountBasisPoints } from './financial-config';
 import { getBooleanSetting, getTenantId } from './tenant';
 import { ageOnDate, todayLocalDate, utcToLocalDate } from './time';
 
@@ -661,7 +663,25 @@ export async function createReservation(
 
   const channel = sanitizeChannel(input.channel);
 
-  const prepared = { startInstant, termoAcceptedAt, channel, emergencyContactPhone, customerCpf };
+  // Desconto do metodo, lido FORA da transacao de proposito.
+  //
+  // E configuracao do tenant, nao estado disputado: nao participa da corrida que
+  // o advisory lock e a exclusion constraint protegem. Ler aqui evita pedir uma
+  // SEGUNDA conexao do pool enquanto a transacao ja segura a primeira — que sob
+  // o pico de outubro dobraria o consumo de conexoes por reserva.
+  //
+  // Metodo fixo em 'pix': e o unico que existe hoje. Cartao e Fase E, e e la que
+  // isto passa a ser escolha do cliente em vez de constante.
+  const discountBasisPoints = await getDiscountBasisPoints('pix');
+
+  const prepared = {
+    startInstant,
+    termoAcceptedAt,
+    channel,
+    emergencyContactPhone,
+    customerCpf,
+    discountBasisPoints,
+  };
   if (tx) return applyCreateReservation(tx, input, prepared);
   return db.transaction((ownTx) => applyCreateReservation(ownTx, input, prepared));
 }
@@ -673,6 +693,8 @@ type PreparedInput = {
   emergencyContactPhone: string;
   /** ja validado e reduzido a digitos — e o que vai para o banco */
   customerCpf: string;
+  /** desconto do metodo em basis points, lido antes da transacao */
+  discountBasisPoints: number;
 };
 
 /**
@@ -685,6 +707,7 @@ async function applyCreateReservation(
 ): Promise<CreateReservationResult> {
   const tenantId = getTenantId();
   const { startInstant, termoAcceptedAt, channel, emergencyContactPhone, customerCpf } = prepared;
+  const { discountBasisPoints } = prepared;
   const startIso = startInstant.toISOString();
 
   // -- 1. ADVISORY LOCK ------------------------------------------------------
@@ -865,9 +888,29 @@ async function applyCreateReservation(
     tx,
   );
 
-  // -- 5. PRECO NO SERVIDOR (secao 4.6) --------------------------------------
+  // -- 5. PRECO NO SERVIDOR (secao 4.6 e 4-B.1) ------------------------------
   // Inteiros de centavos de ponta a ponta. Nunca confie em valor do cliente.
-  const totalCents = experience.priceCents * input.resourcesNeeded;
+  //
+  // >>> experiences.price_cents E O VALOR CHEIO; O PIX TEM DESCONTO <<<
+  // Nao existe taxa somada ao cliente (secao 4-B.1): o cartao nao fica mais
+  // caro, o Pix fica mais barato. Nunca calcule "cheio + taxa" aqui.
+  //
+  // O DESCONTO INCIDE SOBRE O TOTAL, nao sobre o preco unitario (secao 4-B.2).
+  // A diferenca importa: com preco 33333 e 7%, descontar o unitario e multiplicar
+  // por 2 da 62000, e descontar o total da 61999. Um centavo, na direcao de
+  // cobrar a mais, em toda venda de multiplos recursos daquela trilha.
+  //
+  // A conta e de lib/basis-points.ts, que arredonda o DESCONTO e obtem o pagavel
+  // por SUBTRACAO — nunca dois arredondamentos independentes (secao 4-B.5). O
+  // wizard chama a MESMA funcao para exibir; e por isso que aquele modulo e puro
+  // e nao tem `server-only`.
+  //
+  // O percentual vem de `prepared`, lido antes da transacao abrir.
+  const fullPriceCents = experience.priceCents * input.resourcesNeeded;
+  // Sem linha de desconto configurada, getDiscountBasisPoints devolve 0 e o
+  // cliente paga o cheio — o default fail-safe da secao 4-B.6, nao um caso de
+  // erro. Nao ha ramo especial aqui de proposito.
+  const { payableCents: totalCents } = applyDiscount(fullPriceCents, discountBasisPoints);
 
   let dueNowCents = totalCents;
   let balanceCents = 0;
@@ -896,6 +939,11 @@ async function applyCreateReservation(
       experienceId: experience.id,
       resourcesNeeded: input.resourcesNeeded,
       totalPriceCents: totalCents,
+      // Como o preco foi FORMADO, congelado junto do total (secao 4-B.7). Sem os
+      // dois, uma reserva antiga nao bate com o preco cheio nem com o desconto
+      // vigente depois que o dono mudar o percentual. Ver o schema.
+      fullPriceCents,
+      discountBasisPoints,
       startAt: startIso,
       channel,
       emergencyContactName: input.emergencyContact.name.trim(),

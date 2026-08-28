@@ -26,6 +26,7 @@ import 'server-only';
 import { and, asc, desc, eq } from 'drizzle-orm';
 
 import { db } from './db/client';
+import { getDiscountBasisPoints } from './financial-config';
 import { experiences } from './db/schema';
 import { getTenantId } from './tenant';
 
@@ -118,7 +119,40 @@ export type PublicExperience = {
   id: number;
   name: string;
   durationMinutes: number;
+  /**
+   * >>> O VALOR CHEIO, exatamente como esta em experiences.price_cents. <<<
+   *
+   * NAO e o que o cliente paga. O que ele paga sai de
+   * applyDiscount(priceCents x recursos, discountBasisPoints).
+   *
+   * O campo mantem o nome E o significado da coluna de propósito: um campo que
+   * significa coisa diferente da coluna homonima e a classe de bug que este
+   * projeto mais paga. Quem quiser o valor a pagar chama a funcao.
+   */
   priceCents: number;
+  /**
+   * Desconto do metodo que o cliente pode usar hoje (Pix), em basis points.
+   *
+   * >>> POR QUE O PERCENTUAL SAI DAQUI, E NAO O PRECO JA CALCULADO <<<
+   * O desconto incide sobre o TOTAL (secao 4-B.2), e o total so e conhecido
+   * depois que o cliente escolhe quantos recursos quer. Se a API mandasse o
+   * preco unitario ja descontado, a tela multiplicaria por N e chegaria a um
+   * numero diferente do que o servidor cobra: com preco 33333 e 7%, unitario
+   * descontado x2 = 62000, desconto sobre o total = 61999. Um centavo, sempre
+   * na direcao de mostrar menos do que a cobranca traz.
+   *
+   * Mandando o percentual, a tela roda a MESMA applyDiscount do servidor. Uma
+   * conta so, nao duas que precisam concordar.
+   *
+   * `0` quando nao ha desconto configurado — o cliente paga o cheio (secao
+   * 4-B.6, default fail-safe).
+   *
+   * FASE E: quando houver cartao, isto vira um mapa por metodo e a tela passa a
+   * mostrar as duas opcoes lado a lado (secao 4-B.2). Hoje NAO existe "de/por":
+   * so o Pix e comprável, e anunciar economia contra um preco que ninguem pode
+   * escolher e propaganda de um desconto que nao e opcao.
+   */
+  discountBasisPoints: number;
   paymentMode: 'full' | 'deposit';
   /**
    * Idade minima do garupa. SAI no catalogo publico de proposito: sem ela o
@@ -144,18 +178,25 @@ export type PublicExperience = {
  * com a decisao de negocio sobre o sinal.
  */
 export async function listPublicExperiences(): Promise<PublicExperience[]> {
-  return db
-    .select({
-      id: experiences.id,
-      name: experiences.name,
-      durationMinutes: experiences.durationMinutes,
-      priceCents: experiences.priceCents,
-      paymentMode: experiences.paymentMode,
-      minPassengerAge: experiences.minPassengerAge,
-    })
-    .from(experiences)
-    .where(and(eq(experiences.tenantId, getTenantId()), eq(experiences.active, true)))
-    .orderBy(asc(experiences.durationMinutes), asc(experiences.id));
+  // Uma leitura do desconto para o catalogo inteiro: e configuracao do TENANT,
+  // nao da experiencia, entao consultar por linha seria N vezes a mesma resposta.
+  const [rows, discountBasisPoints] = await Promise.all([
+    db
+      .select({
+        id: experiences.id,
+        name: experiences.name,
+        durationMinutes: experiences.durationMinutes,
+        priceCents: experiences.priceCents,
+        paymentMode: experiences.paymentMode,
+        minPassengerAge: experiences.minPassengerAge,
+      })
+      .from(experiences)
+      .where(and(eq(experiences.tenantId, getTenantId()), eq(experiences.active, true)))
+      .orderBy(asc(experiences.durationMinutes), asc(experiences.id)),
+    getDiscountBasisPoints('pix'),
+  ]);
+
+  return rows.map((row) => ({ ...row, discountBasisPoints }));
 }
 
 // ============================================================================

@@ -23,6 +23,7 @@ import {
   removeDepositExperiences,
   reservationInput,
   wipeMovement,
+  precoEsperado,
 } from './helpers/db';
 
 const SAT = nextSaturday();
@@ -33,13 +34,21 @@ const SAT = nextSaturday();
 // outro caminho. Comparar com o retorno do app seria a versao circular; cravar
 // 34900/17450 seria a versao que envelhece calada quando o fixture mudar.
 // Regra da secao 4.6: deposit = round(total x deposit_percent / 100).
-const TOTAL_PCT = DEPOSIT_PCT_FIXTURE.priceCents;
+//
+// >>> FASE A: `priceCents` do fixture e o VALOR CHEIO <<<
+// O total da venda e o cheio MENOS o desconto do Pix (secao 4-B.1), e e sobre
+// esse total ja descontado que o sinal e calculado — nunca sobre o cheio. Isso
+// antecipa a regra da secao 4-B.2 ("o desconto incide TAMBEM sobre o sinal"):
+// calcular o sinal sobre o cheio faria o cliente do sinal pagar mais que o do
+// Pix integral, punindo justamente quem aceitou pagar antes.
+const CHEIO_PCT = DEPOSIT_PCT_FIXTURE.priceCents;
+const TOTAL_PCT = precoEsperado(CHEIO_PCT);
 const SINAL_PCT = Math.round((TOTAL_PCT * DEPOSIT_PCT_FIXTURE.depositPercent) / 100);
 const SALDO_PCT = TOTAL_PCT - SINAL_PCT;
 
 // Aqui deposit_fixed_cents e MAIOR que o preco, entao o teto da secao 4.6 faz o
 // sinal virar o total e nenhuma linha de saldo existir.
-const TOTAL_FIXED = DEPOSIT_FIXED_FIXTURE.priceCents;
+const TOTAL_FIXED = precoEsperado(DEPOSIT_FIXED_FIXTURE.priceCents);
 
 async function primeiroSlot(experienceId: number, resourcesNeeded = 1): Promise<string> {
   const { slots } = await getAvailability({ experienceId, date: SAT, resourcesNeeded });

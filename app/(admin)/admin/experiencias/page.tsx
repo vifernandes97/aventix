@@ -8,6 +8,7 @@
 // O proxy.ts ja barrou quem nao tem sessao antes de chegar aqui.
 
 import { listExperiences } from '@/lib/experiences';
+import { getDiscountBasisPoints } from '@/lib/financial-config';
 import { getSettings } from '@/lib/tenant';
 
 import { AdminNav } from '../_components/admin-nav';
@@ -18,7 +19,14 @@ import { ExperienceManager } from './_components/experience-manager';
 export const dynamic = 'force-dynamic';
 
 export default async function AdminExperiencesPage() {
-  const [experiences, settings] = await Promise.all([listExperiences(), getSettings()]);
+  const [experiences, settings, discountBasisPoints] = await Promise.all([
+    listExperiences(),
+    getSettings(),
+    // O preco cadastrado passou a ser o CHEIO (secao 4-B.1), e o dono precisa
+    // conferir o valor-Pix resultante na hora de cadastrar, nao descobri-lo na
+    // primeira venda. Ver o cabecalho de ExperienceManager.
+    getDiscountBasisPoints('pix'),
+  ]);
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 sm:p-6">
@@ -33,7 +41,7 @@ export default async function AdminExperiencesPage() {
           digitando a URL. */}
       <AdminNav current="experiencias" />
 
-      <ExperienceManager experiences={experiences} />
+      <ExperienceManager experiences={experiences} discountBasisPoints={discountBasisPoints} />
     </main>
   );
 }

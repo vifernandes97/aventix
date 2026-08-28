@@ -15,7 +15,9 @@
 
 import { sql } from 'drizzle-orm';
 
+import { applyDiscount } from '@/lib/basis-points';
 import { db } from '@/lib/db/client';
+import { SEED_PIX_DISCOUNT_BASIS_POINTS } from '@/lib/seed';
 import { quadricicloTemplate } from '@/lib/templates/quadriciclo';
 import { invalidateSettingsCache } from '@/lib/tenant';
 import { localToUtc, todayLocalDate } from '@/lib/time';
@@ -152,6 +154,24 @@ export async function wipeMovement(): Promise<void> {
  * (a checagem exigia id 1 e 2; o seed gravava o que o template mandasse) que
  * produzia o falso "catalogo nao semeado" com o catalogo intacto no banco.
  */
+/**
+ * O que o cliente PAGA por uma venda de `priceCents` (cheio) x `resources`.
+ *
+ * >>> ANCORA INDEPENDENTE, e nao "o que o codigo calculou" <<<
+ * Recebe o preco CHEIO do template e o desconto SEMEADO, que sao as duas
+ * decisoes de negocio, e refaz a conta. Nao le o total do banco nem chama
+ * getDiscountBasisPoints: comparar o resultado com a mesma fonte que o produziu
+ * faria o teste passar mesmo se a multiplicacao por resourcesNeeded sumisse (a
+ * critica que o teste 15 ja fazia antes desta fase).
+ *
+ * Usa applyDiscount porque a REGRA testada aqui e "o preco vem do servidor", nao
+ * "a aritmetica de basis points esta certa" — essa e o grupo S que prova, com
+ * valores literais.
+ */
+export function precoEsperado(fullPriceCents: number, resources = 1): number {
+  return applyDiscount(fullPriceCents * resources, SEED_PIX_DISCOUNT_BASIS_POINTS).payableCents;
+}
+
 export async function assertCatalogSeeded(): Promise<void> {
   const esperado = {
     resources: quadricicloTemplate.resources.filter((r) => r.active).length,
@@ -160,13 +180,20 @@ export async function assertCatalogSeeded(): Promise<void> {
   };
 
   const [row] = (
-    await db.execute<{ resources: number; hours: number; settings: number }>(sql`
+    await db.execute<{
+      resources: number;
+      hours: number;
+      settings: number;
+      desconto: number | null;
+    }>(sql`
       SELECT (SELECT count(*)::int FROM resources
                 WHERE tenant_id = ${TENANT_ID} AND active) resources,
              (SELECT count(*)::int FROM operating_hours
                 WHERE tenant_id = ${TENANT_ID}) hours,
              (SELECT count(*)::int FROM settings
-                WHERE tenant_id = ${TENANT_ID}) settings
+                WHERE tenant_id = ${TENANT_ID}) settings,
+             (SELECT discount_basis_points FROM payment_method_discounts
+                WHERE tenant_id = ${TENANT_ID} AND method = 'pix') desconto
     `)
   ).rows;
 
@@ -179,6 +206,15 @@ export async function assertCatalogSeeded(): Promise<void> {
   }
   if (row.settings < esperado.settings) {
     faltando.push(`settings: ${row.settings} de ${esperado.settings}`);
+  }
+  // Desde a Fase A o PRECO DA VENDA depende desta linha. Sem a checagem, um
+  // arquivo que deixasse a configuracao suja (o grupo S apaga e restaura a
+  // tabela) faria os testes de preco falharem com "esperado 23249, recebido
+  // 24999" — mensagem que aponta para o calculo, e nao para a causa.
+  if (row.desconto !== SEED_PIX_DISCOUNT_BASIS_POINTS) {
+    faltando.push(
+      `desconto do pix: ${row.desconto ?? 'ausente'} (esperado ${SEED_PIX_DISCOUNT_BASIS_POINTS})`,
+    );
   }
 
   // Resolve as experiencias por NOME do template. Diz qual esta faltando, em

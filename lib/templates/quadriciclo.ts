@@ -93,16 +93,30 @@ export const quadricicloTemplate: SegmentTemplate = {
 
   // -- experiencias (secao 4.3) ----------------------------------------------
   //
-  // >>> priceCents E O PRECO PIX. <<<
-  // O Quadri Club pratica preco por METODO de pagamento: o cartao sai cerca de
-  // 7% mais caro (Montanha R$ 349,99 / Fazenda R$ 249,99). O MVP so aceita Pix
-  // (secao 2), entao o unico preco que o sistema precisa conhecer e o do Pix, e
-  // e ele que esta aqui. Os precos de cartao NAO sao armazenados.
+  // >>> priceCents E O VALOR CHEIO. O PIX E DERIVADO DELE. <<<
+  // (Mudou na Fase A, 28/08. Ate a rev 6 este campo guardava o preco do Pix, e
+  // o comentario aqui PROIBIA a troca — estava certo naquele desenho e passou a
+  // estar errado com a rev 7. Se voce veio ate aqui por causa daquele aviso, ele
+  // nao existe mais de proposito.)
   //
-  // NAO troque estes valores pelos de cartao "para ficar completo": o cliente
-  // que paga Pix veria 7% a mais do que o anunciado, em toda venda, sem erro
-  // nenhum aparecendo. Preco por metodo entra na v2 junto com o cartao (secao
-  // 16), e a modelagem (coluna extra ou tabela de precos) se decide la.
+  // O Quadri Club pratica preco por METODO (secao 4-B.1): a experiencia guarda
+  // o CHEIO, o Pix tem desconto configuravel por tenant (7%, em
+  // payment_method_discounts) e o cartao paga o cheio, SEM ACRESCIMO. Nao existe
+  // taxa somada ao cliente: o cartao nao fica mais caro, o Pix fica mais barato.
+  //
+  // Quem aplica o desconto e createReservation, via applyDiscount de
+  // lib/basis-points.ts, sobre o TOTAL (preco x recursos). O wizard chama a
+  // MESMA funcao para exibir. NAO desconte nada aqui.
+  //
+  // >>> ARMADILHA AO MEXER NESTES NUMEROS <<<
+  // seedTenant() reconcilia preco POR NOME e faz UPDATE na divergencia. Trocar
+  // um valor aqui muda o preco em producao no proximo seed — e se a troca
+  // subisse SEM o codigo que aplica o desconto, o sistema cobraria o cheio no
+  // Pix, 7% a mais, em toda venda, sem erro e sem log. Template e calculo andam
+  // no MESMO commit e no MESMO deploy, sempre.
+  //
+  // E lembre da secao 19: o seed NAO RODA em producao. Mudar isto aqui nao muda
+  // o banco de la sozinho — exige UPDATE manual, conferido por SELECT.
   //
   // PAGAMENTO: as duas nascem em 'full' (cliente paga 100% no ato). O modo
   // 'deposit' esta implementado ponta a ponta, mas ainda NAO foi confirmado se o
@@ -124,7 +138,10 @@ export const quadricicloTemplate: SegmentTemplate = {
       durationMinutes: 90,
       bufferMinutes: 15, // confirmado pelo cliente em 2026-07-28
       priceMode: 'per_resource',
-      priceCents: 32549, // PIX R$ 325,49 por quadriciclo (cartao seria 34999; ver nota acima)
+      // CHEIO R$ 349,99 por quadriciclo, confirmado pelo cliente em 28/08.
+      // No Pix (-7%) o cliente paga R$ 325,49 — o mesmo valor de sempre, agora
+      // derivado em vez de digitado.
+      priceCents: 34999,
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
       // Publicado por escrito pelo cliente em 24/08/2026. Contado na DATA DO
       // PASSEIO, nao na da reserva (ver createReservation).
@@ -136,7 +153,9 @@ export const quadricicloTemplate: SegmentTemplate = {
       durationMinutes: 60,
       bufferMinutes: 15, // confirmado pelo cliente em 2026-07-28
       priceMode: 'per_resource',
-      priceCents: 23249, // PIX R$ 232,49 por quadriciclo (cartao seria 24999; ver nota acima)
+      // CHEIO R$ 249,99 por quadriciclo, confirmado pelo cliente em 28/08 —
+      // encerra o "a confirmar" da rev 7. No Pix (-7%): R$ 232,49.
+      priceCents: 24999,
       paymentMode: 'full', // PROVISORIO — confirmar com o cliente
       // Publicado por escrito pelo cliente em 24/08/2026 (ver Trilha da Montanha).
       minPassengerAge: 6,
