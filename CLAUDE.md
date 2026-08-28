@@ -20,6 +20,15 @@
 > (d) O **go-live de 24/08 não aconteceu**, embora o sistema esteja em produção
 > e o ciclo do dinheiro tenha sido validado com **dinheiro real** naquele dia.
 >
+> **Atualização de 28/08/2026 (dentro da rev 7, não é revisão nova):**
+> (a) **Fase 0 CONCLUÍDA** — configuração financeira em tabela própria (migration
+> 0006), com as três decisões de desenho da seção 4-B.6 (basis points, duas
+> tabelas, ausência assimétrica) valendo para as Fases A..E.
+> (b) **Preços cheios confirmados** pelo cliente: Montanha R$ 349,99, Fazenda
+> R$ 249,99 (seção 4-B.1).
+> (c) **Armadilha nova e grave na seção 19** — o seed **nunca roda em produção**;
+> migration aplicada não é dado semeado. Custou quatro dias com o mapa invisível.
+>
 > **Revisão 6** — pagamento com sinal + robustez da integração Asaas:
 > (a) **Pagamento parcial (sinal)** configurável por experiência: cliente paga um percentual/valor no ato e o saldo é cobrado presencialmente no dia. Motivação real: parceiro Aventurando (compra coletiva do mesmo segmento e ticket) reportou abandono no checkout por receio de golpe ao pagar o valor integral.
 > (b) **Nova tabela `reservation_payments`** (uma reserva → N pagamentos). Os campos de pagamento saem de `reservations`.
@@ -432,10 +441,12 @@ CREATE INDEX idx_rp_open ON reservation_payments (state, due_date) WHERE state =
 A experiência cadastra o **valor cheio**. O desconto do Pix é **configurável por
 tenant** (7% no Quadri Club) e o cartão paga o cheio.
 
-- **Trilha da Montanha:** R$ 349,99 cheio.
-- **Trilha da Fazenda:** R$ 249,99 cheio — **A CONFIRMAR** com o cliente. O
-  indício é aritmético: 249,99 − 7% = **232,49 exatos**, que é o valor que ele
-  citou. Com 249,00 daria 231,57, e não bateria.
+- **Trilha da Montanha:** R$ 349,99 cheio → Pix (−7%) R$ 325,49.
+- **Trilha da Fazenda:** R$ 249,99 cheio → Pix (−7%) R$ 232,49.
+
+**Confirmados pelo cliente em 28/08.** Antes disso a Fazenda era hipótese
+sustentada por aritmética (249,99 − 7% = 232,49 exatos, enquanto 249,00 daria
+231,57), e a confirmação bateu com o indício.
 
 **>>> NÃO EXISTE TAXA SOMADA AO CLIENTE. <<<** O cartão **não** fica mais caro;
 o Pix fica mais barato. A diferença é a mesma, mas a leitura na tela não é: um
@@ -523,8 +534,78 @@ O que ela configura:
    campo só produziria número errado com **aparência de certo**, que é pior que
    número obviamente errado.
 
-O DDL entra na **Fase 0** (seção 17) e ainda não existe — não presuma nomes de
-coluna a partir desta seção.
+#### O DDL (migration 0006, **implementado** em 28/08)
+
+```sql
+CREATE TYPE card_machine_modality AS ENUM ('debit','credit','credit_installment');
+
+-- Desconto por metodo: afeta o PRECO QUE O CLIENTE PAGA.
+CREATE TABLE payment_method_discounts (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL DEFAULT 1 REFERENCES tenants(id),
+  method payment_method NOT NULL,
+  discount_basis_points int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, method),
+  -- teto EXCLUSIVO: 100% zeraria o preco, e experiencia gratuita nao e
+  -- suportada (secao 4.6) — a cobranca violaria CHECK (amount_cents > 0).
+  CHECK (discount_basis_points >= 0 AND discount_basis_points < 10000)
+);
+
+-- Taxa da maquininha por modalidade: afeta QUANTO O TENANT RECEBE.
+CREATE TABLE card_machine_rates (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL DEFAULT 1 REFERENCES tenants(id),
+  modality card_machine_modality NOT NULL,
+  rate_basis_points int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, modality),
+  -- teto INCLUSIVO, diferente do desconto: taxa de 100% e absurda mas nao
+  -- quebra nada (liquido zero). O teto barra digito extra, nao julga contrato.
+  CHECK (rate_basis_points >= 0 AND rate_basis_points <= 10000)
+);
+```
+
+#### Três decisões de desenho que valem para as Fases A..E
+
+**1. Percentual em BASIS POINTS inteiro (7% = 700), nunca `numeric` nem float.**
+`numeric` é exato no banco, mas o node-postgres o entrega como **string**, e a
+partir daí cada consumidor decide sozinho como transformar aquilo em conta. O
+primeiro que escrever `Number(taxa) * cents / 100` reintroduz exatamente o ponto
+flutuante binário que `lib/payments/money.ts` existe para impedir — e reintroduz
+**invisivelmente**, porque o erro não aparece no número, aparece na serialização.
+Com basis point a conta inteira fica em inteiros: `Math.round(cents * bp / 10000)`.
+Custo assumido: um `SELECT` cru mostra `700`, que dá para ler como 700%; a defesa
+é o nome da coluna, o CHECK e a tela, que sempre exibe percentual.
+
+**2. Duas tabelas, não uma.** Desconto é **política de preço**, decidida pelo dono
+e aplicada na venda. Taxa é **fato do contrato** com a adquirente, aplicado no
+registro e congelado ali (4-B.7) — e é a que vai precisar crescer (validade ou
+versão). Unificá-las exigiria chave `text` polimórfica (perdendo a garantia do
+enum) ou colunas nuláveis com CHECK XOR no estilo de
+`experiences_deposit_mode_check`.
+
+**3. >>> AUSÊNCIA SIGNIFICA COISAS DIFERENTES NAS DUAS, E ISSO NÃO É DETALHE. <<<**
+- **Desconto ausente = 0%** — o cliente paga o cheio. É *fail-safe*: entre as duas
+  falhas possíveis, escolhe a que não dá abatimento que ninguém autorizou.
+- **Taxa ausente = `NULL`, JAMAIS 0%.** Uma taxa zero é mentira que faz o líquido
+  parecer igual ao bruto — número com aparência de certo, desmentido só na
+  conferência com o extrato, semanas depois. **A Fase D deve RECUSAR o registro**
+  de recebimento cuja modalidade não tenha taxa cadastrada. O tipo de retorno de
+  `getCardMachineRate` é `| null` exatamente para o compilador obrigar essa
+  decisão no ponto de uso.
+
+É essa assimetria que justifica as duas APIs terem formas diferentes: desconto é
+**upsert por método** (sem create nem delete, porque "sem linha" e "0 bp" dizem o
+mesmo); taxa é **POST/PUT/DELETE com 409 de duplicata**, que também impede
+sobrescrever em silêncio um percentual já conferido com a adquirente.
+
+**A aritmética vive em `lib/basis-points.ts`, módulo PURO. As Fases A..E REUSAM,
+não reimplementam.** Ele já cobre desconto, taxa, a divisão parte/resto sempre por
+subtração (a garantia da 4-B.5) e a conversão texto ↔ bp sem passar por float.
+Uma segunda implementação "só para exibir" é como as duas metades divergem.
 
 ### 4-B.7 Valor líquido — regra inviolável
 
@@ -768,6 +849,19 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 > isso em voz alta**, no topo e dentro da confirmacao de exclusao: sem o aviso o dono
 > apaga o sabado achando que cancelou os passeios de sabado.
 
+- **`GET /api/admin/financial-config`** — desconto por método **e** taxas da
+  maquininha, numa resposta só (a tela mostra as duas juntas; separar em dois GET
+  só criaria a chance de desenhar metade da configuração).
+- **`PUT /api/admin/financial-config/discounts/{method}`** — **upsert** pela chave
+  natural `(tenant, método)`. Não há POST nem DELETE: o conjunto de métodos é
+  fechado pelo enum, e "sem linha" e "0 bp" dizem a mesma coisa. Método fora do
+  enum é **404** (é segmento de URL, logo endereço inexistente), não 422.
+- **`GET|POST /api/admin/financial-config/card-machine-rates`, `PUT|DELETE /{id}`**
+  — modalidade **duplicada é 409** com `code: 'modalidade_ocupada'` e o `conflict`
+  no corpo, nunca upsert silencioso: sobrescrever sem avisar um percentual já
+  conferido com a adquirente é justamente o que não pode acontecer com dinheiro.
+  Percentual fora de faixa é 422 (ver os CHECKs em 4-B.6). **Lista vazia é o
+  estado esperado** enquanto os percentuais reais não chegarem.
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
 - `GET /api/admin/customers` — clientes + histórico.
 - **`GET /api/admin/reservations/{id}/balance`** — retorna o saldo pendente e, sob demanda, o **QR Code Pix atual** da cobrança de saldo (buscado no Asaas **na hora**, nunca cacheado — QR expira).
@@ -835,6 +929,12 @@ Também exponha em `/admin` um indicador de saúde da integração (último webh
 > o que levar e contato, e pede para o cliente printar. Quem for construir o e-mail
 > depois nao pode simplificar aquela tela por achar que o e-mail a substitui — ela
 > continua sendo o que sobrevive a refresh e volta pelo link.
+
+**ENQUADRAMENTO (28/08): isto é preparação, não lacuna ativa.** O sistema está em
+produção, mas **ninguém tem o link de agendamento** — não existe cliente real e
+ninguém está pagando. Não há hoje um cliente que pague e fique sem e-mail. O
+e-mail é item da lista de conferência **antes de abrir em outubro**, não incidente
+em curso.
 
 A lista abaixo e a especificacao de quando o e-mail existir:
 
@@ -932,6 +1032,7 @@ Um único login (o dono). Sem provider externo.
     /admin/excecoes/page.tsx          # excecoes de agenda; mostra o contraste "hoje x com a excecao"
     /admin/horarios/page.tsx          # grade semanal; avisa que apagar faixa NAO cancela reserva
     /admin/bloqueios/page.tsx
+    /admin/financeiro/page.tsx        # desconto por metodo + taxas da maquininha (secao 4-B.6)
     /admin/configuracoes/page.tsx
     /admin/compartilhar/page.tsx
     /admin/integracao/page.tsx        # saude do webhook / reconciliacao
@@ -946,6 +1047,7 @@ Um único login (o dono). Sem provider externo.
     /admin/schedule-exceptions/       # + [id] (PUT/DELETE) e validation.ts de borda
     /admin/operating-hours/           # idem; recusa faixas sobrepostas (409)
     /admin/blackouts/                 # idem; horario LOCAL do tenant, sem fuso
+    /admin/financial-config/          # + discounts/[method] e card-machine-rates(/[id])
     /admin/...                        # + reservations/[id]/balance, balance/receive-in-cash, integration/health
 /lib
   /db/schema.ts
@@ -963,6 +1065,9 @@ Um único login (o dono). Sem provider externo.
   /schedule-exceptions.ts             # CRUD de excecoes (secao 6) — SERVER-ONLY; TEM delete
   /operating-hours.ts                 # CRUD da grade semanal (secao 6) — SERVER-ONLY; recusa sobreposicao
   /blackouts.ts                       # CRUD de bloqueios (secao 6) — SERVER-ONLY; horario local -> UTC na borda
+  /financial-config.ts                # configuracao financeira (secao 4-B.6) — SERVER-ONLY
+  /basis-points.ts                    # percentual em bp: desconto, taxa, parte/resto — modulo PURO.
+                                      # As Fases A..E REUSAM daqui, nunca reimplementam
   /cpf.ts                             # validacao/normalizacao de CPF — modulo PURO, unico algoritmo, usado pelo servidor E pelo wizard
   /maps.ts                            # URL de embed do mapa: lista de permissao http(s) — modulo PURO (secao 4.2)
   /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
@@ -1084,7 +1189,7 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 
 | Fase | O que entra |
 |---|---|
-| **Fase 0** | **Configuração financeira**: tabela própria (fora de `settings`), desconto do Pix por tenant, taxas da maquininha por modalidade (seção 4-B.6). É o alicerce das outras. |
+| **Fase 0** | ~~**Configuração financeira**: tabela própria (fora de `settings`), desconto do Pix por tenant, taxas da maquininha por modalidade (seção 4-B.6).~~ **CONCLUÍDA em 28/08** — migration 0006, `lib/basis-points.ts`, `lib/financial-config.ts`, `/admin/financeiro`. |
 | **Fase A** | **Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2). |
 | **Fase B** | **Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`. |
 | **Fase C** | **Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças. |
@@ -1123,6 +1228,47 @@ Sem estes itens o desenvolvimento trava. Cobrar do **Quadri Club** antes da fase
 ---
 
 ## 19. Armadilhas de infraestrutura (Easypanel)
+
+### >>> O SEED NUNCA RODA EM PRODUÇÃO. MIGRATION APLICADA NÃO É DADO SEMEADO. <<< (descoberto em 28/08/2026)
+
+**Leia esta antes das outras.** Não é "mais uma armadilha": é a que escondeu um
+bug por **quatro dias**, e ela dispara em toda configuração nova.
+
+**O mecanismo.** O `instrumentation.ts` do boot aplica **apenas migrations**
+(decisão de 18/08). Semear é `lib/seed.ts`, chamado por `scripts/seed.ts` — e o
+**build standalone do Next descarta `scripts/` da imagem**. Não existe nenhum
+caminho automático que aplique o template em produção.
+
+**Por que passa despercebido.** Toda configuração nova entra no template,
+funciona no ambiente local, passa nos testes, sobe no deploy e **não chega ao
+banco de produção** — sem erro, sem log e sem tela quebrada, porque o código
+trata chave ausente **omitindo o bloco**, que é o comportamento *correto*
+(seções 4.2 e 15, caso 21). Ou seja: a defesa que impede a tela de quebrar é a
+mesma coisa que faz a falha ser silenciosa.
+
+**O sintoma real, medido.** `meeting_point_map_url` foi escrita no template e
+**nunca foi semeada em produção**. O mapa do ponto de encontro subiu no deploy de
+24/08 e **nunca apareceu para cliente nenhum**. Ficou assim por quatro dias e só
+foi descoberto em 28/08 **por acaso**, conferindo outra coisa. Ninguém procurava
+por ele porque a tela renderizava perfeitamente — sem o mapa.
+
+**REGRA QUE FICA:** todo deploy que introduza **setting nova** ou **tabela de
+configuração** exige conferência por `SELECT` **no banco de produção**, na mesma
+janela do deploy. Não confie no build verde, não confie na migration aplicada,
+não confie no teste passando — nenhum dos três toca dado semeado.
+
+```sql
+SELECT key, value FROM settings ORDER BY key;
+SELECT * FROM payment_method_discounts;
+SELECT * FROM card_machine_rates;
+```
+
+**CAMINHO DEFINITIVO, e agora com prioridade real:** a rota
+`POST /api/admin/seed`, protegida por sessão, chamando `seedTenant()` do próprio
+código Next (já registrada mais abaixo nesta seção). Ela elimina a classe inteira
+de falha, porque o seed passa a viajar dentro da imagem em vez de depender de
+alguém lembrar de rodar SQL à mão. Enquanto ela não existir, **a conferência por
+`SELECT` é obrigatória e é a única rede**.
 
 ### O console web (bash e PostgreSQL Client) mente sobre COMMIT em SQL colado (medido em 19/08/2026)
 
