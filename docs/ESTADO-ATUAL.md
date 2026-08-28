@@ -1,173 +1,185 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-25
+> Última atualização: 2026-08-28
 
-## Onde estamos
+## Enquadramento (leia antes de priorizar qualquer coisa)
 
-**O go-live NÃO aconteceu, e isso é decisão, não atraso.** Em 25/08, depois de
-ver o sistema apresentado, o cliente voltou atrás do combinado (lançar só com Pix
-integral) e pediu para **lançar somente com todas as formas de pagamento
-prontas**.
+**O sistema está em produção, mas NINGUÉM tem o link de agendamento.** Não existe
+cliente real, ninguém está pagando, e **não há nenhuma lacuna ativa causando dano
+agora**. Toda pendência listada mais abaixo é **preparação para outubro**, nunca
+incidente em curso.
 
-**Prazo novo: sistema pronto em setembro; uso real no início de outubro**, quando
-sai o vídeo do influenciador **@grandecampinas**. Os leads do vídeo caem na
-plataforma **de uma vez** — é o primeiro volume real que o sistema vai ver, e é
-por isso que o marco deixou de ser data e virou evento.
+Isso importa para não distorcer prioridade. "O cliente paga e não recebe e-mail"
+não é um fato do presente: é um item da lista de conferência antes de abrir. O
+**único caminho crítico são as fases de pagamento** (A..E). O resto é checklist.
 
-**O sistema está EM PRODUÇÃO e funcionando.** Em 24/08 o **ciclo do dinheiro foi
-validado com dinheiro real**: cobrança criada, paga pelo app do banco, webhook
-entregue, sistema confirmou sozinho. Produção está deployada, com **chave de
-produção do Asaas**, e o **banco de produção está limpo** (sem lixo de teste).
+**Prazo:** sistema pronto em **setembro**; uso real no **início de outubro**, com
+o vídeo do influenciador **@grandecampinas**, que despeja os leads de uma vez. O
+risco não é chegar a tempo — é **chegar testado com gente real antes do pico**.
 
-O que falta **não é estabilidade — é escopo de pagamento** (CLAUDE.md seção 4-B).
+## PRÓXIMO PASSO — Fase A: preço por método + Pix integral com desconto
 
-> **Não verificado nesta sessão:** o commit exato em produção, quais migrations
-> ela já aplicou e a configuração corrente do webhook. Não tenho acesso ao
-> Easypanel nem ao painel do Asaas, então isto é o que foi **relatado**, não
-> observado. Conferir antes da Fase 0.
+A Fase 0 está concluída e a configuração já existe no banco. A Fase A é ligar o
+desconto ao preço, e ela tem **duas metades**, sendo a segunda a arriscada:
 
-## PRÓXIMO PASSO — Fase 0: configuração financeira
+1. **Trocar os valores do template para os preços CHEIOS** — Montanha 34999,
+   Fazenda 24999 (hoje o template guarda 32549 e 23249, que são os preços **já
+   com desconto**, o inverso do que a seção 4-B manda).
+2. **Aplicar o desconto na venda**, lendo `getDiscountBasisPoints('pix')` e
+   usando `applyDiscount` de `lib/basis-points.ts`. **Reusar, não reimplementar.**
 
-Tabela **própria** (fora de `settings`), com desconto do Pix por tenant e taxas
-da maquininha por modalidade. É o alicerce das fases A..E.
+**>>> DUAS ARMADILHAS NESSA TROCA <<<**
 
-**Por que não em `settings`:** `seedTenant()` sobrescreve toda linha cujo valor
-divirja do template, então o 7% configurado pelo dono sumiria no próximo seed,
-sem erro e sem log (CLAUDE.md seções 4-B.6 e 19).
+- **`lib/templates/quadriciclo.ts:94-103` PROÍBE textualmente o que a Fase A tem
+  que fazer.** O comentário diz `>>> priceCents É O PREÇO PIX. <<<` e "NÃO troque
+  estes valores pelos de cartão". Ele está certo para a rev 6 e errado para a
+  rev 7. Trocar os números sem reescrever o comentário deixa a próxima pessoa com
+  um aviso mandando desfazer a correção.
+- **O seed RECONCILIA preço por nome** (`lib/seed.ts`, faz UPDATE na divergência).
+  Trocar o template muda o preço em produção no próximo seed. Isso precisa ser
+  decisão consciente, não descoberta.
 
-A tabela pode ser construída **sem** os percentuais da maquininha, que ainda não
-chegaram — o que não pode é registrar pagamento com taxa chutada.
+### Faseamento (CLAUDE.md seção 17)
 
-### Faseamento acordado (CLAUDE.md seção 17)
-
-| Fase | O que entra |
+| Fase | Estado |
 |---|---|
-| **Fase 0** | Configuração financeira: tabela própria, desconto Pix, taxas por modalidade |
-| **Fase A** | Preço por método + Pix integral com desconto |
-| **Fase B** | Sinal de 50% via Pix (`confirmed` + `partial`) |
-| **Fase C** | Cobrança do saldo sob demanda, **idempotente** |
-| **Fase D** | Registro manual da maquininha, com líquido e taxa congelados |
-| **Fase E** | Cartão via `invoiceUrl` + chargeback |
-| **Transversal** | Líquido lido do Asaas em toda reserva |
-| **Termo v2** | Em paralelo: política de cancelamento + regra de remarcação |
-| **Antes do vídeo** | Testes com clientes reais |
+| **Fase 0** — configuração financeira | **CONCLUÍDA em 28/08** |
+| **Fase A** — preço por método + Pix integral com desconto | **PRÓXIMA** |
+| **Fase B** — sinal de 50% via Pix (`confirmed` + `partial`) | pendente |
+| **Fase C** — cobrança do saldo sob demanda, idempotente | pendente |
+| **Fase D** — registro manual da maquininha, líquido e taxa congelados | pendente |
+| **Fase E** — cartão via `invoiceUrl` + chargeback | pendente |
+| **Transversal** — líquido lido do Asaas | pendente |
+| **Termo v2** — política de cancelamento + regra de remarcação | pendente, em paralelo |
+| **Antes do vídeo** — testes com clientes reais | pendente |
 
-## O que mudou no modelo de pagamento (leia a seção 4-B antes de codar)
+## Fase 0 — o que foi entregue (28/08)
 
-- Experiência cadastra o **valor cheio**; **Pix tem desconto** configurável por
-  tenant (7%); **cartão paga o cheio, sem acréscimo**. Não existe taxa somada ao
-  cliente.
-- **Sinal é 50% fixo, só no Pix**, e o desconto incide **também** sobre ele.
-- **Sinal pago → `confirmed` + `partial`.** Manter `pending_payment` faria o cron
-  de hold liberar a vaga de quem já pagou metade.
-- **Arredondamento:** entrada para cima, saldo é sempre `total − pago`.
-- **Valores congelados** no registro do pagamento (bruto, modalidade, percentual,
-  líquido). Taxa muda; registro de dinheiro não.
-- **Cartão via `invoiceUrl`**, nunca formulário próprio (PCI; o Asaas não tem
-  tokenização client-side).
-- **Chargeback** é lacuna conhecida, tratada na Fase E.
+Migration **0006**: `payment_method_discounts` e `card_machine_rates`, mais o enum
+`card_machine_modality`. Saiu completa do gerador, **sem edição à mão** (ao
+contrário da 0001, 0004 e 0005).
 
-## Pronto
+- `lib/basis-points.ts` — **módulo PURO** de aritmética de percentual.
+- `lib/financial-config.ts` — domínio, server-only.
+- `/api/admin/financial-config/*` — GET agregado, PUT de desconto por método,
+  CRUD de taxas com 409 de duplicata.
+- `/admin/financeiro` + link na `AdminNav`.
+- `tests/s-config-financeira.test.ts` — grupo S, 28 casos.
 
-**Fases 0–2 (numeração antiga)**: schema, tenant e settings, motor de
-disponibilidade, criação transacional, cron de hold, seed como template de
-segmento, `PaymentProvider`/Asaas Pix, `reservation_payments`, webhook com as
-oito regras da seção 8, job de reconciliação.
+### As três decisões de desenho que governam as Fases A..E
 
-**Fase 3 (antiga), tarefas 1 a 8**: auth + `proxy.ts`; calendário nativo em uma
-query; painel sobreposto de detalhe e cancelamento; CRUD de experiências;
-formulário público de 6 passos; termo com rolagem obrigatória e contato de
-emergência; tela de status com polling; CRUDs operacionais de agenda. A 9ª
-(agenda compartilhada `/agenda/[token]`) é corte acordado.
+Estão na seção 4-B.6 do CLAUDE.md e em `docs/DECISOES.md`. Repetidas aqui porque
+quem pegar a Fase A precisa das três antes de escrever a primeira linha:
 
-**Entregue e agora registrado** (parte já documentada em 24/08, consolidada aqui):
+1. **Percentual em BASIS POINTS inteiro, nunca `numeric` nem float.** `numeric`
+   chega do driver como **string**, e o primeiro `Number(x) * cents / 100`
+   reintroduz o float binário que o `money.ts` existe para impedir — de forma
+   invisível, porque o erro aparece na serialização, não no número.
+2. **Duas tabelas, não uma.** Desconto é política de preço; taxa é fato do
+   contrato com a adquirente, e é a que vai precisar de validade/versão.
+3. **Ausência significa coisas diferentes.** Desconto ausente = **0%** (o cliente
+   paga o cheio, *fail-safe*). Taxa ausente = **`NULL`, JAMAIS 0%** — taxa zero é
+   mentira que faz o líquido parecer igual ao bruto. A Fase D **recusa** o
+   registro quando não há taxa; `getCardMachineRate` retorna `| null` para o
+   compilador obrigar a decisão.
 
-- **`/admin/agendamentos`** — lista consultável de reservas com busca por nome ou
-  telefone, filtros de status e período, somente leitura (`a7336fb`).
-- **Sidebar no desktop, navbar preservada no mobile** — estado recolhido/expandido
-  em cookie lido no servidor, sem flash; página ativa segue por prop
-  (PR #2, `401e3d5` na `main`; `81f503b` era o commit da branch).
-- **Etapa 1 da topologia de URL, COMPLETA** — LP em `/agendamento/[slug]` com
-  **resolução real do tenant por slug** no banco (`findTenantBySlug` +
-  `notFound()`), e a **raiz do app virou login** (307 para `/admin/login`).
-- **Idade mínima do garupa por experiência** — 6 na Fazenda, 12 na Montanha,
-  contada na **data do passeio**, validada no servidor e espelhada no wizard.
-- **Mapa em iframe** na tela de confirmação (com link de fallback) e o **texto
-  oficial do cliente** renderizado com quebras preservadas.
-- **Toggle de mostrar/ocultar senha** no login (PR #3, `f0e62e0`).
+**`lib/basis-points.ts` é o módulo de aritmética. As Fases A..E REUSAM, não
+reimplementam.** Uma segunda implementação "só para exibir" é como as duas metades
+divergem.
+
+## >>> ARMADILHA QUE CUSTOU QUATRO DIAS: o seed NUNCA roda em produção <<<
+
+O `instrumentation.ts` do boot aplica **apenas migrations**. Semear é
+`scripts/seed.ts`, e o build standalone **descarta `scripts/` da imagem**. Não há
+caminho automático que aplique o template em produção.
+
+Configuração nova entra no template, funciona local, passa nos testes, sobe no
+deploy e **não chega ao banco** — sem erro e sem log, porque o código trata chave
+ausente **omitindo o bloco**, que é o comportamento correto. A defesa que impede a
+tela de quebrar é a mesma coisa que torna a falha silenciosa.
+
+**Sintoma real:** `meeting_point_map_url` nunca foi semeada. O mapa subiu no
+deploy de 24/08 e **nunca apareceu em produção**. Ficou quatro dias assim,
+descoberto **por acaso** em 28/08.
+
+**REGRA:** todo deploy que introduza setting ou tabela de configuração exige
+conferência por `SELECT` **no banco de produção**, na mesma janela do deploy.
+Migration aplicada **não** significa dado semeado.
+
+**Caminho definitivo, agora com prioridade real:** a rota `POST /api/admin/seed`,
+protegida por sessão, chamando `seedTenant()` de dentro do Next. Enquanto não
+existir, a conferência manual é a única rede.
+
+## Estado de produção (VERIFICADO por SELECT em 28/08, não relatado)
+
+- Commit em produção: **`d287739`** (`main` = `origin/main`).
+- **Migration 0006 aplicada**; 15 tabelas, incluindo `payment_method_discounts` e
+  `card_machine_rates`.
+- `payment_method_discounts` = **`pix | 700`**, semeado **à mão**.
+- `card_machine_rates` **VAZIA** — nasce assim de propósito.
+- `settings` = **15**, com `support_whatsapp` e `meeting_point_map_url` semeados
+  **à mão neste deploy** (é a armadilha acima em ação).
 
 ## Migrations
 
-- **Seis no disco**: `0000_oval_mandroid`, `0001_busy_tomorrow_man`,
-  `0002_emergency_contact`, `0003_asaas_ids`, `0004_tenant_slug`,
-  `0005_min_passenger_age`.
-- **Local**: as seis aplicadas (`drizzle.__drizzle_migrations` com 6 linhas).
-- **Produção**: relatada como deployada; **o número exato de migrations aplicadas
-  não foi verificado nesta sessão** (sem acesso ao painel). Conferir.
+- **Sete no disco**, de `0000_oval_mandroid` a `0006_awesome_anita_blake`.
+- **Local:** as sete aplicadas (`drizzle.__drizzle_migrations` com 7 linhas).
+- **Produção:** as sete aplicadas, verificado por SELECT.
 - `npm run db:generate` responde "No schema changes, nothing to migrate".
 - **A 0001, a 0004 e a 0005 estão editadas à mão** e precisam continuar assim se
-  regeradas — na 0005 o que se perde é o **backfill**, silenciosamente.
-
-## Verificação obrigatória do backfill da 0005
-
-Só faz sentido se a 0005 já subiu para produção (não confirmado):
-
-```sql
-SELECT id, name, min_passenger_age FROM experiences;
-```
-
-Esperado: `Trilha da Fazenda | 6` e `Trilha da Montanha | 12`. O backfill casa
-por **nome**; se o nome divergir, as duas ficam com `0`, que significa **sem
-idade mínima** — a migration passa, o boot passa, e o sistema aceita criança de
-qualquer idade sem nada acusar erro.
+  regeradas — na 0005 o que se perde é o **backfill**, silenciosamente. **A 0006
+  não** foi editada e pode ser regerada sem perda.
 
 ## Testes
 
-`npm test`: **18 arquivos, 144 casos, todos passando**.
+`npm test`: **19 arquivos, 172 casos, todos passando** (eram 18/144).
 
-Grupo **R** (`tests/r-idade-garupa.test.ts`, 9 casos) cobre a idade do garupa e o
-mapa. O caso **R4** é o que trava o "conserto" errado: ele afirma que a criança
-tem um ano a menos **hoje** e mesmo assim aceita a reserva, então alinhar as duas
-regras de idade na data da reserva o quebra com mensagem que aponta para a regra.
+Grupo **S** (`tests/s-config-financeira.test.ts`, 28 casos): aritmética
+(34999 a 7% = 32549, idêntico em 1000 execuções), isolamento entre tenants na
+**leitura e na escrita**, 422 de percentual inválido, 409 de modalidade duplicada
+com a `UNIQUE` do banco como segunda barreira, e **S5.2**, que prova a promessa da
+seção 4-B.6: desconto alterado pelo dono sobrevive a dois `seedTenant()` seguidos.
+
+Grupo **R** segue cobrindo idade do garupa e mapa; o caso **R4** continua sendo o
+que trava o "conserto" errado de alinhar as duas regras de idade.
 
 ## Banco local
 
 Container `aventix-db-dev` no ar. Catálogo semeado e reconciliado com o template.
-**15 settings**, com **apenas `support_whatsapp` vazia** — o número já chegou
-(+55 19 99901-5663) e precisa entrar **no template e no banco**, pela regra das
-duas casas. Há 6 reservas de demonstração do `db:seed:demo` (movimento, zerado
-por `npm test`).
+**15 settings**, todas preenchidas — `support_whatsapp` = `5519999015663`, a
+última que faltava. `payment_method_discounts` com `pix | 700`;
+`card_machine_rates` vazia.
 
 ## Deploy
 
-`origin/main` = `main` local = **`6d51c0c`**. Produção relatada como deployada,
-com chave de produção do Asaas e banco limpo. Deploy segue manual (clique em
-Implantar no Easypanel); sem CI/CD.
+`main` = `origin/main` = **`d287739`**, com a Fase 0 mergeada. Deploy segue manual
+(clique em Implantar no Easypanel); sem CI/CD.
 
 ## Pendências e dívidas conhecidas
 
-**Bloqueiam a Fase 0 / Fase D (dependem do cliente)**
+**Bloqueiam a Fase D (dependem do cliente)**
 - **Percentuais reais da maquininha por modalidade** (débito, crédito à vista,
-  crédito parcelado): **não enviados**. Não inventar — taxa chutada vira número
-  com aparência de certo e o erro só aparece na conferência com o extrato.
-- **Preço cheio da Trilha da Fazenda**: 249,99 ou 249,00? O indício aritmético é
-  forte (249,99 − 7% = 232,49 exatos, o valor citado pelo cliente), mas é indício.
+  crédito parcelado): **não enviados**. A tabela e a tela já os aceitam; a tabela
+  fica vazia até chegarem. Não inventar.
+
+**Aberto no texto do cliente**
+- **Contradição do reagendamento**: o texto oficial promete remarcação com 48h de
+  antecedência mas **não diz como**. Redação proposta e **ainda não aprovada**:
+  *"Remarcação. Você pode remarcar seu passeio até 48 horas antes do horário
+  agendado, falando com a gente pelo WhatsApp — a remarcação não é feita pelo
+  site. A nova data fica sujeita à disponibilidade. Valores já pagos não são
+  devolvidos em caso de cancelamento."* O texto oficial **não está no
+  repositório** (vive no site/ManyChat do cliente); entra no Termo v2.
 
 **Do redesenho de 25/08**
-- **`experiences.deposit_percent` / `deposit_fixed_cents` divergem da regra
-  nova.** As colunas são **por experiência**; a regra fixa o sinal em **50%**.
-  Não resolvido em código — a Fase B decide se somem, viram default ou passam a
-  ser ignoradas. Até lá, vale a seção 4-B.
-- **Contradição no texto oficial**: promete reagendamento com 48h de antecedência
-  mas não diz **como**. Como nunca há devolução, a cláusula só faz sentido como
-  direito de **remarcar**, e o texto precisa dizer que é pelo WhatsApp. Entra no
-  Termo v2.
-- **Chargeback** não tem estado na máquina de estados (seção 5). Reserva
-  `confirmed`, realizada, com pagamento revertido é combinação que hoje não
-  existe. Fase E.
+- **`experiences.deposit_percent` / `deposit_fixed_cents` divergem da regra nova.**
+  As colunas são por experiência; a regra fixa o sinal em **50%**. A Fase B decide
+  se somem, viram default ou passam a ser ignoradas.
+- **Chargeback** não tem estado na máquina de estados (seção 5). Fase E.
 - **A tela do CRUD de experiências precisa mostrar cheio e com desconto.** Com o
-  valor cheio cadastrado, o dono digita 349,99 achando que é o que recebe.
+  valor cheio cadastrado, o dono digita 349,99 achando que é o que recebe. Entra
+  junto com a Fase A.
 
 **Multi-tenancy pela metade (dívida de propósito, 23/08)**
 - **Etapa 2 não feita.** `getTenantId()` devolve 1 fixo. A barreira
@@ -175,36 +187,38 @@ Implantar no Easypanel); sem CI/CD.
 - Critério de conclusão: poder **apagar** aquela função e
   `tests/o-barreira-multi-tenant.test.ts`.
 
-**Verificação que não foi feita**
-- **Estado real de produção** (commit, migrations, webhook) não conferido nesta
-  sessão.
+**Verificação que continua não feita**
 - **As telas do admin nunca foram renderizadas em navegador autenticado** —
-  calendário, agendamentos, experiências, CRUDs e a sidebar nova. `/admin/*` está
-  atrás do login e só existe o hash da senha.
-- O passo 4 do wizard (onde a mensagem de idade aparece) não foi exercitado em
-  navegador; a regra foi provada por teste de integração.
+  calendário, agendamentos, experiências, CRUDs, sidebar e agora **`/admin/financeiro`**.
+  `/admin/*` está atrás do login e só existe o hash da senha. O build prova que
+  compilam e estão roteadas; nada além disso.
+- O passo 4 do wizard (mensagem de idade) nunca foi exercitado em navegador.
 
-**Fluxo de venda**
+**Fluxo de venda (checklist de outubro, não lacuna ativa)**
 - E-mail cortado do go-live; a tela `confirmed` é a única confirmação ao cliente.
 - Termo sem checagem de versão vigente no servidor; o termo **não** menciona a
   idade mínima do garupa.
 - `GET /api/availability` não informa quantos recursos sobram num horário.
 - Sem proteção contra duplo clique em `POST /api/reservations` no servidor —
-  **vale reavaliar antes do vídeo**, que é justamente um evento de pico.
+  **reavaliar antes do vídeo**, que é evento de pico.
 
 **Integração de pagamento**
 - Indicador de saúde da integração no `/admin` não construído (seção 8-B).
 - Cinco divergências entre a seção 8 e o que foi medido, não resolvidas.
-- `receiveInCash` não implementado (vira Fase D, agora com líquido e taxa).
+- `receiveInCash` não implementado (Fase D, agora com líquido e taxa).
 
 **Dívida técnica registrada de propósito**
 - Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`
-  (22/08). O adiamento do lançamento abriu janela para pagar essa dívida.
+  (22/08). O adiamento do lançamento abriu janela para pagá-la.
 
 **Gerais**
+- **`POST /api/admin/seed` não existe** — e agora é o conserto de uma classe
+  inteira de falha, não conveniência (ver a armadilha acima).
 - Sem CI/CD; deploy é clique manual.
 - `npm install` de 18/08 reportou 10 vulnerabilidades (4 moderate, 6 high).
-- `instrumentation.ts` compila para Edge Runtime e falha lá: 3 avisos no build.
+- `instrumentation.ts` compila para Edge Runtime e falha lá: **3 avisos no build**
+  (`lib/payments/asaas.ts` com `node:crypto`, `lib/auth.ts` com `bcrypt`).
+  Confirmado em 28/08 que continuam sendo esses três, nenhum novo.
 - Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`,
   `GET /api/experiences` e `POST /api/reservations` — **o vídeo de outubro torna
   isto mais relevante do que era**.
@@ -216,10 +230,4 @@ Implantar no Easypanel); sem CI/CD.
   reintroduz o formato não-ISO.
 - Chave SSH do VPS não configurada; acesso por senha de root.
 - Branches locais já mergeadas, podem ser apagadas: `feat/tenant-slug`,
-  `feat/idade-e-mapa`, `feat/admin-sidebar`.
-
-## Prazo
-
-**Setembro**: sistema pronto (Fases 0 e A..E). **Início de outubro**: uso real,
-com o vídeo do @grandecampinas. O risco mudou de natureza — não é mais "chegar a
-tempo", é **chegar testado com gente real antes do pico**.
+  `feat/idade-e-mapa`, `feat/admin-sidebar`, `feat/config-financeira`.
