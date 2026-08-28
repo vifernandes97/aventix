@@ -21,6 +21,11 @@
 > e o ciclo do dinheiro tenha sido validado com **dinheiro real** naquele dia.
 >
 > **Atualização de 28/08/2026 (dentro da rev 7, não é revisão nova):**
+> (0) **Fases 0, A e B CONCLUÍDAS e validadas em produção com dinheiro real.** A
+> experiência guarda o preço cheio, o Pix desconta 7%, e o sinal de 50% existe —
+> com a combinação `confirmed` + `partial`, que a seção 5 não previa. O **texto
+> oficial do cliente** entrou (seção 4.2); antes disso a tela sempre mostrou o
+> placeholder, apesar de a documentação afirmar o contrário.
 > (a) **Fase 0 CONCLUÍDA** — configuração financeira em tabela própria (migration
 > 0006), com as três decisões de desenho da seção 4-B.6 (basis points, duas
 > tabelas, ausência assimétrica) valendo para as Fases A..E.
@@ -231,6 +236,16 @@ CREATE TABLE tenants (
 --  sem valor. Canal principal porque o tenant vende por ManyChat (secao 9).
 --  single_experience_per_slot ("true"/"false", default "false"),
 --  min_lead_minutes (inteiro >= 0 como string, default "60") — antecedencia minima para reservar
+--  meeting_point: o TEXTO OFICIAL do tenant, MULTILINHA. No Quadri Club sao 6
+--  paragrafos (check-in, documento e idade, regras, acidentes, remarcacao). A
+--  tela intitula o bloco "Informacoes importantes", nao "Ponto de encontro": ele
+--  deixou de ser endereco. AS QUEBRAS DE LINHA SAO CONTEUDO e precisam
+--  sobreviver do template ao banco a tela (`whitespace-pre-line`); colapsa-las
+--  vira parede de texto que ninguem le, sem erro nenhum aparecendo.
+--  what_to_bring: VAZIO no Quadri Club de proposito — o texto acima ja cobre o
+--  assunto, e duas redacoes do mesmo tema divergem na primeira atualizacao. A
+--  chave FICA no tipo e no template: outro tenant do segmento pode usa-la, e a
+--  tela omite o bloco (rotulo sem valor e pior que secao ausente).
 --  meeting_point_map_url: URL de EMBED do mapa do ponto de encontro. SO A URL,
 --  NUNCA HTML: settings e dado renderizado como TEXTO, e guardar marcacao
 --  obrigaria a injeta-la crua na pagina (XSS). O <iframe> e montado no
@@ -473,11 +488,14 @@ Regras que a tabela não mostra e que são invioláveis:
   cliente do sinal pagar mais que o do Pix integral, punindo justamente quem
   aceitou pagar antes.
 
-> **Divergência conhecida com o schema atual:** `experiences.deposit_percent` e
-> `experiences.deposit_fixed_cents` (seção 4.3) existem e são **por experiência**,
-> enquanto esta seção fixa o sinal em 50%. Não foi resolvido em código; a Fase B
-> decide se as colunas somem, viram default ou passam a ser ignoradas. Enquanto
-> isso, **a regra de negócio que vale é a desta seção**.
+> **A divergência com o schema foi RESOLVIDA na Fase B, separando escrita de
+> leitura.** As colunas `deposit_percent` / `deposit_fixed_cents` (seção 4.3)
+> continuam existindo e continuam sendo por experiência, mas o **CRUD não as
+> expõe**: ele grava `deposit_percent = 50` fixo, e o dono só decide se a
+> experiência aceita sinal. O **cálculo continua LENDO da coluna**, então há uma
+> fonte só e uma linha gravada com outro percentual seguiria honrada em vez de
+> silenciosamente recalculada. Apagar as colunas seria migration com perda de
+> histórico, sem ganho.
 
 ### 4-B.3 Reserva com sinal pago: `confirmed` + `partial`
 
@@ -696,6 +714,19 @@ create → [pending_payment]  (hold 15min; cria cobranca(s) no Asaas)
 
 **"Pagamento devido"** = o `full` (modo full) ou o `deposit` (modo deposit). O `balance` **nunca** afeta `reservations.status`.
 
+**>>> `status` E `payment_state` SÃO EIXOS INDEPENDENTES. <<<** Desde a Fase B
+existe a combinação `confirmed` + `partial` (seção 4-B.3): a **vaga** está
+garantida e o **dinheiro** não está completo. `status` governa a vaga,
+`payment_state` governa o dinheiro, e nenhum dos dois se deriva do outro. Duas
+consequências que já morderam:
+
+- **O cron não pode tocar nela**, e não toca, por duas barreiras independentes:
+  o `SELECT` de `lib/jobs/expire-holds.ts` filtra `pending_payment`, e
+  `ALLOWED_TRANSITIONS` recusa `confirmed → expired`. Alargar qualquer uma
+  liberaria a vaga de quem já pagou metade, com o dinheiro na conta do tenant.
+  `tests/u-sinal.test.ts` (U1 e U4.2) existe só para travar as duas.
+- **Nenhuma tela pode dizer só "confirmada".** Ver a regra na seção 11.1.
+
 ### 5.2 Criação (transação única)
 
 1. find-or-create `customers`.
@@ -816,7 +847,7 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 - CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/quadriciclo-v1.ts` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
 - **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
   **Idade mínima do garupa entra no CRUD** (`idadeMinimaGarupa`, inteiro 0..120; `0` = sem mínimo): é regra de segurança publicada pelo tenant, e escondê-la do dono faria a próxima trilha nascer sem regra em silêncio. Ausente no POST vira `0`, para não quebrar chamador existente.
-  **Sinal fora do CRUD por ora:** `payment_mode` só aceita `full`, e `deposit_percent`/`deposit_fixed_cents` não são expostos. `deposit` responde 422 em vez de gravar experiência que ninguém consegue vender — gravar o modo sem os campos de sinal violaria `experiences_deposit_mode_check` e viraria 500. Reabre com a Fase 2 e a decisão de negócio sobre o sinal; o ponto único a mudar é `ACCEPTED_PAYMENT_MODES` em `lib/experiences.ts`.
+  **Sinal no CRUD, com o percentual TRAVADO (Fase B):** `payment_mode` aceita `full` e `deposit`. O dono responde "aceita sinal? sim/não"; ele **nunca digita o percentual**, porque a seção 4-B.2 fixou o sinal em 50% para o produto. O servidor grava `deposit_percent = 50` e `deposit_fixed_cents = NULL` (`depositColumns` em `lib/experiences.ts`), que é o que `experiences_deposit_mode_check` exige — gravar `deposit` com os dois nulos viraria 500. **Escrita travada, leitura livre:** `createReservation` continua lendo o percentual da COLUNA, então o cálculo tem uma fonte só e uma linha gravada com outro percentual seguiria honrada. Se o sinal voltar a ser por experiência, o ponto único a mudar é `DEPOSIT_PERCENT`.
 - `GET /api/admin/reservations?date=` — agenda do dia com participantes, documentos, recursos, channel **e saldo em aberto**.
 - **`GET /api/admin/reservations/{id}`** — detalhe de UMA reserva para o painel: reserva, experiência, recursos alocados, cliente completo, participantes com documento, **contato de emergência** e as linhas de `reservation_payments`. **Uma query** (os conjuntos um-para-muitos saem em subconsultas agregadas, nunca em JOINs que se multiplicam). **Regra de dado sensível, válida para toda rota que trafegue CPF, número de documento ou contato de emergência:** eles saem no **corpo**, nunca em query string, URL ou log — nem em erro, nem em depuração; se a rota ganhar log de requisição, os campos são redigidos antes. Reserva inexistente, **de outro tenant** e id malformado respondem os três `404` — `403` no segundo caso confirmaria a existência do id a quem sonda, e um id fora do formato uuid aborta a query com `22P02` em vez de devolver zero linhas. `emergencyContact` vem `null` em reserva anterior à migration 0002 (coluna nullable).
 - **`GET|POST /api/admin/schedule-exceptions`, `PUT|DELETE /{id}`** — excecoes de
@@ -950,14 +981,32 @@ Comprovante inclui ponto de encontro e o que levar (de `settings`). Falha de e-m
 
 ## 10. Termo de aceite digital
 
-Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — ainda não implementado, já que nenhuma experiência do Quadri Club vende em `deposit` (seção 7.2). Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
+Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — **ainda não implementado, e desde a Fase B isso é lacuna ativa**: as duas trilhas do Quadri Club vendem em `deposit` em produção, então já existe cliente pagando sinal sem que o termo diga que ele não é reembolsável. Entra no Termo v2 (seção 17). Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
 
 ---
 
 ## 11. Calendário nativo + agenda compartilhada
 
 ### 11.1 Calendário do admin
-Visão do dia com uma coluna por recurso ativo, blocos com cliente/experiência/status, buffers visíveis, seletor de data e faixa semanal com contagem. **Rev 6:** blocos com saldo em aberto recebem marcador visual (ex. "Saldo R$175"), e o detalhe da reserva traz os botões **Cobrar saldo** (QR na hora) e **Recebi por fora**. Essa tela é usada **no celular, em campo** — priorize legibilidade e toque.
+Visão do dia com uma coluna por recurso ativo, blocos com cliente/experiência/status, buffers visíveis, seletor de data e faixa semanal com contagem. O detalhe da reserva traz os botões **Cobrar saldo** (QR na hora, Fase C) e **Recebi por fora** (Fase D). Essa tela é usada **no celular, em campo** — priorize legibilidade e toque.
+
+**>>> O RÓTULO DO BLOCO SAI DE `status` + `payment_state`, NUNCA SÓ DE `status`. <<<**
+Até a Fase B o mapa era `confirmed: 'Pago'`. Isso virou **afirmação falsa** no
+instante em que o sinal ficou vendável: reserva com metade paga é `confirmed`, e
+o bloco diria "Pago", em verde, na tela em que o guia bate o olho antes do
+passeio sem abrir reserva nenhuma. Ele leva a pessoa e ninguém cobra o resto.
+
+O estado de exibição tem **três** valores (`displayState`, em
+`app/(admin)/admin/_components/shared.ts`): aguardando, **saldo em aberto** e
+pago. O de saldo tem cor própria e carrega o **valor** ("Saldo R$ 162,74") — um
+número em reais é o que o guia cobra; "saldo em aberto" ele leria como pendência
+burocrática. A derivação é **fail-safe**: o que não está `settled` conta como
+devendo, porque marcar como saldo uma reserva quitada custa dez segundos e o
+contrário custa o passeio.
+
+**A mesma regra vale para `/admin/agendamentos`** (selo "Falta R$ X" ao lado do
+status, não no lugar dele) e para a tela de status do cliente. **Tela que
+esqueça é regressão**, não detalhe visual.
 
 **Detalhe e cancelamento são um painel sobreposto, não uma página.** Clicar num bloco abre um overlay sobre o calendário, que fecha por X, clique fora e Esc — o dono está olhando a agenda do dia e precisa continuar exatamente onde estava depois de cancelar. O clique carrega o **id da reserva**, nunca o do recurso: uma reserva multi-recurso vira um bloco por corrida contígua de colunas, então recursos não adjacentes produzem blocos separados, e todos abrem a mesma reserva. O detalhe é buscado **sob demanda, no clique** — isso não fere a regra da query única abaixo, que governa o render do período. Cancelar exige digitar `CANCELAR` (exato, maiúsculas) e não pede motivo. O painel tem uma **segunda porta de entrada, aditiva ao clique**: `/admin?...&reserva={id}` abre-o já na carga (usada pelo link de `/admin/agendamentos`). O servidor valida a existência do id no tenant antes de mandar abrir — id ausente, malformado, inexistente ou de outro tenant renderiza a agenda normal, sem painel e sem erro; fechar o painel limpa o `reserva=` da URL para o refresh não reabrir.
 
@@ -1190,8 +1239,8 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 | Fase | O que entra |
 |---|---|
 | **Fase 0** | ~~**Configuração financeira**: tabela própria (fora de `settings`), desconto do Pix por tenant, taxas da maquininha por modalidade (seção 4-B.6).~~ **CONCLUÍDA em 28/08** — migration 0006, `lib/basis-points.ts`, `lib/financial-config.ts`, `/admin/financeiro`. |
-| **Fase A** | **Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2). |
-| **Fase B** | **Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`. |
+| **Fase A** | ~~**Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2).~~ **CONCLUÍDA em 28/08** — migration 0007 (`full_price_cents`, `discount_basis_points`), desconto aplicado sobre o TOTAL, wizard e servidor pela mesma `applyDiscount`. |
+| **Fase B** | ~~**Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`.~~ **CONCLUÍDA em 28/08** — sem migration; passo de escolha no wizard, `deposit` destravado no CRUD, e as três telas mostrando a pendência. |
 | **Fase C** | **Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças. |
 | **Fase D** | **Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7). |
 | **Fase E** | **Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9). |
@@ -1263,12 +1312,40 @@ SELECT * FROM payment_method_discounts;
 SELECT * FROM card_machine_rates;
 ```
 
-**CAMINHO DEFINITIVO, e agora com prioridade real:** a rota
+**MEDIDO EM 28/08: uma única sessão exigiu QUATRO `UPDATE` manuais em
+produção** — os dois preços cheios (Fase A), o `payment_mode` das experiências
+(Fase B), o `meeting_point` com o texto oficial e o `what_to_bring` vazio. Nenhum
+deles acusaria falha se fosse esquecido:
+
+| Esquecer | O que acontece | Como apareceria |
+|---|---|---|
+| preços | cobra 7% a menos, em toda venda | só na conciliação |
+| `payment_mode` | o passo de sinal não existe no wizard | ninguém percebe |
+| `meeting_point` | a tela mostra o placeholder antigo | parece funcionando |
+| `what_to_bring` | rótulo "O que levar" com texto velho junto do novo | parece funcionando |
+
+**Os dois últimos são os que se esquece**, porque são conteúdo e não têm sintoma
+técnico. O `what_to_bring` é o pior de todos: é um `UPDATE` que grava **string
+vazia**, e "não fiz nada" é indistinguível de "não precisava fazer nada".
+
+**CAMINHO DEFINITIVO, e ele DEIXOU DE SER CONVENIÊNCIA:** a rota
 `POST /api/admin/seed`, protegida por sessão, chamando `seedTenant()` do próprio
 código Next (já registrada mais abaixo nesta seção). Ela elimina a classe inteira
 de falha, porque o seed passa a viajar dentro da imagem em vez de depender de
-alguém lembrar de rodar SQL à mão. Enquanto ela não existir, **a conferência por
-`SELECT` é obrigatória e é a única rede**.
+alguém lembrar de rodar SQL à mão. Com quatro ocorrências numa sessão só, o custo
+de não a ter passou o custo de construí-la. Enquanto ela não existir, **a
+conferência por `SELECT` é obrigatória e é a única rede**.
+
+**Conferir CONTEÚDO exige mais que contar linhas.** Para texto multilinha, o
+número de caracteres não prova nada: o console pode entregar o texto inteiro com
+os `\n` colapsados, e aí o tamanho confere e a tela vira parede de texto. Conte
+as quebras junto:
+
+```sql
+SELECT key, length(value) AS chars,
+       length(value) - length(replace(value, chr(10), '')) AS quebras
+FROM settings WHERE tenant_id = 1 AND key IN ('meeting_point','what_to_bring');
+```
 
 ### O console web (bash e PostgreSQL Client) mente sobre COMMIT em SQL colado (medido em 19/08/2026)
 
