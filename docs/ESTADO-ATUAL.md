@@ -24,6 +24,42 @@ já existe em `reservation_payments` desde a criação da reserva, com
 `external_reference` determinístico (`{uuid}:balance`), e é ela que dá a chave
 natural para a idempotência.
 
+### Entra junto: o reconciliador está poluindo o log, e vai piorar
+
+**Descoberto em produção em 28/08, depois do fim de sessão.** A Fase B cria a
+linha `kind='balance'` na reserva, mas a cobrança do saldo só nasce na Fase C.
+Então existe linha de pagamento sem `asaas_payment_id`, e o job de reconciliação
+a encontra a cada 10 minutos e loga:
+
+```
+[reconcile-payments] pagamento <uuid> (reserva <uuid>) sem id no provedor; nada a consultar
+```
+
+**Medido:** 7 linhas por ciclo com apenas 4 reservas de teste. Com 30 reservas
+depois do vídeo do @grandecampinas, são 30 linhas a cada 10 minutos, **para
+sempre**. Ruído constante faz parar de ler o log, e é olhando log que este
+projeto pegou falha surda três vezes.
+
+**O conserto:** o reconciliador ignora `kind='balance'` **sem** cobrança, porque
+é estado esperado e não anomalia. Encaixa nesta fase porque é ela que passa a
+criar essa cobrança.
+
+**>>> NÃO SILENCIE `deposit` NEM `full` SEM ID. <<<** Esses **são** anomalia —
+borda 9, a criação da cobrança falhou e a reserva nasceu sem QR. **Há 3 reservas
+assim em produção agora**, de tentativas com valor abaixo do mínimo do Asaas.
+Silenciar por "sem id" em vez de por `kind` apagaria o único sinal que existe
+delas.
+
+**Detalhe de implementação:** a query de `lib/jobs/reconcile-payments.ts` **não
+seleciona `kind` hoje** — o filtro precisa desse campo. E o comentário do bloco
+`if (!row.chargeId)` atribui a ausência só à borda 9; ele precisa passar a
+conhecer as duas causas, senão o próximo a ler conclui que silenciar qualquer uma
+é seguro.
+
+**O silêncio do `balance` é permanente, não um remendo.** Mesmo depois da Fase C,
+`balance` sem id continua significando "o dono ainda não cobrou" — o estado
+normal da véspera. O que volta a ser assunto do job é `balance` **com** id.
+
 ### Faseamento (CLAUDE.md seção 17)
 
 | Fase | Estado |

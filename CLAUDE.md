@@ -940,6 +940,32 @@ A fila de webhook pode ser interrompida (15 falhas) e ficar horas sem entregar n
 
 Também exponha em `/admin` um indicador de saúde da integração (último webhook recebido, pendências reconciliadas). Se a fila cair, o dono vê antes do cliente reclamar. Reativação da fila é feita no painel do Asaas ou via API (`interrupted: false`).
 
+**>>> PAGAMENTO SEM `asaas_payment_id`: DUAS CAUSAS, e só UMA é anomalia. <<<**
+
+O job avisa em log toda linha `pending` sem id no provedor. Isso nasceu certo,
+quando a única causa possível era a **borda 9** (a criação da cobrança falhou
+depois da transação). Desde a Fase B existe uma segunda causa, **rotineira**: a
+linha `kind='balance'` é criada junto da reserva, mas a cobrança do saldo só
+nasce quando o dono a pede (Fase C). Ou seja, **toda reserva com sinal produz um
+aviso a cada 10 minutos, para sempre**.
+
+| `kind` sem id | Significado | O job deve |
+|---|---|---|
+| `balance` | o saldo ainda não foi cobrado — **estado esperado** | **ignorar em silêncio** |
+| `deposit`, `full` | a cobrança do pagamento devido **falhou** (borda 9) | **avisar** |
+
+**Nunca silencie `deposit` nem `full`.** Eles significam reserva que nasceu sem
+QR, e o cliente não tem como pagar.
+
+**O silêncio do `balance` é permanente, não um remendo até a Fase C.** Mesmo
+depois dela, `balance` sem id continua sendo "o dono ainda não cobrou", que é o
+estado normal da véspera. O que volta a ser assunto do job é `balance` **com**
+id, aí sim consultado como qualquer outra cobrança.
+
+**Por que isto é regra e não ajuste cosmético:** ruído constante faz parar de ler
+o log, e este projeto já pegou falha surda três vezes olhando log. Um aviso que
+dispara sempre não é aviso, é fundo.
+
 ### 8-C. Estorno (manual no MVP)
 
 - Pix aceita estorno **integral ou vários parciais**, somando no máximo o valor recebido.
