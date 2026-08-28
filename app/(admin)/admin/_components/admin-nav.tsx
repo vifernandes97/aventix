@@ -38,6 +38,7 @@ const LINKS = [
   { key: 'horarios', href: '/admin/horarios', label: 'Horários', icon: <ClockIcon /> },
   { key: 'bloqueios', href: '/admin/bloqueios', label: 'Bloqueios', icon: <BanIcon /> },
   { key: 'experiencias', href: '/admin/experiencias', label: 'Experiências', icon: <MountainIcon /> },
+  { key: 'financeiro', href: '/admin/financeiro', label: 'Financeiro', icon: <PercentIcon /> },
 ] as const;
 
 export type AdminNavKey = (typeof LINKS)[number]['key'];
@@ -171,6 +172,16 @@ function BanIcon(): ReactNode {
     <svg {...iconProps()}>
       <circle cx="12" cy="12" r="8.5" />
       <path d="M6 6l12 12" />
+    </svg>
+  );
+}
+
+function PercentIcon(): ReactNode {
+  return (
+    <svg {...iconProps()}>
+      <path d="M18 6L6 18" />
+      <circle cx="8" cy="8" r="2" />
+      <circle cx="16" cy="16" r="2" />
     </svg>
   );
 }

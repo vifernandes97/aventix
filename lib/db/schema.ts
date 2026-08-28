@@ -74,6 +74,23 @@ export const reservationPaymentState = pgEnum('reservation_payment_state', [
   'settled',
 ]);
 
+// rev 7 — configuracao financeira do tenant (secao 4-B.6)
+
+// Modalidade da maquininha. A taxa da adquirente MUDA com a modalidade, e por
+// isso ela e chave de tabela e nao um campo unico: um percentual so produziria
+// numero errado com APARENCIA de certo, que e pior que numero obviamente errado.
+//
+// 'credit_installment' e uma modalidade SO, e nao uma por numero de parcelas.
+// E simplificacao consciente: a adquirente costuma cobrar taxa crescente por
+// parcela. A secao 4-B.6 lista tres modalidades, e e o que esta modelado — se a
+// Fase D precisar da granularidade por parcela, e migration com coluna nova, nao
+// reinterpretacao silenciosa desta.
+export const cardMachineModality = pgEnum('card_machine_modality', [
+  'debit',
+  'credit',
+  'credit_installment',
+]);
+
 // -- 4.2 tenant e configuracao ---------------------------------------------
 
 export const tenants = pgTable('tenants', {
@@ -104,6 +121,134 @@ export const settings = pgTable(
     value: text('value').notNull(),
   },
   (t) => [primaryKey({ columns: [t.tenantId, t.key] })],
+);
+
+// -- 4-B.6 configuracao financeira do tenant --------------------------------
+//
+// >>> POR QUE ISTO NAO MORA EM `settings` <<<
+// seedTenant() SOBRESCREVE toda linha de settings cujo valor divirja do template
+// (lib/seed.ts). O dono configuraria 7% de desconto no Pix, funcionaria por
+// semanas, e o valor SUMIRIA no dia em que alguem rodasse o seed — sem erro e
+// sem log, com o preco voltando sozinho ao do template. Tabela propria fica
+// fora do alcance dessa reconciliacao (secao 4-B.6 e secao 19).
+//
+// A separacao tambem distingue o que a NEOSOLUTI define do que o DONO edita,
+// hoje misturados em settings.
+//
+// >>> PERCENTUAL E BASIS POINT INTEIRO, NUNCA numeric NEM float <<<
+// 7% = 700. 1 bp = 0,01%, que cobre taxa de adquirente do tipo 3,49% (349).
+//
+// `numeric` seria exato no banco, mas o node-postgres o entrega como STRING
+// (para nao perder precisao), e a partir dai cada consumidor decide sozinho como
+// transformar aquilo em conta. O primeiro que escrever `Number(taxa) * cents /
+// 100` reintroduz exatamente o ponto flutuante binario que lib/payments/money.ts
+// existe para impedir — e reintroduz de forma invisivel, porque o erro nao
+// aparece no numero, aparece na serializacao (um centavo de diferenca entre o
+// que o banco diz e o que o cliente paga).
+//
+// Com basis point a conta inteira fica em INTEIROS: Math.round(cents * bp /
+// 10000). Para a maior venda plausivel, 34999 * 700 = 24.499.300 — folgado
+// dentro do inteiro seguro do JS. Deterministico em qualquer maquina, hoje e em
+// dois anos.
+//
+// CUSTO ASSUMIDO: um SELECT cru mostra `700`, que da para ler como 700%. A
+// defesa e o nome da coluna, o CHECK de faixa e a tela, que sempre exibe
+// percentual.
+//
+// A aritmetica pura vive em lib/basis-points.ts (modulo PURO, sem banco).
+
+/**
+ * Desconto por METODO de pagamento — afeta o PRECO QUE O CLIENTE PAGA.
+ *
+ * >>> NAO EXISTE TAXA SOMADA AO CLIENTE (secao 4-B.1) <<<
+ * O cartao NAO fica mais caro; o Pix fica mais barato. A diferenca em reais e a
+ * mesma, mas a leitura na tela nao e: acrescimo no cartao e percebido como
+ * punicao, derruba conversao e esbarra na expectativa de que o preco anunciado e
+ * o preco a pagar. Quem consumir esta tabela NUNCA calcula "cheio + taxa".
+ *
+ * AUSENCIA DE LINHA = 0% DE DESCONTO, e isso e deliberado: e o unico default
+ * seguro. Configuracao faltando faz o cliente pagar o valor CHEIO — nunca um
+ * desconto maior do que o dono autorizou. Ver getDiscountBasisPoints().
+ */
+export const paymentMethodDiscounts = pgTable(
+  'payment_method_discounts',
+  {
+    id: serial('id').primaryKey(),
+    tenantId: integer('tenant_id')
+      .notNull()
+      .default(1)
+      .references(() => tenants.id),
+    method: paymentMethod('method').notNull(),
+    discountBasisPoints: integer('discount_basis_points').notNull().default(0),
+    createdAt: tstz('created_at').notNull().defaultNow(),
+    // Primeira coluna `updated_at` do schema, e ha motivo: e o primeiro VALOR
+    // editado no lugar do qual decisao de dinheiro depende. A secao 4-B.7 gira
+    // em torno de "a taxa muda com o tempo, o registro nao" — saber QUANDO a
+    // configuracao mudou e o que permite conferir um registro antigo contra o
+    // extrato sem adivinhar qual percentual valia naquele dia. Escrita
+    // explicitamente na lib; nao ha trigger no banco (nenhuma tabela tem).
+    updatedAt: tstz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    // Chave natural. E o que torna "duplicar o desconto do Pix" impossivel por
+    // construcao, e nao por disciplina de quem escreve a rota.
+    unique('payment_method_discounts_tenant_method_key').on(t.tenantId, t.method),
+    // Teto EXCLUSIVO em 10000: 100% de desconto zera o preco, e experiencia
+    // gratuita nao e suportada no MVP (secao 4.6) — com total zero a cobranca
+    // violaria `CHECK (amount_cents > 0)` e a venda cairia com 500.
+    check(
+      'payment_method_discounts_range_check',
+      sql`${t.discountBasisPoints} >= 0 AND ${t.discountBasisPoints} < 10000`,
+    ),
+  ],
+);
+
+/**
+ * Taxa da maquininha por modalidade — afeta QUANTO O TENANT RECEBE.
+ * INVISIVEL ao cliente: nao entra em preco, so em valor liquido (secao 4-B.7).
+ *
+ * >>> AUSENCIA DE LINHA SIGNIFICA "NAO CONFIGURADO", NUNCA "0%" <<<
+ * Esta e a diferenca que separa esta tabela da de descontos, e ela e a razao de
+ * as duas terem APIs de forma diferente. Desconto ausente e benigno (o cliente
+ * paga o cheio). Taxa ausente e DESCONHECIDA — e registrar um recebimento com
+ * taxa chutada produz um liquido com aparencia de certo, que so seria desmentido
+ * na conferencia com o extrato, semanas depois. Por isso a Fase D deve RECUSAR o
+ * registro quando a modalidade nao tiver linha, em vez de assumir zero.
+ *
+ * Os percentuais reais do Quadri Club NAO chegaram e a tabela nasce VAZIA de
+ * proposito — o seed nao a semeia. Ver lib/seed.ts.
+ *
+ * ESTA TABELA E CONFIGURACAO, NAO REGISTRO. Ela diz o que vale para o PROXIMO
+ * recebimento. O valor bruto, a modalidade, o percentual aplicado e o liquido
+ * sao CONGELADOS na linha do pagamento no instante do registro (secao 4-B.7), e
+ * depois disso o sistema so LE. Editar uma taxa aqui nunca reescreve o passado —
+ * se reescrevesse, a reserva de setembro passaria a mostrar outro liquido em
+ * novembro, e a conferencia com o extrato quebraria sem nada acusar erro.
+ */
+export const cardMachineRates = pgTable(
+  'card_machine_rates',
+  {
+    id: serial('id').primaryKey(),
+    tenantId: integer('tenant_id')
+      .notNull()
+      .default(1)
+      .references(() => tenants.id),
+    modality: cardMachineModality('modality').notNull(),
+    rateBasisPoints: integer('rate_basis_points').notNull(),
+    createdAt: tstz('created_at').notNull().defaultNow(),
+    updatedAt: tstz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    unique('card_machine_rates_tenant_modality_key').on(t.tenantId, t.modality),
+    // Teto INCLUSIVO em 10000 (100%), diferente do desconto: taxa de 100% e
+    // comercialmente absurda mas nao quebra nada (liquido zero), enquanto
+    // desconto de 100% quebra a venda. O teto existe para barrar digito extra
+    // ('349' virando '3490'), nao para julgar o contrato da adquirente.
+    check(
+      'card_machine_rates_range_check',
+      sql`${t.rateBasisPoints} >= 0 AND ${t.rateBasisPoints} <= 10000`,
+    ),
+  ],
 );
 
 // -- 4.3 catalogo -----------------------------------------------------------

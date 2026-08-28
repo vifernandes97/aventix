@@ -30,7 +30,14 @@
 import { and, eq } from 'drizzle-orm';
 
 import { db } from './db/client';
-import { experiences, operatingHours, resources, settings, tenants } from './db/schema';
+import {
+  experiences,
+  operatingHours,
+  paymentMethodDiscounts,
+  resources,
+  settings,
+  tenants,
+} from './db/schema';
 import { quadricicloTemplate } from './templates/quadriciclo';
 import type { SegmentTemplate } from './templates/types';
 
@@ -58,11 +65,35 @@ export const SEED_TENANT_NAME = 'Quadri Club';
  */
 export const SEED_TENANT_SLUG = 'quadriclub';
 
+/**
+ * Desconto do Pix do Quadri Club, em BASIS POINTS (700 = 7%) — secao 4-B.1.
+ *
+ * >>> POR QUE AQUI, E NAO EM lib/templates/quadriciclo.ts <<<
+ * Mesmo criterio de SEED_TENANT_SLUG, logo acima: 7% e decisao COMERCIAL DESTE
+ * TENANT, nao fato do SEGMENTO. O proximo cliente de passeio de quadriciclo
+ * recebe o mesmo template e negocia o proprio desconto — gravar 700 dentro do
+ * template amarraria o segmento a uma tabela de precos e destruiria a razao de
+ * o template existir.
+ *
+ * >>> E POR QUE ISTO NAO CAI NA ARMADILHA DA SECAO 4-B.6 <<<
+ * A secao 4-B.6 proibe guardar configuracao financeira em `settings` porque o
+ * seed SOBRESCREVE settings divergentes: o dono configuraria 7%, e o valor
+ * sumiria no proximo seed, sem erro e sem log. A insercao abaixo e
+ * INSERT-ONLY — nao existe `else` que atualize —, exatamente como a linha de
+ * `tenants`. Um desconto que o dono mudar para 5% SOBREVIVE a todo seed futuro.
+ *
+ * Semear o valor inicial ainda vale a pena: sem ele o tenant nasce com 0% e a
+ * primeira venda com desconto sairia pelo cheio.
+ */
+export const SEED_PIX_DISCOUNT_BASIS_POINTS = 700;
+
 export type Tally = { created: number; updated: number; unchanged: number };
 const tally = (): Tally => ({ created: 0, updated: 0, unchanged: 0 });
 
 export type SeedReport = {
   settings: Tally;
+  /** Configuracao financeira (secao 4-B.6). `updated` e sempre 0: e insert-only. */
+  paymentDiscounts: Tally;
   resources: Tally;
   experiences: Tally;
   operatingHours: Tally;
@@ -86,6 +117,7 @@ export async function seedTenant(
   return db.transaction(async (tx) => {
     const report: SeedReport = {
       settings: tally(),
+      paymentDiscounts: tally(),
       resources: tally(),
       experiences: tally(),
       operatingHours: tally(),
@@ -292,6 +324,42 @@ export async function seedTenant(
           `operating_hours weekday ${h.weekday} ${hhmm(h.opens)}-${hhmm(h.closes)} (id ${h.id})`,
         );
       }
+    }
+
+    // -- configuracao financeira (secao 4-B.6) --------------------------------
+    //
+    // >>> INSERT-ONLY. NAO ACRESCENTE UM `else` QUE ATUALIZE. <<<
+    // Este e o unico bloco do seed que se recusa a reconciliar de proposito, e
+    // e o ponto inteiro da secao 4-B.6: o desconto e configurado pelo DONO na
+    // tela /admin/financeiro, e um seed que o reescrevesse reproduziria
+    // exatamente a falha que tirar a configuracao de `settings` foi feito para
+    // evitar — o valor voltando sozinho ao do codigo, sem erro e sem log.
+    //
+    // O mesmo criterio da linha de `tenants` (o slug, mais acima): o seed
+    // ESTABELECE o valor inicial, nunca o corrige depois.
+    //
+    // `card_machine_rates` NAO e semeada: os percentuais reais nao chegaram do
+    // cliente, e taxa chutada vira numero errado com aparencia de certo. Tabela
+    // vazia significa "nao configurado", que e o estado honesto hoje.
+    const [existingDiscount] = await tx
+      .select({ method: paymentMethodDiscounts.method })
+      .from(paymentMethodDiscounts)
+      .where(
+        and(
+          eq(paymentMethodDiscounts.tenantId, SEED_TENANT_ID),
+          eq(paymentMethodDiscounts.method, 'pix'),
+        ),
+      );
+
+    if (!existingDiscount) {
+      await tx.insert(paymentMethodDiscounts).values({
+        tenantId: SEED_TENANT_ID,
+        method: 'pix',
+        discountBasisPoints: SEED_PIX_DISCOUNT_BASIS_POINTS,
+      });
+      report.paymentDiscounts.created += 1;
+    } else {
+      report.paymentDiscounts.unchanged += 1;
     }
 
     return report;

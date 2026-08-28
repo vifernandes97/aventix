@@ -29,6 +29,9 @@ function report(r: SeedReport) {
   line('resources', r.resources);
   line('experiences', r.experiences);
   line('operating_hours', r.operatingHours);
+  // Insert-only (secao 4-B.6): 'sem mudanca' aqui significa "o dono ja configurou,
+  // e o seed NAO tocou", nunca "o valor conferia com o codigo".
+  line('desconto pix', r.paymentDiscounts);
 
   console.log('\n  RECURSOS');
   for (const item of r.resourceIds) console.log(`    id ${item.id}  ${item.name}`);
