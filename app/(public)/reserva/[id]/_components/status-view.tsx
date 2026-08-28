@@ -677,7 +677,14 @@ function Confirmed({
         <Card>
           {meetingPoint && (
             <>
-              <h2 className="text-sm font-semibold text-stone-100">Ponto de encontro</h2>
+              {/* >>> "Ponto de encontro" MENTIRIA sobre o proprio conteudo. <<<
+                  O bloco deixou de ser endereco: o texto oficial do cliente
+                  cobre check-in, documento, idade minima, regras, acidentes e
+                  remarcacao. O mapa continua logo abaixo, como ILUSTRACAO do
+                  ponto de encontro dentro das informacoes — nao como o assunto
+                  do bloco. Mesmo titulo no passo de revisao do wizard: dois
+                  titulos diferentes para o mesmo conteudo e pior que um ruim. */}
+              <h2 className="text-sm font-semibold text-stone-100">Informações importantes</h2>
               {/* `whitespace-pre-line` preserva as quebras de linha do texto do
                   banco SEM converter nada em HTML: o texto continua sendo texto,
                   e um `<script>` digitado na setting aparece como caracteres na

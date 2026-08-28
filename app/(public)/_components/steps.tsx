@@ -806,20 +806,44 @@ export function StepTerms({
         />
       </dl>
 
-      <div className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-        {/* `whitespace-pre-line` preserva as quebras de linha vindas do banco
-            sem converter nada em HTML (o texto segue sendo texto — ver o
-            comentario equivalente em status-view.tsx). `break-words` impede que
-            uma URL ou palavra longa estoure a largura no celular. */}
-        <h2 className="text-sm font-semibold">O que levar</h2>
-        <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
-          {labels.what_to_bring}
-        </p>
-        <h2 className="mt-3 text-sm font-semibold">Ponto de encontro</h2>
-        <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
-          {labels.meeting_point}
-        </p>
-      </div>
+      {/* >>> AS TRES GUARDAS DE VAZIO SAO NOVAS, e cada uma evita um defeito. <<<
+          Ate aqui este bloco renderizava os dois titulos incondicionalmente,
+          enquanto a tela de status ja guardava os dois. Com `what_to_bring`
+          vazio — o estado correto desde que o texto oficial passou a cobrir o
+          assunto — o resultado seria o rotulo "O que levar" seguido de nada, que
+          e pior do que nao ter a secao: o cliente conclui que a informacao
+          existe e nao carregou. A caixa inteira tambem some se as duas
+          estiverem vazias, para nao sobrar uma borda ao redor de espaco branco.
+
+          `whitespace-pre-line` preserva as quebras vindas do banco SEM converter
+          nada em HTML (o texto segue sendo texto — ver o comentario equivalente
+          em status-view.tsx). `break-words` impede que uma URL ou palavra longa
+          estoure a largura no celular. */}
+      {(labels.what_to_bring.trim() || labels.meeting_point.trim()) && (
+        <div className="mt-4 rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+          {labels.what_to_bring.trim() && (
+            <>
+              <h2 className="text-sm font-semibold">O que levar</h2>
+              <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
+                {labels.what_to_bring}
+              </p>
+            </>
+          )}
+          {labels.meeting_point.trim() && (
+            <>
+              {/* Mesmo titulo da tela de confirmacao — ver a nota la. */}
+              <h2
+                className={`text-sm font-semibold ${labels.what_to_bring.trim() ? 'mt-3' : ''}`}
+              >
+                Informações importantes
+              </h2>
+              <p className="mt-1 whitespace-pre-line break-words text-sm text-stone-400">
+                {labels.meeting_point}
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ====================================================================
           BLOCO 1 — contato de emergencia

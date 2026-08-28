@@ -38,10 +38,48 @@ export const quadricicloTemplate: SegmentTemplate = {
     single_experience_per_slot: 'true',
 
     min_lead_minutes: '60', // PROVISORIO — confirmar com o cliente
-    meeting_point:
-      'Portaria do Quadri Club. Chegue 20 minutos antes do horario marcado para o briefing.', // PROVISORIO — confirmar com o cliente
-    what_to_bring:
-      'Documento com foto, calca comprida, tenis fechado, protetor solar e agua.', // PROVISORIO — confirmar com o cliente
+    // >>> TEXTO OFICIAL DO CLIENTE. NAO REESCREVA. <<<
+    // Recebido do Quadri Club em 24/08/2026, aprovado em 28/08. Duas
+    // modificacoes acordadas COM ELE: o link do Google Maps saiu (o mapa
+    // embutido e o botao "Abrir no Maps" ja cobrem, e repetir confunde) e a
+    // linha de remarcacao ganhou o WhatsApp, resolvendo a contradicao das 48h
+    // registrada na secao 4-C — o texto prometia remarcar sem dizer COMO, e o
+    // cliente procurava no sistema um botao que nao existe.
+    //
+    // Qualquer alteracao aqui — inclusive acento e virgula — passa pelo cliente.
+    // E texto de responsabilidade DELE: fala de CNH, idade minima, taxa de
+    // colisao e perda do sinal.
+    //
+    // AS QUEBRAS DE LINHA SAO CONTEUDO, nao formatacao. Elas separam os topicos
+    // e precisam sobreviver do template ao banco e a tela; quem renderiza usa
+    // `whitespace-pre-line`. Colapsa-las gruda "Check-in" em "Obrigatorio" numa
+    // parede de texto que ninguem le.
+    //
+    // TEXTO, JAMAIS HTML: settings e dado renderizado como texto (mesma razao
+    // detalhada em meeting_point_map_url, logo abaixo). Os emoji sao caracteres,
+    // nao marcacao.
+    meeting_point: `📌 INFORMAÇÕES IMPORTANTES DO PASSEIO
+
+⏰ Check-in: Chegue 20 min antes (para o treinamento e briefing inicial).
+
+📄 Obrigatório: CNH para pilotar (apresentar no dia). Garupa: mín. 6 anos (Trilha da Fazenda) e 12 anos (Trilha da Montanha). Revezamento só nas paradas.
+
+⚠️ Regras: Siga o guia rigorosamente. Proibido álcool, manobras ou práticas que possam danificar o veículo. Fornecimento de capacete e touca higiênica.
+
+💥 Acidentes: Locatário paga consertos e danos no quadriciclo. Colisão: taxa de R$ 200 + peças danificadas.
+
+🔄 Reagendamento e Faltas: Para remarcar, fale com a gente pelo WhatsApp com no mínimo 48h de antecedência — a remarcação não é feita pelo site, e a nova data fica sujeita à disponibilidade. Avisos com menos de 48h implicam perda do valor do sinal. O não comparecimento no dia e horário marcados inviabiliza o reagendamento e a devolução do dinheiro.`,
+
+    // >>> VAZIO DE PROPOSITO, e nao por falta de conteudo. <<<
+    // O texto oficial acima ja cobre o assunto (CNH obrigatoria, capacete e
+    // touca fornecidos). Manter o placeholder antigo logo abaixo repetiria o
+    // mesmo tema com outra redacao, e as duas versoes divergiriam na primeira
+    // vez que o cliente atualizasse uma delas.
+    //
+    // A CHAVE CONTINUA EXISTINDO no tipo e no template: outro tenant do mesmo
+    // segmento pode precisar dela, e a tela ja OMITE o bloco quando o valor e
+    // vazio (secao 4.2 — vazio e estado valido, nunca rotulo sem conteudo).
+    what_to_bring: '',
 
     // URL de EMBED do Google Maps do ponto de encontro (fornecida pelo cliente
     // em 24/08/2026). Vazia = a tela omite o bloco do mapa inteiro.
