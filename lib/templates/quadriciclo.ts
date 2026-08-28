@@ -61,19 +61,21 @@ export const quadricicloTemplate: SegmentTemplate = {
     // cliente em 17/08/2026 — dominio e .com, NAO .com.br.
     reply_to_email: 'contato@quadriclub.com',
 
-    // >>> PENDENTE DO CLIENTE (tarefa aberta em 21/08/2026) <<<
-    // Numero de WhatsApp do Quadri Club, so digitos com DDI ('5511999998888').
-    // Nasce VAZIO de proposito: o numero ainda nao foi informado, e a tela de
-    // status OMITE o bloco de contato quando a chave esta em branco — melhor
-    // do que exibir um numero inventado que ninguem atende.
+    // Numero de WhatsApp do Quadri Club, informado pelo cliente em 25/08/2026:
+    // +55 19 99901-5663. Gravado como SO DIGITOS COM DDI, que e o formato que o
+    // link wa.me exige (o componente sanitiza com replace(/\D/g,'') de qualquer
+    // forma, mas guardar ja limpo evita depender disso).
     //
-    // ATENCAO AO PREENCHER: a casa definitiva do numero e AQUI, no template.
-    // seedTenant() SOBRESCREVE a linha de settings sempre que o valor do banco
-    // diverge do template (lib/seed.ts), entao um numero digitado direto no
-    // Postgres de producao sobrevive aos deploys (o boot so migra, nao semeia)
-    // mas seria apagado no dia em que alguem rodar o seed de novo. Se o numero
-    // for semeado a mao para nao esperar um rebuild, escreva-o tambem aqui.
-    support_whatsapp: '',
+    // Canal PRINCIPAL de contato do tenant: ele vende por ManyChat, entao e onde
+    // a conversa com o cliente ja acontece. A tela de status omite o bloco de
+    // contato inteiro se esta chave estiver vazia.
+    //
+    // ATENCAO: a casa definitiva do numero e AQUI, no template. seedTenant()
+    // SOBRESCREVE a linha de settings sempre que o valor do banco diverge do
+    // template (lib/seed.ts), entao um numero digitado direto no Postgres de
+    // producao sobrevive aos deploys (o boot so migra, nao semeia) mas seria
+    // apagado no dia em que alguem rodar o seed de novo.
+    support_whatsapp: '5519999015663',
 
     // So aparece no termo quando a experiencia for 'deposit' (secao 10). Fica
     // preenchido para nao travar a troca de modo, mesmo com as duas experiencias
