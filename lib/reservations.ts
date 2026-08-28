@@ -13,7 +13,7 @@ import {
   InvalidResourcesNeededError,
   getAvailability,
 } from './availability';
-import { applyDiscount } from './basis-points';
+import { applyDiscount, splitByBasisPoints } from './basis-points';
 import { isValidCpf, normalizeCpf } from './cpf';
 import { db } from './db/client';
 import {
@@ -42,6 +42,16 @@ export type ReservationPaymentState = (typeof reservationPaymentState.enumValues
  * para nao depender dos genericos internos de PgTransaction.
  */
 export type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Percentual do sinal quando a experiencia nao traz um (secao 4-B.2: 50% fixo).
+ *
+ * O CRUD grava 50 na coluna desde a Fase B, entao este default so entra em linha
+ * antiga ou semeada. Existe para que `depositPercent` nulo NAO vire sinal zero —
+ * que geraria uma cobranca de 1 centavo pelo piso e um saldo do valor quase
+ * inteiro, sem nada acusar erro.
+ */
+export const DEFAULT_DEPOSIT_PERCENT = 50;
 
 // -- erros -------------------------------------------------------------------
 
@@ -495,6 +505,17 @@ export type CreateReservationInput = {
   }[];
   termo: { version: string; acceptedAt: string };
   emergencyContact: { name: string; phone: string };
+  /**
+   * O que o CLIENTE escolheu pagar agora (secao 4-B.4).
+   *
+   * `'deposit'` so e aceito se a experiencia OFERECER sinal; caso contrario a
+   * criacao e recusada (422), nunca rebaixada para integral em silencio.
+   * Ausente = `'full'`, que mantem compativel todo chamador anterior a Fase B.
+   *
+   * NAO carrega VALOR nenhum: quanto e a entrada e quanto sobra e conta do
+   * servidor (secao 4.6). O cliente escolhe a MODALIDADE, jamais o numero.
+   */
+  paymentMethodMode?: 'full' | 'deposit';
   channel?: string | null;
   /** capturados na rota — sao a prova juridica do aceite (secao 10) */
   acceptance?: { ip?: string | null; userAgent?: string | null };
@@ -912,13 +933,44 @@ async function applyCreateReservation(
   // erro. Nao ha ramo especial aqui de proposito.
   const { payableCents: totalCents } = applyDiscount(fullPriceCents, discountBasisPoints);
 
+  // >>> OFERECIDO x COBRADO (secao 4-B.4) <<<
+  // `experience.paymentMode` diz o que e OFERECIDO; `input.paymentMethodMode` e
+  // o que o CLIENTE escolheu no wizard. O modo EFETIVO desta venda e a
+  // intersecao dos dois, e e ele que vai para `reservations.payment_mode`.
+  //
+  // Pedir sinal numa experiencia que nao o oferece e RECUSADO, nunca rebaixado
+  // para integral em silencio: rebaixar cobraria o dobro do que a tela mostrou.
+  const wantsDeposit = input.paymentMethodMode === 'deposit';
+  if (wantsDeposit && experience.paymentMode !== 'deposit') {
+    throw new InvalidCompositionError(
+      'esta experiencia nao aceita pagamento com sinal',
+    );
+  }
+  const effectivePaymentMode = wantsDeposit ? 'deposit' : 'full';
+
   let dueNowCents = totalCents;
   let balanceCents = 0;
 
-  if (experience.paymentMode === 'deposit') {
+  if (effectivePaymentMode === 'deposit') {
+    // >>> A DIVISAO E SOBRE `totalCents`, QUE JA ESTA COM DESCONTO <<<
+    // Nunca sobre fullPriceCents. O desconto do Pix incide TAMBEM sobre o sinal
+    // (secao 4-B.2): metade de 34999 seria 17500, e o cliente do sinal acabaria
+    // pagando 35000 no total — mais que os 32549 de quem paga integral. Puniria
+    // exatamente quem aceitou pagar antes, que e o oposto do que o sinal existe
+    // para fazer.
+    //
+    // splitByBasisPoints devolve o RESTO POR SUBTRACAO, que e a garantia da
+    // secao 4-B.5: entrada + saldo fecha com o total POR CONSTRUCAO, jamais por
+    // coincidencia. 32549 -> 16275 + 16274. Calcular as duas metades
+    // independentemente fecharia na maioria dos valores e falharia em alguns, e
+    // a falha apareceria como um centavo de diferenca no extrato, semanas depois.
+    //
+    // A entrada arredonda para CIMA no empate (Math.round de .5 vai para cima),
+    // que e a regra da 4-B.5: alguem fica com o centavo impar, e a decisao e por
+    // construcao, nao por acaso.
+    const percent = experience.depositPercent ?? DEFAULT_DEPOSIT_PERCENT;
     const rawDeposit =
-      experience.depositFixedCents ??
-      Math.round((totalCents * (experience.depositPercent ?? 0)) / 100);
+      experience.depositFixedCents ?? splitByBasisPoints(totalCents, percent * 100).part;
 
     // Teto obrigatorio: sinal >= total vira total e NAO gera linha de balance.
     // Sem isso, um deposit_fixed_cents maior que o preco produziria balance <= 0
@@ -955,7 +1007,8 @@ async function applyCreateReservation(
       // Sao os MESMOS numeros que montam o period logo abaixo.
       durationMinutes: experience.durationMinutes,
       bufferMinutes: experience.bufferMinutes,
-      paymentMode: experience.paymentMode,
+      // Modo EFETIVO desta venda, nao o da experiencia (secao 4-B.4).
+      paymentMode: effectivePaymentMode,
       termoVersion: input.termo.version.trim(),
       termoAcceptedAt: termoAcceptedAt.toISOString(),
       termoAcceptedIp: input.acceptance?.ip ?? null,
@@ -1016,7 +1069,7 @@ async function applyCreateReservation(
   const paymentRows = [
     {
       reservationId: reservation.id,
-      kind: (experience.paymentMode === 'deposit' ? 'deposit' : 'full') as 'deposit' | 'full',
+      kind: (effectivePaymentMode === 'deposit' ? 'deposit' : 'full') as 'deposit' | 'full',
       amountCents: dueNowCents,
       dueDate: dueToday,
     },
@@ -1048,7 +1101,7 @@ async function applyCreateReservation(
     // ISO 8601, nao o texto cru do Postgres que o mode:'string' devolve — a tela
     // de pagamento faz new Date(holdExpiresAt) para o contador de 15 minutos.
     holdExpiresAt: new Date(reservation.holdExpiresAt!).toISOString(),
-    paymentMode: experience.paymentMode,
+    paymentMode: effectivePaymentMode,
     totalCents,
     dueNowCents,
     balanceCents,

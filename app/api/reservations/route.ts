@@ -67,6 +67,15 @@ const bodySchema = z.object({
     name: z.string().min(1),
     phone: z.string().min(1),
   }),
+  /**
+   * O que o cliente escolheu pagar agora (secao 4-B.4). Ausente = 'full'.
+   *
+   * >>> NENHUM VALOR VEM DO CLIENTE, so a MODALIDADE. <<<
+   * Quanto e a entrada e quanto sobra e conta do servidor (secao 4.6). Pedir
+   * 'deposit' numa experiencia que nao oferece sinal responde 422, nunca vira
+   * integral em silencio — rebaixar cobraria o dobro do que a tela mostrou.
+   */
+  paymentMethodMode: z.enum(['full', 'deposit']).default('full'),
   channel: z.string().nullish(),
 });
 

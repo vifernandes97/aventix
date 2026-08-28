@@ -112,6 +112,8 @@ describe('E — pagamento', () => {
     const criada = await createReservation(
       reservationInput({
         experienceId: EXP_DEPOSIT_PCT,
+        // A experiencia OFERECE sinal; o cliente ESCOLHE (secao 4-B.4).
+        paymentMethodMode: 'deposit',
         startAt: await primeiroSlot(EXP_DEPOSIT_PCT),
         resourcesNeeded: 1,
       }),
@@ -137,6 +139,7 @@ describe('E — pagamento', () => {
     const criada = await createReservation(
       reservationInput({
         experienceId: EXP_DEPOSIT_FIXED,
+        paymentMethodMode: 'deposit',
         startAt: await primeiroSlot(EXP_DEPOSIT_FIXED),
         resourcesNeeded: 1,
         phone: '11912340000',
@@ -159,6 +162,8 @@ describe('E — pagamento', () => {
     const criada = await createReservation(
       reservationInput({
         experienceId: EXP_DEPOSIT_PCT,
+        // A experiencia OFERECE sinal; o cliente ESCOLHE (secao 4-B.4).
+        paymentMethodMode: 'deposit',
         startAt: await primeiroSlot(EXP_DEPOSIT_PCT),
         resourcesNeeded: 1,
         phone: '11943210000',

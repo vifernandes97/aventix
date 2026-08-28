@@ -50,6 +50,14 @@ export type EmergencyContactForm = {
 export type WizardState = {
   experience: PublicExperience | null;
   resourcesNeeded: number;
+  /**
+   * O que o cliente escolheu pagar agora (secao 4-B.4).
+   *
+   * Nasce 'full' e so muda no passo de pagamento, que por sua vez so existe
+   * quando a experiencia OFERECE sinal. Numa experiencia 'full' o valor nunca
+   * sai do default, e o servidor recusaria 'deposit' de qualquer forma.
+   */
+  paymentMethodMode: 'full' | 'deposit';
   date: string | null;
   /** Instante ISO do slot escolhido — vai cru para o POST. */
   startAt: string | null;

@@ -623,6 +623,27 @@ function Confirmed({
           </span>
         </p>
 
+        {/* ====================================================================
+            >>> "CONFIRMADA" SOZINHO E AMBIGUO QUANDO SOBROU SALDO <<<
+            A vaga esta garantida, e por isso o cabecalho verde continua certo.
+            Mas quem pagou o sinal precisa CHEGAR COM DINHEIRO, e essa informacao
+            nao pode ficar so numa linha de <dl> entre "Duracao" e "Codigo" —
+            esta e a UNICA confirmacao que o cliente recebe (nao ha e-mail,
+            secao 9), e ele vai le-la uma vez.
+
+            Mesmo gate de `paymentMode`, nunca `balanceCents > 0`: ver a nota
+            longa na lista abaixo.
+            ==================================================================== */}
+        {status.paymentMode === 'deposit' && status.balanceCents > 0 && (
+          <p className="mt-4 rounded-lg border border-orange-800/60 bg-orange-950/40 p-3 text-sm text-orange-100">
+            <strong className="font-semibold">
+              Faltam {moneyLabel(status.balanceCents)} para o dia do passeio.
+            </strong>{' '}
+            Sua vaga já está garantida. O restante você paga no local, direto com o guia, antes da
+            saída.
+          </p>
+        )}
+
         <dl className="mt-4 border-t border-emerald-900/50 pt-3">
           <Row term="Duração" value={durationLabel(status.durationMinutes)} />
           {status.amountPaidCents > 0 && (

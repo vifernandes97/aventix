@@ -75,6 +75,17 @@ export type ReservationListItem = {
   /** Exibido de proposito: e como o dono retorna a ligacao (secao 11.1). */
   customerPhone: string;
   totalPriceCents: number;
+  /**
+   * Estado financeiro AGREGADO (reservations.payment_state), derivado de
+   * reservation_payments por recalcReservationPayment.
+   *
+   * >>> A LISTA ERA CEGA A ISTO ATE A FASE B <<<
+   * Nao e detalhe cosmetico: uma reserva com sinal pago e `confirmed`, e a lista
+   * mostrava so o status. O dono procurando "quem me deve" nao tinha como achar,
+   * e a reserva aparecia igual a uma quitada.
+   */
+  paymentState: 'pending' | 'partial' | 'settled';
+  amountPaidCents: number;
 };
 
 export type ReservationListResult = {
@@ -98,6 +109,8 @@ type Row = {
   start_at: string;
   status: ReservationStatus;
   total_price_cents: number;
+  payment_state: 'pending' | 'partial' | 'settled';
+  amount_paid_cents: number;
   experience_name: string;
   customer_name: string;
   customer_phone: string;
@@ -119,6 +132,16 @@ type Row = {
 export async function searchReservations(params: {
   query?: string;
   status?: ReservationStatus;
+  /**
+   * "So quem tem saldo em aberto".
+   *
+   * >>> FILTRO A PARTE, e NAO um valor a mais na lista de status <<<
+   * "Quem me deve" nao e um `reservation_status`: e a combinacao de `confirmed`
+   * com `partial`. Enfia-lo na mesma lista misturaria duas dimensoes num controle
+   * so e tornaria impossivel pedir "confirmadas E com saldo" — que e exatamente a
+   * pergunta que o dono faz na vespera do passeio.
+   */
+  onlyWithBalance?: boolean;
   /** 'YYYY-MM-DD' local de Sao Paulo, inclusivo. */
   from?: string;
   /** 'YYYY-MM-DD' local de Sao Paulo, inclusivo. */
@@ -145,6 +168,22 @@ export async function searchReservations(params: {
     conditions.push(sql`r.status = ${params.status}::reservation_status`);
   }
 
+  if (params.onlyWithBalance) {
+    // Reserva CANCELADA ou EXPIRADA com sinal pago nao entra: o dinheiro dela e
+    // caso de estorno manual (secao 8-C), nao de cobranca no dia. Quem procura
+    // "quem me deve" quer quem vai aparecer para o passeio.
+    conditions.push(sql`r.status IN ('pending_payment','confirmed')`);
+    // >>> `> 0` E PARTE DA DEFINICAO, nao um detalhe <<<
+    // "Saldo em aberto" e PAGOU PARTE e ainda deve. Uma reserva onde ninguem
+    // pagou nada nao tem saldo: tem o preco inteiro em aberto, e ja se anuncia
+    // como "Aguardando pagamento". Incluir as duas no mesmo filtro misturaria de
+    // novo as dimensoes que separar o controle foi feito para separar.
+    // Espelha exatamente o `temSaldo` da tela — as duas condicoes precisam
+    // concordar, senao o filtro devolve linha sem selo (ou vice-versa).
+    conditions.push(sql`r.amount_paid_cents > 0`);
+    conditions.push(sql`r.amount_paid_cents < r.total_price_cents`);
+  }
+
   if (params.from) {
     conditions.push(sql`r.start_at >= ${localToUtc(params.from, '00:00').toISOString()}::timestamptz`);
   }
@@ -160,6 +199,8 @@ export async function searchReservations(params: {
       r.start_at          AS start_at,
       r.status::text      AS status,
       r.total_price_cents AS total_price_cents,
+      r.payment_state::text AS payment_state,
+      r.amount_paid_cents AS amount_paid_cents,
       e.name              AS experience_name,
       c.name              AS customer_name,
       c.phone             AS customer_phone
@@ -188,6 +229,8 @@ export async function searchReservations(params: {
       customerName: row.customer_name,
       customerPhone: row.customer_phone,
       totalPriceCents: row.total_price_cents,
+      paymentState: row.payment_state,
+      amountPaidCents: row.amount_paid_cents,
     })),
     limited,
   };

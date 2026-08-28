@@ -58,26 +58,90 @@ export function abbreviateResource(name: string): string {
 
 // -- cores por status --------------------------------------------------------
 //
-// Hoje a cor sai do STATUS da reserva (confirmada x aguardando pagamento). O
-// marcador de saldo em aberto da secao 11.1 le `paymentState` e entra junto com
-// a Fase 2, quando esse campo deixa de ser 'pending' em toda reserva.
+// ============================================================================
+// >>> A COR E O ROTULO SAEM DE status + paymentState, NUNCA SO DE status <<<
+//
+// Ate a Fase B este mapa era `Record<CalendarStatus, ...>` com
+// `confirmed: 'Pago'`. Isso passou a ser uma AFIRMACAO FALSA no instante em que
+// o sinal virou vendavel: uma reserva com metade paga e `confirmed`, e o bloco
+// diria "Pago", em verde, na tela que o guia bate o olho antes do passeio sem
+// abrir reserva nenhuma. Ele leva a pessoa e ninguem cobra o que falta.
+//
+// Nao e falta de informacao — a informacao estava ERRADA. Por isso a correcao e
+// no rotulo, e nao um detalhe a mais no painel: o painel ninguem abre em massa.
+//
+// O estado de EXIBICAO tem tres valores, e nao dois. Ver `displayState`.
+// ============================================================================
 
-export const STATUS_LABEL: Record<CalendarStatus, string> = {
-  confirmed: 'Pago',
+/**
+ * O que o bloco COMUNICA — derivado, nunca lido cru do banco.
+ *
+ * 'partial' nao existe em `reservation_status`: e a combinacao confirmed +
+ * saldo em aberto, que a secao 4-B.3 criou e a maquina de estados da secao 5
+ * nao previa.
+ */
+export type CalendarDisplayState = 'pending_payment' | 'partial' | 'paid';
+
+/**
+ * >>> FAIL-SAFE: qualquer coisa que nao esteja QUITADA conta como devendo. <<<
+ * Uma reserva paga marcada como "saldo" e um incomodo de dez segundos; uma
+ * reserva devendo marcada como "Pago" e o passeio saindo sem cobrar. As duas
+ * falhas nao custam a mesma coisa, entao o default nao e simetrico.
+ */
+export function displayState(reservation: {
+  status: CalendarStatus;
+  paymentState: 'pending' | 'partial' | 'settled';
+}): CalendarDisplayState {
+  if (reservation.status === 'pending_payment') return 'pending_payment';
+  return reservation.paymentState === 'settled' ? 'paid' : 'partial';
+}
+
+export const STATUS_LABEL: Record<CalendarDisplayState, string> = {
+  paid: 'Pago',
+  partial: 'Saldo em aberto',
   pending_payment: 'Aguardando',
 };
 
-/** Bloco preenchido (views de dia e semana). */
-export const STATUS_BLOCK: Record<CalendarStatus, string> = {
-  confirmed:
-    'border-emerald-600/70 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/60 dark:text-emerald-50',
+/**
+ * Rotulo COM O VALOR quando ha espaco (dia e semana) — "Saldo R$ 162,74".
+ *
+ * A secao 11.1 pede o valor no marcador, e ele muda a natureza do aviso: "saldo
+ * em aberto" o guia pode ler como pendencia burocratica; um numero em reais e
+ * o que ele vai cobrar antes de a pessoa subir no quadriciclo.
+ */
+export function blockStatusLabel(reservation: {
+  status: CalendarStatus;
+  paymentState: 'pending' | 'partial' | 'settled';
+  totalPriceCents: number;
+  amountPaidCents: number;
+}): string {
+  const state = displayState(reservation);
+  if (state !== 'partial') return STATUS_LABEL[state];
+
+  const saldo = Math.max(0, reservation.totalPriceCents - reservation.amountPaidCents);
+  return `Saldo ${moneyLabel(saldo)}`;
+}
+
+/**
+ * Bloco preenchido (views de dia e semana).
+ *
+ * 'partial' NAO reusa o verde de 'paid': a distincao precisa sobreviver a uma
+ * olhada rapida, e a cor e o que o olho pega antes do texto. Tambem nao reusa o
+ * ambar de 'pending_payment', que significa outra coisa (ninguem pagou, a vaga
+ * ainda pode cair). Laranja e um terceiro sinal para um terceiro estado.
+ */
+export const STATUS_BLOCK: Record<CalendarDisplayState, string> = {
+  paid: 'border-emerald-600/70 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/60 dark:text-emerald-50',
+  partial:
+    'border-orange-600/80 bg-orange-50 text-orange-950 dark:bg-orange-950/60 dark:text-orange-50',
   pending_payment:
     'border-amber-600/70 bg-amber-50 text-amber-950 dark:bg-amber-950/60 dark:text-amber-50',
 };
 
 /** Bolinha (view de mes, onde nao ha espaco para o bloco inteiro). */
-export const STATUS_DOT: Record<CalendarStatus, string> = {
-  confirmed: 'bg-emerald-600',
+export const STATUS_DOT: Record<CalendarDisplayState, string> = {
+  paid: 'bg-emerald-600',
+  partial: 'bg-orange-500',
   pending_payment: 'bg-amber-500',
 };
 

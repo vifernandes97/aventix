@@ -11,7 +11,8 @@ import type { CalendarReservationDetail, CalendarResourceRef, DayGrid } from '@/
 import {
   ROW_MINUTES,
   STATUS_BLOCK,
-  STATUS_LABEL,
+  blockStatusLabel,
+  displayState,
   minutesFromMidnight,
   minutesLabel,
   timeLabel,
@@ -219,7 +220,7 @@ export function DayView({
                     type="button"
                     onClick={() => onSelect(reservation.id)}
                     aria-label={`Ver reserva de ${timeLabel(reservation.startAt)}, ${reservation.experience.name}, ${reservation.customerName}`}
-                    className={`flex-1 overflow-hidden rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${STATUS_BLOCK[reservation.status]}`}
+                    className={`flex-1 overflow-hidden rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${STATUS_BLOCK[displayState(reservation)]}`}
                     style={{ minHeight: `${(rows * 1.25).toFixed(2)}rem` }}
                   >
                     <span className="block truncate text-[11px] font-semibold tabular-nums">
@@ -232,7 +233,7 @@ export function DayView({
                       {reservation.experience.name}
                     </span>
                     <span className="block truncate text-[10px] uppercase tracking-wide opacity-70">
-                      {STATUS_LABEL[reservation.status]}
+                      {blockStatusLabel(reservation)}
                       {run.len > 1 ? ` · ${run.len} ${resourceLabelPlural.toLowerCase()}` : ''}
                     </span>
                   </button>

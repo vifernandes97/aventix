@@ -654,6 +654,103 @@ function renderTermText(name: string): string {
     .replace('{ip}', '[registrado no aceite]');
 }
 
+/**
+ * PASSO DE PAGAMENTO — so existe quando a experiencia OFERECE sinal (secao 4-B.4).
+ *
+ * ============================================================================
+ * >>> AS DUAS OPCOES LADO A LADO, NA MESMA TELA <<<
+ * Nao e "escolha Pix" e depois "quer pagar tudo ou metade?". A comparacao E a
+ * decisao: o cliente quer ver R$ 325,49 agora contra R$ 162,75 agora + R$ 162,74
+ * no dia, junto, para escolher. Quebrar em dois passos esconde exatamente o que
+ * ele precisa comparar.
+ *
+ * >>> E O SALDO PRECISA APARECER AQUI, NAO SO NO FIM <<<
+ * "Sinal de 50%" sem o segundo numero soa como desconto. O que a opcao entrega e
+ * pagar menos AGORA, nao pagar menos — e quem descobre isso depois do passeio
+ * ja marcado tem razao em reclamar.
+ * ============================================================================
+ *
+ * Os valores vem calculados de fora (booking-wizard), pela MESMA aritmetica que o
+ * servidor usa. Nao ha conta nenhuma neste arquivo.
+ */
+export function StepPayment({
+  labels,
+  integralCents,
+  depositCents,
+  balanceCents,
+  selected,
+  onSelect,
+}: {
+  labels: PublicLabels;
+  integralCents: number;
+  depositCents: number;
+  balanceCents: number;
+  selected: 'full' | 'deposit';
+  onSelect: (mode: 'full' | 'deposit') => void;
+}) {
+  const options = [
+    {
+      mode: 'full' as const,
+      title: 'Pix integral',
+      now: integralCents,
+      detail: 'Você paga tudo agora e não fica nada pendente.',
+    },
+    {
+      mode: 'deposit' as const,
+      title: 'Pix com sinal de 50%',
+      now: depositCents,
+      detail: `Você paga ${moneyLabel(balanceCents)} no dia do passeio, direto com o guia, antes da saída.`,
+    },
+  ];
+
+  return (
+    <section>
+      <h1 className="text-xl font-semibold text-stone-100">Como você prefere pagar?</h1>
+      <p className="mt-2 text-sm text-stone-400">
+        As duas opções garantem sua vaga na hora. O valor total é o mesmo.
+      </p>
+
+      <ul className="mt-4 flex flex-col gap-3">
+        {options.map((option) => {
+          const active = selected === option.mode;
+          return (
+            <li key={option.mode}>
+              <button
+                type="button"
+                onClick={() => onSelect(option.mode)}
+                aria-pressed={active}
+                className={`w-full rounded-xl border p-4 text-left transition ${
+                  active
+                    ? 'border-orange-500 bg-orange-500/10'
+                    : 'border-stone-800 bg-stone-900/40 hover:border-stone-700'
+                }`}
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="font-medium text-stone-100">{option.title}</span>
+                  <span className="shrink-0 text-lg font-semibold text-orange-200">
+                    {moneyLabel(option.now)}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-sm text-stone-400">{option.detail}</p>
+                {/* O total sai explicito nas DUAS, para nenhuma parecer mais
+                    barata que a outra. */}
+                <p className="mt-1 text-xs uppercase tracking-wide text-stone-500">
+                  Total {moneyLabel(integralCents)}
+                </p>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="mt-4 text-xs leading-relaxed text-stone-500">
+        O sinal confirma a reserva e não é devolvido em caso de cancelamento. Para remarcar, fale
+        com {labels.business_name || 'a gente'} pelo WhatsApp.
+      </p>
+    </section>
+  );
+}
+
 export function StepTerms({
   state,
   labels,

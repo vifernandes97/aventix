@@ -22,12 +22,21 @@
 
 import { useCallback, useMemo, useState } from 'react';
 
+import { splitByBasisPoints } from '@/lib/basis-points';
 import type { PublicExperience } from '@/lib/experiences';
 import { TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
+
+/**
+ * Sinal de 50% em basis points (secao 4-B.2). Fixo do produto, nao configuravel
+ * por experiencia — o servidor grava 50 em `experiences.deposit_percent` e este
+ * valor existe para a tela mostrar o MESMO numero antes do POST.
+ */
+const DEPOSIT_PERCENT_BASIS_POINTS = 5_000;
 
 import {
   StepDone,
   StepExperience,
+  StepPayment,
   StepPeople,
   StepResources,
   StepSchedule,
@@ -59,7 +68,7 @@ export type CreatedReservation = {
   } | null;
 };
 
-type StepId = 'experience' | 'resources' | 'schedule' | 'people' | 'terms' | 'done';
+type StepId = 'experience' | 'resources' | 'schedule' | 'payment' | 'people' | 'terms' | 'done';
 
 type Props = {
   experiences: PublicExperience[];
@@ -84,6 +93,7 @@ export function BookingWizard({
   const [state, setState] = useState<WizardState>({
     experience: null,
     resourcesNeeded: 1,
+    paymentMethodMode: 'full' as 'full' | 'deposit',
     date: null,
     startAt: null,
     responsible: { ...emptyPerson('responsavel', 'operator'), phone: '', email: '', cpf: '' },
@@ -105,12 +115,42 @@ export function BookingWizard({
   // "quantos?" com uma opcao unica e trabalho sem escolha (secao 11-B — o
   // formulario DERIVA da configuracao). A numeracao acompanha: some o passo,
   // some do "PASSO N DE M".
+  // O passo de pagamento so existe quando a experiencia OFERECE sinal — mesma
+  // regra do passo de recursos: formulario DERIVA da configuracao (secao 11-B).
+  // Numa experiencia 'full' nao ha escolha a fazer, e um passo com uma opcao so
+  // e trabalho sem decisao. A numeracao do "PASSO N DE M" acompanha sozinha.
+  const offersDeposit = state.experience?.paymentMode === 'deposit';
+
+  /**
+   * Entrada e saldo do sinal, para a tela de escolha.
+   *
+   * `splitByBasisPoints` sobre o total JA COM DESCONTO — nunca sobre o cheio
+   * (secao 4-B.2: o desconto incide tambem sobre o sinal). E devolve o resto por
+   * SUBTRACAO, entao entrada + saldo fecha por construcao (secao 4-B.5).
+   *
+   * Espelha exatamente o que createReservation faz. O servidor continua sendo
+   * quem decide o valor cobrado; isto e so exibicao.
+   */
+  const depositSplit = useMemo(
+    () =>
+      state.experience
+        ? splitByBasisPoints(
+            totalCents(state.experience, state.resourcesNeeded),
+            DEPOSIT_PERCENT_BASIS_POINTS,
+          )
+        : { part: 0, rest: 0 },
+    [state.experience, state.resourcesNeeded],
+  );
+
   const steps = useMemo<StepId[]>(
     () =>
       (
-        ['experience', 'resources', 'schedule', 'people', 'terms', 'done'] as StepId[]
-      ).filter((id) => id !== 'resources' || activeResourceCount > 1),
-    [activeResourceCount],
+        ['experience', 'resources', 'schedule', 'payment', 'people', 'terms', 'done'] as StepId[]
+      ).filter(
+        (id) =>
+          (id !== 'resources' || activeResourceCount > 1) && (id !== 'payment' || offersDeposit),
+      ),
+    [activeResourceCount, offersDeposit],
   );
 
   const stepIndex = steps.indexOf(stepId);
@@ -120,6 +160,7 @@ export function BookingWizard({
     experience: 'PASSEIO',
     resources: labels.resource_label_plural.toUpperCase(),
     schedule: 'HORÁRIO',
+    payment: 'PAGAMENTO',
     people: 'DADOS',
     terms: 'TERMO',
     done: 'PAGAMENTO',
@@ -175,6 +216,8 @@ export function BookingWizard({
           experienceId: state.experience.id,
           startAt: state.startAt,
           resourcesNeeded: state.resourcesNeeded,
+          // A ESCOLHA, nunca um valor: quanto e a entrada e conta do servidor.
+          paymentMethodMode: state.paymentMethodMode,
           // O preco NAO vai no corpo: quem calcula e o servidor (secao 4.6).
           customer: {
             name: state.responsible.name.trim(),
@@ -329,6 +372,24 @@ export function BookingWizard({
               onPickDate={(date) => setState((s) => ({ ...s, date, startAt: null }))}
               onPickSlot={(startAt) => {
                 setState((s) => ({ ...s, startAt }));
+                forward();
+              }}
+            />
+          )}
+
+          {stepId === 'payment' && state.experience && (
+            <StepPayment
+              labels={labels}
+              // Os tres valores saem da MESMA aritmetica que o servidor usa
+              // (lib/basis-points.ts). A tela nunca faz conta propria: um segundo
+              // algoritmo aqui divergiria por um centavo em alguns precos, e o
+              // cliente veria um valor na escolha e outro na cobranca.
+              integralCents={totalCents(state.experience, state.resourcesNeeded)}
+              depositCents={depositSplit.part}
+              balanceCents={depositSplit.rest}
+              selected={state.paymentMethodMode}
+              onSelect={(paymentMethodMode) => {
+                setState((s) => ({ ...s, paymentMethodMode }));
                 forward();
               }}
             />

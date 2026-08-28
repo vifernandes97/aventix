@@ -5,7 +5,7 @@
 // o unico jeito de caber 30 dias numa tela.
 
 import type { CalendarReservationSummary } from '@/lib/calendar';
-import { STATUS_DOT, STATUS_LABEL, dayNumber, groupByDate, timeLabel } from './shared';
+import { STATUS_DOT, STATUS_LABEL, dayNumber, displayState, groupByDate, timeLabel } from './shared';
 
 type Props = {
   dates: string[];
@@ -61,11 +61,11 @@ export function MonthView({ dates, month, reservations, today, buildHref }: Prop
                 <span
                   key={reservation.id}
                   className="flex items-center gap-1 truncate text-[11px]"
-                  title={`${timeLabel(reservation.startAt)} ${reservation.experience.name} — ${STATUS_LABEL[reservation.status]}`}
+                  title={`${timeLabel(reservation.startAt)} ${reservation.experience.name} — ${STATUS_LABEL[displayState(reservation)]}`}
                 >
                   <span
                     aria-hidden
-                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[reservation.status]}`}
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[displayState(reservation)]}`}
                   />
                   <span className="shrink-0 font-medium tabular-nums">
                     {timeLabel(reservation.startAt)}

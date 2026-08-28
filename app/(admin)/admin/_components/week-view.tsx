@@ -9,7 +9,8 @@
 import type { CalendarReservationDetail } from '@/lib/calendar';
 import {
   STATUS_BLOCK,
-  STATUS_LABEL,
+  blockStatusLabel,
+  displayState,
   abbreviateResource,
   dayNumber,
   groupByDate,
@@ -65,7 +66,7 @@ export function WeekView({ dates, reservations, today, buildHref, onSelect }: Pr
                     // ocupando varios recursos.
                     onClick={() => onSelect(reservation.id)}
                     aria-label={`Ver reserva de ${timeLabel(reservation.startAt)}, ${reservation.experience.name}, ${reservation.customerName}`}
-                    className={`rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 ${STATUS_BLOCK[reservation.status]}`}
+                    className={`rounded border-l-4 px-1.5 py-1 text-left transition hover:brightness-95 focus:outline-none focus-visible:ring-2 ${STATUS_BLOCK[displayState(reservation)]}`}
                   >
                     <span className="flex items-baseline justify-between gap-1">
                       <span className="text-[11px] font-semibold tabular-nums">
@@ -83,7 +84,7 @@ export function WeekView({ dates, reservations, today, buildHref, onSelect }: Pr
                       {reservation.experience.name}
                     </span>
                     <span className="block truncate text-[10px] uppercase tracking-wide opacity-70">
-                      {STATUS_LABEL[reservation.status]}
+                      {blockStatusLabel(reservation)}
                     </span>
                   </button>
                 ))}

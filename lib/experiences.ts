@@ -35,21 +35,41 @@ import { getTenantId } from './tenant';
 // ============================================================================
 
 /**
- * Modos de pagamento que a API aceita HOJE.
+ * Modos de pagamento que a API aceita. Destravado na Fase B (28/08).
  *
- * O schema (secao 4.3) conhece 'full' e 'deposit', e o sinal e escopo de MVP no
- * CLAUDE.md rev 6 — mas ele depende inteiro da Fase 2 (Asaas), que esta travada
- * nos pre-requisitos do cliente, e da decisao de negocio "lancar com integral ou
- * com sinal?", ainda em aberto. Ate isso resolver, o CRUD trabalha so com
- * 'full': a tela nao oferece a opcao e a API recusa 'deposit' com 422 em vez de
- * gravar uma experiencia que ninguem consegue vender.
- *
- * QUANDO O SINAL ENTRAR: acrescente 'deposit' aqui e exija exatamente um de
- * deposit_percent / deposit_fixed_cents — o CHECK experiences_deposit_mode_check
- * ja cobra isso no banco, e sem a validacao antes ele viraria um 500.
+ * `payment_mode` da EXPERIENCIA define o que e OFERECIDO ao cliente (secao
+ * 4-B.4): 'full' oferece so o Pix integral; 'deposit' oferece as duas opcoes
+ * lado a lado, e quem escolhe e o cliente no wizard. O que ele escolher vai para
+ * `reservations.payment_mode`, que e o modo EFETIVO daquela venda.
  */
-export const ACCEPTED_PAYMENT_MODES = ['full'] as const;
+export const ACCEPTED_PAYMENT_MODES = ['full', 'deposit'] as const;
 export type AcceptedPaymentMode = (typeof ACCEPTED_PAYMENT_MODES)[number];
+
+/**
+ * Percentual do sinal, em pontos percentuais inteiros.
+ *
+ * >>> 50% FIXO, E O CRUD NAO EXPOE O CAMPO. <<<
+ * A secao 4-B.2 fixou o sinal em 50% para o produto, enquanto as colunas
+ * `deposit_percent` / `deposit_fixed_cents` sao POR EXPERIENCIA — a divergencia
+ * que a rev 7 registrou e mandou esta fase resolver.
+ *
+ * A resolucao separa ESCRITA de LEITURA:
+ *   - ESCRITA travada aqui. O dono responde "aceita sinal? sim/nao", nunca
+ *     digita um percentual. Expor o campo convidaria a mexer numa regra que a
+ *     4-B.2 fechou, e cada experiencia com um percentual diferente e uma conta
+ *     diferente para conferir com o extrato.
+ *   - LEITURA continua saindo da COLUNA em createReservation. Assim o calculo
+ *     tem uma fonte so, e uma experiencia gravada com outro percentual (por
+ *     migration, por seed antigo) continuaria honrada em vez de silenciosamente
+ *     recalculada.
+ *
+ * Manter as colunas tambem satisfaz `experiences_deposit_mode_check` sem
+ * migration: gravar 'deposit' com os dois NULL seria violacao de CHECK, ou seja,
+ * um 500.
+ *
+ * SE O PERCENTUAL VOLTAR A SER POR EXPERIENCIA: este e o ponto unico a mudar.
+ */
+export const DEPOSIT_PERCENT = 50;
 
 export type ExperienceRow = {
   id: number;
@@ -203,6 +223,19 @@ export async function listPublicExperiences(): Promise<PublicExperience[]> {
 // Escrita
 // ============================================================================
 
+/**
+ * As duas colunas de sinal, coerentes com o modo — o que o CHECK exige.
+ *
+ * Existe como funcao, e nao inline nos dois lugares, porque create e update
+ * precisam gravar a MESMA combinacao: trocar uma experiencia de 'deposit' para
+ * 'full' sem zerar `deposit_percent` deixaria a linha violando o CHECK.
+ */
+function depositColumns(paymentMode: AcceptedPaymentMode) {
+  return paymentMode === 'deposit'
+    ? { depositPercent: DEPOSIT_PERCENT, depositFixedCents: null }
+    : { depositPercent: null, depositFixedCents: null };
+}
+
 /** Erro de dominio: a rota traduz em 404 sem precisar conhecer a query. */
 export class ExperienceNotFoundError extends Error {
   constructor(public readonly experienceId: number) {
@@ -221,10 +254,12 @@ export async function createExperience(input: ExperienceInput): Promise<Experien
       bufferMinutes: input.bufferMinutes,
       priceCents: input.priceCents,
       paymentMode: input.paymentMode,
+      // O CHECK experiences_deposit_mode_check exige os dois NULL em 'full' e
+      // EXATAMENTE UM preenchido em 'deposit'. `deposit_fixed_cents` fica sempre
+      // NULL: sinal em valor fixo nao e oferecido pelo produto (secao 4-B.2).
+      ...depositColumns(input.paymentMode),
       minPassengerAge: input.minPassengerAge,
-      // price_mode fica no default 'per_resource' (unico valor do enum hoje), e
-      // deposit_percent / deposit_fixed_cents ficam NULL — que e o que o CHECK
-      // experiences_deposit_mode_check exige quando payment_mode = 'full'.
+      // price_mode fica no default 'per_resource' (unico valor do enum hoje).
       active: true,
     })
     .returning({
@@ -262,7 +297,13 @@ export async function updateExperience(
   if (patch.durationMinutes !== undefined) values.durationMinutes = patch.durationMinutes;
   if (patch.bufferMinutes !== undefined) values.bufferMinutes = patch.bufferMinutes;
   if (patch.priceCents !== undefined) values.priceCents = patch.priceCents;
-  if (patch.paymentMode !== undefined) values.paymentMode = patch.paymentMode;
+  if (patch.paymentMode !== undefined) {
+    values.paymentMode = patch.paymentMode;
+    // As colunas de sinal acompanham o modo OBRIGATORIAMENTE. Trocar para 'full'
+    // sem zerar deposit_percent deixaria a linha violando
+    // experiences_deposit_mode_check — erro do driver, 500 na cara do dono.
+    Object.assign(values, depositColumns(patch.paymentMode));
+  }
   if (patch.minPassengerAge !== undefined) values.minPassengerAge = patch.minPassengerAge;
   if (patch.active !== undefined) values.active = patch.active;
 

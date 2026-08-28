@@ -54,15 +54,13 @@ const durationMinutes = boundedInt('duracaoMinutos').positive(
 const bufferMinutes = boundedInt('bufferMinutos').min(0, 'bufferMinutos: não pode ser negativo');
 
 /**
- * So 'full' no MVP — ver ACCEPTED_PAYMENT_MODES em lib/experiences.ts.
+ * 'full' ou 'deposit' — ver ACCEPTED_PAYMENT_MODES em lib/experiences.ts.
  *
- * Recusar aqui e o que impede um 500: gravar payment_mode='deposit' sem
- * deposit_percent nem deposit_fixed_cents viola experiences_deposit_mode_check,
- * e o erro chegaria como falha do driver.
+ * O percentual do sinal NAO entra no corpo: e 50% fixo (secao 4-B.2), gravado
+ * pelo servidor. O dono decide se a experiencia ACEITA sinal, nunca quanto ele e.
  */
 const paymentMode = z.enum(ACCEPTED_PAYMENT_MODES, {
-  message:
-    'modoPagamento: no MVP só `full` é aceito. Pagamento com sinal depende da Fase 2 (Asaas).',
+  message: 'modoPagamento: use `full` (só Pix integral) ou `deposit` (também aceita sinal de 50%)',
 });
 
 /**

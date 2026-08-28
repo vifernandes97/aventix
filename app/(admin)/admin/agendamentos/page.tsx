@@ -57,6 +57,8 @@ type SearchParams = Promise<{
   status?: string | string[];
   de?: string | string[];
   ate?: string | string[];
+  /** '1' = so quem tem saldo em aberto. Dimensao SEPARADA de `status`. */
+  saldo?: string | string[];
 }>;
 
 /** Opcoes do filtro de status, na ordem do ciclo de vida da reserva. */
@@ -74,6 +76,29 @@ function first(value: string | string[] | undefined): string | undefined {
 
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * A reserva ainda deve dinheiro E vai acontecer.
+ *
+ * Cancelada ou expirada com sinal pago NAO conta: aquilo e estorno manual
+ * (secao 8-C), nao cobranca no dia.
+ *
+ * `amountPaidCents > 0` e parte da definicao: "saldo em aberto" e pagou parte e
+ * ainda deve. Reserva onde ninguem pagou nada nao tem saldo — tem o preco
+ * inteiro em aberto, e ja se anuncia como "Aguardando pagamento".
+ *
+ * Espelha EXATAMENTE o WHERE de `onlyWithBalance` em lib/reservation-list.ts.
+ * Se as duas divergirem, o filtro devolve linha sem selo (ou o selo aparece em
+ * linha que o filtro nao acha), e o dono conclui que a lista esta quebrada.
+ */
+function temSaldo(item: {
+  status: ReservationStatus;
+  totalPriceCents: number;
+  amountPaidCents: number;
+}): boolean {
+  if (item.status !== 'pending_payment' && item.status !== 'confirmed') return false;
+  return item.amountPaidCents > 0 && item.amountPaidCents < item.totalPriceCents;
 }
 
 /** 'Sáb, 30 de ago. de 2026' a partir de um instante ISO, em Sao Paulo. */
@@ -100,9 +125,20 @@ export default async function AgendamentosPage({ searchParams }: { searchParams:
   const rawTo = first(sp.ate);
   const to = rawTo && isValidCalendarDate(rawTo) ? rawTo : undefined;
 
-  const { items, limited } = await searchReservations({ query, status, from, to });
+  // Dimensao PROPRIA, combinavel com o status: "confirmadas E com saldo" e a
+  // pergunta da vespera do passeio, e ela seria impossivel se "com saldo" fosse
+  // mais um valor da lista de status.
+  const onlyWithBalance = first(sp.saldo) === '1';
 
-  const hasFilters = Boolean(query || status || from || to);
+  const { items, limited } = await searchReservations({
+    query,
+    status,
+    from,
+    to,
+    onlyWithBalance,
+  });
+
+  const hasFilters = Boolean(query || status || from || to || onlyWithBalance);
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 sm:p-6">
@@ -170,6 +206,19 @@ export default async function AgendamentosPage({ searchParams }: { searchParams:
             />
           </label>
         </div>
+
+        {/* Checkbox, e nao uma opcao do select de status: e outra dimensao, e
+            combinar as duas ("confirmadas E com saldo") e o uso real. */}
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="saldo"
+            value="1"
+            defaultChecked={onlyWithBalance}
+            className="h-4 w-4"
+          />
+          Só quem tem saldo em aberto
+        </label>
 
         <div className="flex items-center gap-2">
           <button
@@ -247,6 +296,16 @@ export default async function AgendamentosPage({ searchParams }: { searchParams:
                       >
                         {DETAIL_STATUS_LABEL[item.status]}
                       </span>
+                      {/* >>> SEGUNDO SELO, ao lado do status e nao no lugar dele <<<
+                          A reserva ESTA confirmada e AINDA deve — sao dois fatos, e
+                          fundir os dois num rotulo so perderia um deles. Sem este
+                          selo a linha de uma reserva com sinal pago e visualmente
+                          identica a de uma quitada. */}
+                      {temSaldo(item) && (
+                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-900 dark:bg-orange-950 dark:text-orange-100">
+                          Falta {moneyLabel(item.totalPriceCents - item.amountPaidCents)}
+                        </span>
+                      )}
                       <span className="text-sm font-semibold tabular-nums">
                         {moneyLabel(item.totalPriceCents)}
                       </span>

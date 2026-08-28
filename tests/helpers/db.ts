@@ -474,6 +474,16 @@ export function reservationInput(params: {
    * emitir a cobranca.
    */
   cpf?: string;
+  /**
+   * O que o CLIENTE escolhe pagar agora (secao 4-B.4). Default 'full'.
+   *
+   * >>> NAO BASTA a experiencia estar em 'deposit' <<<
+   * Desde a Fase B a experiencia OFERECE e o cliente ESCOLHE. Omitir aqui numa
+   * experiencia que oferece sinal produz uma venda INTEGRAL, que e o
+   * comportamento correto — e o que os testes 17a/17b/18 do grupo E passaram a
+   * ter que declarar explicitamente.
+   */
+  paymentMethodMode?: 'full' | 'deposit';
 }) {
   const {
     experienceId,
@@ -486,6 +496,7 @@ export function reservationInput(params: {
     operatorBirthdate = ADULT_BIRTHDATE,
     passengerBirthdate = ADULT_BIRTHDATE,
     cpf = VALID_CPF,
+    paymentMethodMode = 'full',
   } = params;
 
   return {
@@ -508,6 +519,7 @@ export function reservationInput(params: {
     ],
     termo: { version: 'v1', acceptedAt: new Date().toISOString() },
     emergencyContact: { name: 'Contato Emergência', phone: '(19) 98888-7777' },
+    paymentMethodMode,
   };
 }
 
