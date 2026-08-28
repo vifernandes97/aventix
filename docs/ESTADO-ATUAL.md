@@ -5,229 +5,202 @@
 
 ## Enquadramento (leia antes de priorizar qualquer coisa)
 
-**O sistema está em produção, mas NINGUÉM tem o link de agendamento.** Não existe
-cliente real, ninguém está pagando, e **não há nenhuma lacuna ativa causando dano
-agora**. Toda pendência listada mais abaixo é **preparação para outubro**, nunca
-incidente em curso.
+**O sistema está em produção, mas o link de agendamento ainda não foi divulgado.**
+Não há campanha em curso e nenhuma pendência abaixo está causando dano agora.
+Tudo é **preparação para outubro**, quando sai o vídeo do **@grandecampinas** e
+os leads caem de uma vez.
 
-Isso importa para não distorcer prioridade. "O cliente paga e não recebe e-mail"
-não é um fato do presente: é um item da lista de conferência antes de abrir. O
-**único caminho crítico são as fases de pagamento** (A..E). O resto é checklist.
+O risco não é chegar a tempo — é **chegar testado com gente real antes do pico**.
 
-**Prazo:** sistema pronto em **setembro**; uso real no **início de outubro**, com
-o vídeo do influenciador **@grandecampinas**, que despeja os leads de uma vez. O
-risco não é chegar a tempo — é **chegar testado com gente real antes do pico**.
+## PRÓXIMO PASSO — Fase C: cobrança do saldo sob demanda, idempotente
 
-## PRÓXIMO PASSO — Fase A: preço por método + Pix integral com desconto
+O saldo já existe, já aparece nas três telas e já é cobrado presencialmente. O
+que falta é o **botão que gera a cobrança online do saldo** no dia.
 
-A Fase 0 está concluída e a configuração já existe no banco. A Fase A é ligar o
-desconto ao preço, e ela tem **duas metades**, sendo a segunda a arriscada:
-
-1. **Trocar os valores do template para os preços CHEIOS** — Montanha 34999,
-   Fazenda 24999 (hoje o template guarda 32549 e 23249, que são os preços **já
-   com desconto**, o inverso do que a seção 4-B manda).
-2. **Aplicar o desconto na venda**, lendo `getDiscountBasisPoints('pix')` e
-   usando `applyDiscount` de `lib/basis-points.ts`. **Reusar, não reimplementar.**
-
-**>>> DUAS ARMADILHAS NESSA TROCA <<<**
-
-- **`lib/templates/quadriciclo.ts:94-103` PROÍBE textualmente o que a Fase A tem
-  que fazer.** O comentário diz `>>> priceCents É O PREÇO PIX. <<<` e "NÃO troque
-  estes valores pelos de cartão". Ele está certo para a rev 6 e errado para a
-  rev 7. Trocar os números sem reescrever o comentário deixa a próxima pessoa com
-  um aviso mandando desfazer a correção.
-- **O seed RECONCILIA preço por nome** (`lib/seed.ts`, faz UPDATE na divergência).
-  Trocar o template muda o preço em produção no próximo seed. Isso precisa ser
-  decisão consciente, não descoberta.
+**A exigência que define a fase é a idempotência:** apertar duas vezes não pode
+gerar duas cobranças. O dono vai usar isso no celular, em campo, com o cliente
+esperando — o duplo toque não é hipótese, é o caso normal. A linha de `balance`
+já existe em `reservation_payments` desde a criação da reserva, com
+`external_reference` determinístico (`{uuid}:balance`), e é ela que dá a chave
+natural para a idempotência.
 
 ### Faseamento (CLAUDE.md seção 17)
 
 | Fase | Estado |
 |---|---|
-| **Fase 0** — configuração financeira | **CONCLUÍDA em 28/08** |
-| **Fase A** — preço por método + Pix integral com desconto | **PRÓXIMA** |
-| **Fase B** — sinal de 50% via Pix (`confirmed` + `partial`) | pendente |
-| **Fase C** — cobrança do saldo sob demanda, idempotente | pendente |
+| **Fase 0** — configuração financeira | **CONCLUÍDA** |
+| **Fase A** — preço cheio + desconto do Pix | **CONCLUÍDA, validada em produção** |
+| **Fase B** — sinal de 50% via Pix | **CONCLUÍDA, validada em produção com dinheiro real** |
+| **Fase C** — cobrança do saldo sob demanda, idempotente | **PRÓXIMA** |
 | **Fase D** — registro manual da maquininha, líquido e taxa congelados | pendente |
 | **Fase E** — cartão via `invoiceUrl` + chargeback | pendente |
 | **Transversal** — líquido lido do Asaas | pendente |
-| **Termo v2** — política de cancelamento + regra de remarcação | pendente, em paralelo |
-| **Antes do vídeo** — testes com clientes reais | pendente |
+| **Termo v2** — política de cancelamento + remarcação + política do sinal | pendente, **agora urgente** |
+| **Antes do vídeo** — testes com clientes reais | em andamento |
 
-## Fase 0 — o que foi entregue (28/08)
+## Estado de produção (VERIFICADO por SELECT, não relatado)
 
-Migration **0006**: `payment_method_discounts` e `card_machine_rates`, mais o enum
-`card_machine_modality`. Saiu completa do gerador, **sem edição à mão** (ao
-contrário da 0001, 0004 e 0005).
+- Commit: **`b629a11`** (`main` = `origin/main`).
+- **`experiences`**: Montanha e Fazenda em `payment_mode = 'deposit'`,
+  `deposit_percent = 50`, `price_cents` **34999** e **24999** (os cheios).
+- **`payment_method_discounts`**: `pix | 700`.
+- **`settings`**: `meeting_point` com **876 caracteres e 10 quebras de linha**;
+  `what_to_bring` **vazio de propósito**.
+- **Migrations**: todas aplicadas.
+- **Reserva com sinal validada com DINHEIRO REAL**: entrada e saldo somando o
+  total exato, a tela mostrando a pendência, mapa e WhatsApp renderizando.
 
-- `lib/basis-points.ts` — **módulo PURO** de aritmética de percentual.
-- `lib/financial-config.ts` — domínio, server-only.
-- `/api/admin/financial-config/*` — GET agregado, PUT de desconto por método,
-  CRUD de taxas com 409 de duplicata.
-- `/admin/financeiro` + link na `AdminNav`.
-- `tests/s-config-financeira.test.ts` — grupo S, 28 casos.
+> **Divergência a conferir:** o fechamento desta sessão registrou "migrations
+> 7/7", mas o disco tem **oito** arquivos (`0000` a `0007`) e o banco local tem
+> **oito** linhas aplicadas. O mais provável é que "7" se refira ao número da
+> última (`0007`). Como a Fase A depende das colunas da 0007 e ela funcionou em
+> produção, a 0007 está aplicada lá. **Confira o número absoluto** antes de
+> assumir: `SELECT count(*) FROM drizzle.__drizzle_migrations;` deve dar **8**.
 
-### As três decisões de desenho que governam as Fases A..E
+## O que foi entregue nesta sessão
 
-Estão na seção 4-B.6 do CLAUDE.md e em `docs/DECISOES.md`. Repetidas aqui porque
-quem pegar a Fase A precisa das três antes de escrever a primeira linha:
+**Fase A** — a experiência guarda o **valor cheio** e o Pix desconta 7%. O preço
+que o cliente paga **não mudou** (R$ 325,49 e R$ 232,49), só a origem. Migration
+0007 congela `full_price_cents` e `discount_basis_points` na reserva. O desconto
+incide sobre o **total**, e o wizard chama a **mesma** `applyDiscount` do
+servidor.
 
-1. **Percentual em BASIS POINTS inteiro, nunca `numeric` nem float.** `numeric`
-   chega do driver como **string**, e o primeiro `Number(x) * cents / 100`
-   reintroduz o float binário que o `money.ts` existe para impedir — de forma
-   invisível, porque o erro aparece na serialização, não no número.
-2. **Duas tabelas, não uma.** Desconto é política de preço; taxa é fato do
-   contrato com a adquirente, e é a que vai precisar de validade/versão.
-3. **Ausência significa coisas diferentes.** Desconto ausente = **0%** (o cliente
-   paga o cheio, *fail-safe*). Taxa ausente = **`NULL`, JAMAIS 0%** — taxa zero é
-   mentira que faz o líquido parecer igual ao bruto. A Fase D **recusa** o
-   registro quando não há taxa; `getCardMachineRate` retorna `| null` para o
-   compilador obrigar a decisão.
+**Fase B** — sinal de 50% via Pix, com `confirmed` + `partial`. Passo de escolha
+no wizard com as duas opções lado a lado, `deposit` destravado no CRUD com o
+percentual travado em 50, e **as três telas mostrando a pendência**.
 
-**`lib/basis-points.ts` é o módulo de aritmética. As Fases A..E REUSAM, não
-reimplementam.** Uma segunda implementação "só para exibir" é como as duas metades
-divergem.
+**Texto oficial do cliente** publicado em `settings.meeting_point`, com o título
+do bloco mudando para "Informações importantes".
 
-## >>> ARMADILHA QUE CUSTOU QUATRO DIAS: o seed NUNCA roda em produção <<<
+## >>> CORREÇÃO DE PREMISSA: o texto do cliente NUNCA esteve publicado <<<
 
-O `instrumentation.ts` do boot aplica **apenas migrations**. Semear é
-`scripts/seed.ts`, e o build standalone **descarta `scripts/` da imagem**. Não há
-caminho automático que aplique o template em produção.
+A documentação vinha afirmando que o texto oficial estava em produção desde
+24/08. **Não estava.** O template tinha os placeholders marcados
+`PROVISORIO — confirmar com o cliente`, e produção refletia isso
+(`meeting_point` com **84 caracteres**).
 
-Configuração nova entra no template, funciona local, passa nos testes, sobe no
-deploy e **não chega ao banco** — sem erro e sem log, porque o código trata chave
-ausente **omitindo o bloco**, que é o comportamento correto. A defesa que impede a
-tela de quebrar é a mesma coisa que torna a falha silenciosa.
+O que subiu em 24/08 foi o **componente** que renderiza texto longo com quebras
+preservadas. O **conteúdo** só entrou em 28/08. É a mesma classe de engano do
+mapa: infraestrutura no ar tratada como funcionalidade entregue.
 
-**Sintoma real:** `meeting_point_map_url` nunca foi semeada. O mapa subiu no
-deploy de 24/08 e **nunca apareceu em produção**. Ficou quatro dias assim,
-descoberto **por acaso** em 28/08.
+## >>> A ARMADILHA DO SEED MORDEU QUATRO VEZES NESTA SESSÃO <<<
 
-**REGRA:** todo deploy que introduza setting ou tabela de configuração exige
-conferência por `SELECT` **no banco de produção**, na mesma janela do deploy.
-Migration aplicada **não** significa dado semeado.
+Quatro `UPDATE` manuais em produção: os dois **preços**, o **`payment_mode`**, o
+**`meeting_point`** e o **`what_to_bring`**. Nenhum acusaria falha se esquecido.
 
-**Caminho definitivo, agora com prioridade real:** a rota `POST /api/admin/seed`,
-protegida por sessão, chamando `seedTenant()` de dentro do Next. Enquanto não
-existir, a conferência manual é a única rede.
+**Os dois de conteúdo são os que se esquece**, porque não têm sintoma técnico —
+a tela renderiza perfeitamente com o texto velho. E o `what_to_bring` é o pior:
+é um `UPDATE` que grava **string vazia**, então "não fiz" é indistinguível de
+"não precisava fazer".
 
-## Estado de produção (VERIFICADO por SELECT em 28/08, não relatado)
+**`POST /api/admin/seed` deixou de ser conveniência.** Com quatro ocorrências
+numa sessão só, o custo de não a ter passou o de construí-la. É candidata real a
+entrar antes da Fase D.
 
-- Commit em produção: **`d287739`** (`main` = `origin/main`).
-- **Migration 0006 aplicada**; 15 tabelas, incluindo `payment_method_discounts` e
-  `card_machine_rates`.
-- `payment_method_discounts` = **`pix | 700`**, semeado **à mão**.
-- `card_machine_rates` **VAZIA** — nasce assim de propósito.
-- `settings` = **15**, com `support_whatsapp` e `meeting_point_map_url` semeados
-  **à mão neste deploy** (é a armadilha acima em ação).
+**Conferir conteúdo exige contar as quebras, não só os caracteres:** o console
+pode entregar o texto com os `\n` colapsados, e aí o tamanho confere e a tela
+vira parede de texto.
 
-## Migrations
+## Pendências que NÃO podem se perder
 
-- **Sete no disco**, de `0000_oval_mandroid` a `0006_awesome_anita_blake`.
-- **Local:** as sete aplicadas (`drizzle.__drizzle_migrations` com 7 linhas).
-- **Produção:** as sete aplicadas, verificado por SELECT.
-- `npm run db:generate` responde "No schema changes, nothing to migrate".
-- **A 0001, a 0004 e a 0005 estão editadas à mão** e precisam continuar assim se
-  regeradas — na 0005 o que se perde é o **backfill**, silenciosamente. **A 0006
-  não** foi editada e pode ser regerada sem perda.
+**1. A experiência TESTE está ATIVA em produção.** Foi reativada na apresentação
+de quarta e **aparece em `/api/experiences`**, ou seja, na LP pública. Precisa
+ser desativada (`PATCH { ativo: false }` no admin, ou `UPDATE experiences SET
+active = false`) **antes de o link ir para a LP**. Se o vídeo sair com ela no ar,
+o cliente vê uma trilha que não existe.
 
-## Testes
+**2. Duplicação de título na tela de confirmação.** O `<h2>` "Informações
+importantes" repete a primeira linha do texto do cliente
+(`📌 INFORMAÇÕES IMPORTANTES DO PASSEIO`). As duas metades estão travadas por
+decisão: o título foi definido pelo dono do produto, o texto é do cliente e não
+pode ser editado. **Decisão pendente:** omitir o `<h2>` (não custa nada em código
+e não mexe no texto dele) ou pedir ao cliente para tirar a primeira linha.
 
-`npm test`: **19 arquivos, 172 casos, todos passando** (eram 18/144).
+**3. A tela de confirmação com o texto NOVO ainda não foi vista em produção.** A
+verificação em navegador desta sessão foi **local**, contra o banco de
+desenvolvimento já semeado — lá o texto novo renderizou certo nas duas telas
+(6 parágrafos, `pre-line`, sem HTML, sem rótulo órfão). Em **produção** ninguém
+abriu ainda uma reserva confirmada depois do `UPDATE`. Conferir.
 
-Grupo **S** (`tests/s-config-financeira.test.ts`, 28 casos): aritmética
-(34999 a 7% = 32549, idêntico em 1000 execuções), isolamento entre tenants na
-**leitura e na escrita**, 422 de percentual inválido, 409 de modalidade duplicada
-com a `UNIQUE` do banco como segunda barreira, e **S5.2**, que prova a promessa da
-seção 4-B.6: desconto alterado pelo dono sobrevive a dois `seedTenant()` seguidos.
+**4. O termo NÃO menciona a política do sinal, e agora isso é lacuna ativa.** As
+duas trilhas vendem em `deposit` em produção, então já pode haver cliente pagando
+sinal sem que o termo diga que ele **não é reembolsável**. A seção 10 prevê
+`settings.deposit_policy_text` no termo quando a experiência for `deposit`; não
+está implementado. **Entra no Termo v2 e subiu de prioridade.**
 
-Grupo **R** segue cobrindo idade do garupa e mapa; o caso **R4** continua sendo o
-que trava o "conserto" errado de alinhar as duas regras de idade.
+## Dívidas conhecidas
 
-## Banco local
+**Dependem do cliente**
+- **Percentuais reais da maquininha por modalidade**: não enviados. Bloqueiam a
+  Fase D. A tabela e a tela já os aceitam; vazia é o estado honesto.
 
-Container `aventix-db-dev` no ar. Catálogo semeado e reconciliado com o template.
-**15 settings**, todas preenchidas — `support_whatsapp` = `5519999015663`, a
-última que faltava. `payment_method_discounts` com `pix | 700`;
-`card_machine_rates` vazia.
-
-## Deploy
-
-`main` = `origin/main` = **`d287739`**, com a Fase 0 mergeada. Deploy segue manual
-(clique em Implantar no Easypanel); sem CI/CD.
-
-## Pendências e dívidas conhecidas
-
-**Bloqueiam a Fase D (dependem do cliente)**
-- **Percentuais reais da maquininha por modalidade** (débito, crédito à vista,
-  crédito parcelado): **não enviados**. A tabela e a tela já os aceitam; a tabela
-  fica vazia até chegarem. Não inventar.
-
-**Aberto no texto do cliente**
-- **Contradição do reagendamento**: o texto oficial promete remarcação com 48h de
-  antecedência mas **não diz como**. Redação proposta e **ainda não aprovada**:
-  *"Remarcação. Você pode remarcar seu passeio até 48 horas antes do horário
-  agendado, falando com a gente pelo WhatsApp — a remarcação não é feita pelo
-  site. A nova data fica sujeita à disponibilidade. Valores já pagos não são
-  devolvidos em caso de cancelamento."* O texto oficial **não está no
-  repositório** (vive no site/ManyChat do cliente); entra no Termo v2.
-
-**Do redesenho de 25/08**
-- **`experiences.deposit_percent` / `deposit_fixed_cents` divergem da regra nova.**
-  As colunas são por experiência; a regra fixa o sinal em **50%**. A Fase B decide
-  se somem, viram default ou passam a ser ignoradas.
-- **Chargeback** não tem estado na máquina de estados (seção 5). Fase E.
-- **A tela do CRUD de experiências precisa mostrar cheio e com desconto.** Com o
-  valor cheio cadastrado, o dono digita 349,99 achando que é o que recebe. Entra
-  junto com a Fase A.
+**Do texto do cliente**
+- **Termo v2** precisa resolver: política do sinal (item 4 acima) e a redação da
+  remarcação. A frase proposta e ainda **não aprovada**: *"Remarcação. Você pode
+  remarcar seu passeio até 48 horas antes do horário agendado, falando com a
+  gente pelo WhatsApp — a remarcação não é feita pelo site. A nova data fica
+  sujeita à disponibilidade. Valores já pagos não são devolvidos em caso de
+  cancelamento."* O texto oficial vive fora do repositório.
 
 **Multi-tenancy pela metade (dívida de propósito, 23/08)**
-- **Etapa 2 não feita.** `getTenantId()` devolve 1 fixo. A barreira
-  `assertResolvedTenantIsCurrent()` impede divergência em silêncio.
-- Critério de conclusão: poder **apagar** aquela função e
+- Etapa 2 não feita: `getTenantId()` devolve 1 fixo, com
+  `assertResolvedTenantIsCurrent()` impedindo divergência silenciosa.
+- Critério de conclusão: poder apagar aquela função e
   `tests/o-barreira-multi-tenant.test.ts`.
 
 **Verificação que continua não feita**
-- **As telas do admin nunca foram renderizadas em navegador autenticado** —
-  calendário, agendamentos, experiências, CRUDs, sidebar e agora **`/admin/financeiro`**.
-  `/admin/*` está atrás do login e só existe o hash da senha. O build prova que
-  compilam e estão roteadas; nada além disso.
-- O passo 4 do wizard (mensagem de idade) nunca foi exercitado em navegador.
-
-**Fluxo de venda (checklist de outubro, não lacuna ativa)**
-- E-mail cortado do go-live; a tela `confirmed` é a única confirmação ao cliente.
-- Termo sem checagem de versão vigente no servidor; o termo **não** menciona a
-  idade mínima do garupa.
-- `GET /api/availability` não informa quantos recursos sobram num horário.
-- Sem proteção contra duplo clique em `POST /api/reservations` no servidor —
-  **reavaliar antes do vídeo**, que é evento de pico.
+- **As telas do admin nunca foram renderizadas em navegador autenticado.** Isso
+  agora cobre a correção mais importante da Fase B: o rótulo "Saldo R$ X" no
+  bloco da agenda e o selo em `/admin/agendamentos` estão provados por teste e
+  por build, **não por olho**. `/admin/*` está atrás do login e só existe o hash
+  da senha.
 
 **Integração de pagamento**
 - Indicador de saúde da integração no `/admin` não construído (seção 8-B).
 - Cinco divergências entre a seção 8 e o que foi medido, não resolvidas.
-- `receiveInCash` não implementado (Fase D, agora com líquido e taxa).
+- `receiveInCash` não implementado (Fase D).
 
 **Dívida técnica registrada de propósito**
-- Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`
-  (22/08). O adiamento do lançamento abriu janela para pagá-la.
+- Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`.
 
 **Gerais**
-- **`POST /api/admin/seed` não existe** — e agora é o conserto de uma classe
-  inteira de falha, não conveniência (ver a armadilha acima).
-- Sem CI/CD; deploy é clique manual.
+- Sem CI/CD; deploy é clique manual no Easypanel.
 - `npm install` de 18/08 reportou 10 vulnerabilidades (4 moderate, 6 high).
-- `instrumentation.ts` compila para Edge Runtime e falha lá: **3 avisos no build**
-  (`lib/payments/asaas.ts` com `node:crypto`, `lib/auth.ts` com `bcrypt`).
-  Confirmado em 28/08 que continuam sendo esses três, nenhum novo.
+- `instrumentation.ts` compila para Edge Runtime e falha lá: **3 avisos no
+  build** (`lib/payments/asaas.ts` com `node:crypto`, `lib/auth.ts` com
+  `bcrypt`). Reconfirmados nesta sessão; nenhum novo.
 - Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`,
-  `GET /api/experiences` e `POST /api/reservations` — **o vídeo de outubro torna
-  isto mais relevante do que era**.
+  `GET /api/experiences` e `POST /api/reservations` — **o vídeo torna isto mais
+  relevante do que era**.
+- Sem proteção contra duplo clique em `POST /api/reservations` no servidor.
+  **Reavaliar antes do vídeo**; é parente direto da idempotência da Fase C.
 - Sessão sem revogação (iron-session, 8h).
 - A âncora dos testes de lead time vence em junho de 2027.
 - Cancelamento e CRUD de experiências não têm teste automatizado.
 - `app/(public)/agenda/[token]` e `/admin/reservas/[id]` da seção 14 não existem.
-- `mode:'string'` no schema: toda nova função que retorne `timestamptz`
-  reintroduz o formato não-ISO.
+- E-mail cortado do go-live; a tela `confirmed` é a única confirmação ao cliente.
+- `GET /api/availability` não informa quantos recursos sobram num horário.
 - Chave SSH do VPS não configurada; acesso por senha de root.
 - Branches locais já mergeadas, podem ser apagadas: `feat/tenant-slug`,
-  `feat/idade-e-mapa`, `feat/admin-sidebar`, `feat/config-financeira`.
+  `feat/idade-e-mapa`, `feat/config-financeira`, `feat/preco-por-metodo`,
+  `feat/sinal-50`, `feat/texto-informacoes`.
+
+## Testes
+
+`npm test`: **21 arquivos, 199 casos, todos passando**.
+
+- Grupo **T** (`t-preco-por-metodo.test.ts`, 13 casos): valores literais da seção
+  4-B.2, e o **T2.4** com fixture de preço 33333 que separa "desconto sobre o
+  total" de "unitário descontado × 2" — com 34999 os dois coincidem por acaso.
+- Grupo **U** (`u-sinal.test.ts`, 14 casos): a divisão 16275/16274, o desconto
+  **antes** da divisão, e **U1 e U4.2**, que não consertam nada e existem só para
+  travar as duas barreiras que impedem o cron de expirar uma reserva já paga.
+
+## Banco local
+
+Container `aventix-db-dev` no ar. Catálogo semeado e reconciliado com o template:
+preços cheios, `pix | 700`, `meeting_point` com o texto oficial (876 caracteres,
+idêntico ao template), `what_to_bring` vazio. **`payment_mode` local está em
+`full`** nas duas trilhas (foi revertido depois da verificação do wizard) —
+diferente de produção, onde está `deposit`. Para exercitar o sinal localmente,
+ligue e desligue à mão, como faz o helper `comSinal` do grupo U.
