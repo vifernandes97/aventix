@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ReservationDetail } from '@/lib/reservation-detail';
+import { BalanceCharge } from './balance-charge';
 import {
   DETAIL_STATUS_BADGE,
   DETAIL_STATUS_LABEL,
@@ -180,6 +181,24 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
   }
 
   const canCancel = detail !== null && CANCELLABLE.includes(detail.status);
+
+  /**
+   * Ha saldo a cobrar nesta reserva?
+   *
+   * Le a LINHA de `balance`, nao o `payment_state` da reserva: os dois
+   * concordam hoje, mas a linha e o fato (existe uma cobranca de saldo em
+   * aberto) e o agregado e derivado dela. Reserva `full` nao tem essa linha e
+   * nunca mostra o botao; saldo ja pago tem a linha em 'paid' e tambem nao —
+   * nesse caso a lista logo acima ja diz "Saldo · Pago", que e a informacao
+   * certa.
+   *
+   * Quem decide se a cobranca PODE acontecer e o servidor (assertChargeable);
+   * isto decide apenas se faz sentido desenhar o bloco.
+   */
+  const temSaldoEmAberto =
+    detail !== null &&
+    detail.payment.balanceCents > 0 &&
+    detail.payment.rows.some((row) => row.kind === 'balance' && row.state === 'pending');
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -380,13 +399,21 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
               </ul>
 
               {/*
-                A cobranca do saldo (QR na hora / "Recebi por fora", secao 11.1)
-                entra AQUI na costura da Fase 2. Hoje nenhuma cobranca existe no
-                Asaas, entao um botao de cobrar so poderia mentir.
+                COBRAR SALDO (Fase C). So aparece quando ha saldo de verdade:
+                reserva vendida com sinal, com linha de `balance` ainda em
+                aberto. Numa reserva `full`, ou ja quitada, o botao nao existe —
+                oferecer cobranca onde nao ha o que cobrar e o tipo de botao que
+                o dono aperta uma vez, ve dar erro, e passa a desconfiar da tela.
+
+                "Recebi por fora" (receiveInCash) e a Fase D e entra ao lado
+                deste.
               */}
-              <p className="mt-1 text-[11px] text-neutral-400">
-                Cobrança de saldo entra com a integração de pagamento.
-              </p>
+              {temSaldoEmAberto && (
+                <BalanceCharge
+                  reservationId={detail.id}
+                  balanceCents={detail.payment.balanceCents}
+                />
+              )}
             </Section>
 
             {/* -- cancelamento ---------------------------------------------- */}

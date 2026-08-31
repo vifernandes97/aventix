@@ -7,8 +7,9 @@
 // custar uma implementacao nova deste arquivo, nao uma varredura no repo.
 //
 // >>> INTERFACE MINIMA DE PROPOSITO <<<
-// Quatro metodos: criar cobranca Pix, reler o QR de uma cobranca ja criada,
-// consultar cobranca, cancelar cobranca. E o que o MVP usa. `receiveInCash`
+// Cinco metodos: criar cobranca Pix, reler o QR de uma cobranca ja criada,
+// consultar cobranca, procurar cobranca pela referencia externa, cancelar
+// cobranca. E o que o MVP usa. `receiveInCash`
 // (modo sinal) e cartao (v2) estao FORA — metodo que ninguem chama e codigo
 // morto que envelhece sem ninguem perceber, e a assinatura errada so aparece no
 // dia em que alguem finalmente tenta usar.
@@ -17,6 +18,15 @@
 // (/reserva/[id]): a pagina sobrevive a refresh, entao o QR devolvido uma vez
 // no 201 de POST /api/reservations nao basta — ela precisa reler o atual. Tem
 // chamador real, que e o criterio do paragrafo acima.
+//
+// O quinto (`findChargeByExternalReference`) entrou na Fase C, pelo mesmo
+// criterio: a cobranca do saldo e disparada por um BOTAO que o dono aperta no
+// celular, em campo, e apertar duas vezes nao pode gerar duas cobrancas. As
+// travas locais cobrem o caso comum, mas nenhuma delas cobre o processo morrer
+// entre criar no provedor e gravar o id aqui — e nesse buraco a proxima
+// tentativa criaria a segunda cobranca. Perguntar ao provedor pela referencia
+// externa (unica e deterministica, secao 4.6) e a unica pergunta que atravessa
+// esse buraco. Ver lib/payments/balance-charge.ts.
 //
 // >>> STATUS E DOMINIO NOSSO <<<
 // `PaymentState` sai do enum `payment_state` do schema, nao do vocabulario do
@@ -131,6 +141,21 @@ export interface PaymentProvider {
   getPixQrCode(chargeId: string): Promise<PixQrCode>;
   /** Estado atual da cobranca no provedor — fonte da verdade do pagamento. */
   getCharge(chargeId: string): Promise<ChargeSnapshot>;
+  /**
+   * Procura uma cobranca pela REFERENCIA EXTERNA (`"{reservationId}:{kind}"`).
+   *
+   * Existe para tornar a criacao de cobranca idempotente ATRAVESSANDO a morte
+   * do processo: se o provedor criou e nos nao chegamos a gravar o id, esta e
+   * a unica forma de descobrir isso antes de criar a segunda.
+   *
+   * @returns `null` quando nao existe cobranca com essa referencia.
+   *
+   * >>> A IMPLEMENTACAO E OBRIGADA A CONFERIR A REFERENCIA DE VOLTA. <<<
+   * Um filtro de listagem que o provedor ignore devolveria cobrancas de OUTRAS
+   * reservas, e adotar uma delas ligaria o saldo de um cliente ao pagamento de
+   * outro. Confira campo a campo antes de devolver.
+   */
+  findChargeByExternalReference(externalReference: string): Promise<ChargeSnapshot | null>;
   /** Remove/cancela a cobranca no provedor. */
   cancelCharge(chargeId: string): Promise<void>;
 }

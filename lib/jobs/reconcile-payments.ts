@@ -63,6 +63,9 @@ export async function reconcilePayments(): Promise<ReconcilePaymentsResult> {
       chargeId: reservationPayments.asaasPaymentId,
       paymentId: reservationPayments.id,
       reservationId: reservationPayments.reservationId,
+      // Necessario para distinguir as DUAS causas de "sem id no provedor" no
+      // laco abaixo. Ate a Fase B so existia uma, e por isso nao era lido aqui.
+      kind: reservationPayments.kind,
     })
     .from(reservationPayments)
     .innerJoin(reservations, eq(reservations.id, reservationPayments.reservationId))
@@ -81,14 +84,44 @@ export async function reconcilePayments(): Promise<ReconcilePaymentsResult> {
   let checked = 0;
 
   for (const row of pending) {
-    // Sem id no provedor nao ha o que consultar. Acontece quando a criacao da
-    // cobranca falhou depois da transacao (caso de borda 9) — a reserva ja foi
-    // expirada e a vaga liberada naquele momento, entao aqui e so registrar.
+    // ------------------------------------------------------------------
+    // >>> SEM ID NO PROVEDOR TEM DUAS CAUSAS, E SO UMA E ANOMALIA <<<
+    //
+    // Ate a Fase B havia uma causa so, e por isso este bloco avisava sempre.
+    // A Fase B criou a segunda, e ela e ROTINA:
+    //
+    //   kind='balance'         -> o dono ainda nao cobrou o saldo. A linha
+    //                             nasce junto da reserva (secao 5.2 passo 3),
+    //                             mas a cobranca so existe quando ele aperta
+    //                             "Cobrar saldo". ESTADO ESPERADO.
+    //   kind='deposit'|'full'  -> a cobranca do pagamento DEVIDO falhou depois
+    //                             da transacao (caso de borda 9). A reserva
+    //                             nasceu sem QR e o cliente nao tem como pagar.
+    //                             ANOMALIA.
+    //
+    // O silencio do `balance` e PERMANENTE, nao um remendo ate a Fase C: mesmo
+    // depois dela, `balance` sem id continua sendo "ainda nao cobrei", que e o
+    // estado normal de toda reserva com sinal ate a vespera. O que volta a ser
+    // assunto deste job e `balance` COM id, e esse cai no fluxo normal abaixo.
+    //
+    // >>> NUNCA silencie por "sem id" em vez de por `kind`. <<< Esse aviso e o
+    // UNICO sinal que existe das reservas da borda 9 (ha 3 em producao hoje);
+    // alargar o filtro as apagaria junto com o ruido.
+    //
+    // Por que isto e regra e nao ajuste cosmetico: sem o filtro, cada reserva
+    // com sinal gera uma linha a cada 10 minutos, para sempre. Medido em
+    // 28/08: 7 linhas por ciclo com 4 reservas de teste. Ruido constante faz
+    // parar de ler o log, e e olhando log que este projeto pegou falha surda
+    // tres vezes. Um aviso que dispara sempre nao e aviso, e fundo.
+    // ------------------------------------------------------------------
     if (!row.chargeId) {
-      console.warn(
-        `[reconcile-payments] pagamento ${row.paymentId} (reserva ${row.reservationId}) ` +
-          'sem id no provedor; nada a consultar',
-      );
+      if (row.kind !== 'balance') {
+        console.warn(
+          `[reconcile-payments] pagamento ${row.paymentId} (reserva ${row.reservationId}) ` +
+            `kind=${row.kind} sem id no provedor; a criacao da cobranca falhou ` +
+            '(caso de borda 9) e o cliente nao tem como pagar',
+        );
+      }
       continue;
     }
 

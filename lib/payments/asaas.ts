@@ -347,6 +347,15 @@ type AsaasPayment = {
   confirmedDate?: string | null;
 };
 
+/**
+ * Envelope de listagem do Asaas. So `data` interessa: a paginacao nao, porque
+ * a busca por referencia externa e por chave unica nossa e nunca deveria voltar
+ * mais de uma linha (ver a conferencia defensiva no metodo).
+ */
+type AsaasPaymentList = {
+  data?: AsaasPayment[] | null;
+};
+
 type AsaasPixQrCode = {
   encodedImage: string;
   payload: string;
@@ -465,6 +474,51 @@ export const asaasProvider: PaymentProvider = {
       chargeId: payment.id,
       state: toPaymentState(payment.status),
       // De volta para centavos inteiros, que e a unidade do banco.
+      amountCents: Math.round(payment.value * 100),
+      externalReference: payment.externalReference ?? null,
+      paidAt: toIsoOrNull(
+        payment.paymentDate ?? payment.confirmedDate ?? payment.clientPaymentDate,
+      ),
+    };
+  },
+
+  async findChargeByExternalReference(externalReference: string): Promise<ChargeSnapshot | null> {
+    // `externalReference` e a chave que NOS geramos ("{uuid}:{kind}", secao
+    // 4.6), entao a busca e por igualdade exata e no maximo uma cobranca
+    // deveria casar.
+    const list = await request<AsaasPaymentList>(
+      `/payments?externalReference=${encodeURIComponent(externalReference)}&limit=10`,
+      { method: 'GET' },
+    );
+
+    // >>> CONFERE A REFERENCIA DE VOLTA, SEMPRE. <<<
+    // O contrato em provider.ts exige isto e o motivo e concreto: se o Asaas
+    // ignorar o filtro (parametro renomeado, versao de API diferente, erro
+    // nosso de digitacao no nome do campo), ele responde 200 com a listagem
+    // INTEIRA da conta do tenant. Confiar na primeira linha adotaria a cobranca
+    // de outro cliente como se fosse o saldo deste — e o dinheiro de um
+    // apareceria quitando a reserva do outro. Comparar aqui transforma esse
+    // cenario em "nao achei", que e seguro.
+    const matches = (list.data ?? []).filter((p) => p.externalReference === externalReference);
+
+    if (matches.length === 0) return null;
+
+    if (matches.length > 1) {
+      // Ja existe duplicata no provedor — exatamente o que a Fase C existe para
+      // impedir. Nao da para desfazer daqui (cancelar a "sobrando" exigiria
+      // saber qual o cliente pagou), entao registra alto e adota a primeira,
+      // que e a mais antiga e a que o cliente provavelmente recebeu.
+      console.error(
+        `[asaas] DUPLICATA: ${matches.length} cobrancas com externalReference=${externalReference}. ` +
+          'Confira no painel do Asaas e cancele as excedentes que ninguem pagou.',
+      );
+    }
+
+    const payment = matches[0];
+
+    return {
+      chargeId: payment.id,
+      state: toPaymentState(payment.status),
       amountCents: Math.round(payment.value * 100),
       externalReference: payment.externalReference ?? null,
       paidAt: toIsoOrNull(
