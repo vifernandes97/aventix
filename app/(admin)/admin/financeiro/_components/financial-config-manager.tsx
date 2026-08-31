@@ -6,16 +6,22 @@
 // ============================================================================
 // >>> OS DOIS AVISOS QUE ESTA TELA NAO PODE DEIXAR DE DAR <<<
 //
-// 1. NADA DISTO ESTA LIGADO AO PRECO AINDA (Fase 0 de 17). Sem o aviso, o dono
-//    configura 7%, olha a pagina publica, ve o preco de sempre e conclui que o
-//    sistema esta quebrado — ou, pior, mexe no preco da experiencia para
-//    "compensar".
+// 1. O PRECO DO CATALOGO E O CHEIO; O DESCONTO E APLICADO POR CIMA, NA VENDA.
+//    O dono NAO pode baixar o preco da experiencia para o valor-Pix, porque o
+//    sistema desconta de novo. Ver o aviso renderizado abaixo, que traz a conta.
+//
+//    >>> ESTE AVISO JA DISSE O CONTRARIO, E ISSO E O PONTO. <<< Ate 31/08 ele
+//    dizia "esta tela ainda nao muda o preco da venda", que era verdade na Fase
+//    0 e virou MENTIRA quando a Fase A entrou, em 28/08. Um aviso que envelhece
+//    junto com a fase que o motivou nao e detalhe de texto: e a tela instruindo
+//    o dono a fazer exatamente o que ela existe para impedir.
 //
 // 2. A CONFIGURACAO VALE PARA O PROXIMO REGISTRO, NUNCA PARA O PASSADO (secao
 //    4-B.7). Editar uma taxa aqui NAO reescreve o liquido de um recebimento ja
 //    registrado. Sem o aviso, o dono corrige a taxa em novembro esperando ver o
 //    numero de setembro mudar — e o fato de ele NAO mudar e a garantia de que a
-//    conferencia com o extrato continua fechando.
+//    conferencia com o extrato continua fechando. Desde a Fase D isso deixou de
+//    ser hipotetico: ha valores congelados de verdade nas linhas de pagamento.
 // ============================================================================
 //
 // O percentual e digitado como o dono pensa ('7' ou '7,5') e convertido para
@@ -55,11 +61,15 @@ const MODALITIES: CardMachineModalityName[] = ['debit', 'credit', 'credit_instal
 /**
  * Venda de exemplo do simulador de desconto.
  *
- * R$ 100,00 REDONDO, e nao o preco real de uma trilha, de proposito: hoje o
- * catalogo guarda o preco JA COM desconto (o inverso do que a secao 4-B manda),
- * e a Fase A e que vai corrigir isso. Simular sobre a experiencia real mostraria
- * um "de / por" errado enquanto isso, e o dono tomaria decisao de preco em cima
- * dele.
+ * R$ 100,00 REDONDO, e nao o preco real de uma trilha, de proposito: com cem
+ * reais o percentual se le de cabeca (7% -> R$ 7,00) e o dono confere a
+ * configuracao sem precisar confiar na conta. Um preco real tambem funcionaria
+ * hoje — desde a Fase A o catalogo guarda o CHEIO, que e a base correta —, mas
+ * amarraria o exemplo a uma trilha especifica e o deixaria errado no dia em que
+ * aquele preco mudasse.
+ *
+ * A mesma constante alimenta o aviso do topo, que precisa mostrar a conta do
+ * desconto aplicado DUAS vezes.
  */
 const EXAMPLE_CENTS = 10_000;
 
@@ -67,16 +77,35 @@ const moneyLabel = (cents: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
 
 export function FinancialConfigManager({ discounts, cardMachineRates }: Props) {
+  const pixBasisPoints =
+    discounts.find((d) => d.method === 'pix')?.discountBasisPoints ?? 0;
+
+  // A conta do erro, calculada e nao escrita a mao: um exemplo digitado
+  // envelhece junto com o percentual, que e a falha que esta faixa acabou de
+  // sofrer. Aplicar duas vezes e literalmente o que aconteceria.
+  const umaVez = applyDiscount(EXAMPLE_CENTS, pixBasisPoints);
+  const duasVezes = applyDiscount(umaVez.payableCents, pixBasisPoints);
+
   return (
     <div className="flex flex-col gap-6">
       {/* Aviso 1 de 2 — ver o cabecalho. */}
       <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-        <p className="font-medium">Esta tela ainda não muda o preço da venda.</p>
+        <p className="font-medium">
+          O preço da experiência é o cheio. O desconto entra por cima, na venda.
+        </p>
         <p className="mt-1 text-[13px] leading-relaxed">
-          A configuração já fica guardada, mas o site de agendamento ainda cobra como cobra hoje.
-          Ligar o desconto ao preço é a próxima etapa do desenvolvimento.{' '}
-          <strong>Não mexa no preço das experiências para compensar</strong> — quando a etapa
-          entrar, o desconto seria aplicado duas vezes.
+          <strong>Não baixe o preço da experiência para o valor com desconto</strong> — o sistema
+          desconta de novo, e o cliente passa a pagar menos do que você quer receber.
+          {pixBasisPoints > 0 && (
+            <>
+              {' '}
+              Com o Pix a {formatBasisPoints(pixBasisPoints)}%: cadastrando{' '}
+              {moneyLabel(EXAMPLE_CENTS)} o cliente paga {moneyLabel(umaVez.payableCents)}; se você
+              trocar o cadastro para {moneyLabel(umaVez.payableCents)}, ele passa a pagar{' '}
+              {moneyLabel(duasVezes.payableCents)}.
+            </>
+          )}{' '}
+          Nada acusa erro quando isso acontece: some do preço e aparece só na conciliação.
         </p>
       </div>
 
