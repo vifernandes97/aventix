@@ -48,8 +48,12 @@
 > (c) **Medido e incorporado ao desenho:** duas leituras concorrentes do mesmo QR
 > fazem o Asaas responder 400. Nada era duplicado, mas a mensagem dizia "o
 > provedor recusou a cobrança" — falso, e lido pelo dono com o cliente na frente.
-> (d) **Seção 10 endurecida:** `deposit_policy_text` existe e tem texto, e
-> **nenhum componente a renderiza**. A lacuna do termo é código não escrito.
+> (d) **Termo v2 publicado** (`quadriciclo-v2.ts`, `TERM_VERSION '2026-08-31'`):
+> a §5 nova traz pagamento, não devolução, no-show e remarcação em 48h pelo
+> WhatsApp, encerrando a lacuna ativa da seção 10 e a contradição da seção 4-C.
+> (e) **`deposit_policy_text` fica como ponto de extensão não implementado**, e
+> a política que **vincula** o cliente mora no corpo do termo — porque termo é
+> versionado e setting é editável sem gerar versão (seção 10).
 >
 > **Revisão 6** — pagamento com sinal + robustez da integração Asaas:
 > (a) **Pagamento parcial (sinal)** configurável por experiência: cliente paga um percentual/valor no ato e o saldo é cobrado presencialmente no dia. Motivação real: parceiro Aventurando (compra coletiva do mesmo segmento e ticket) reportou abandono no checkout por receio de golpe ao pagar o valor integral.
@@ -837,7 +841,7 @@ ORDER BY r.id;
 
 **`GET /api/experiences`** → inclui `paymentMode`, `priceCents` e, quando `deposit`, `depositCents` e `balanceCents` **já calculados no servidor** para exibir no checkout. Inclui também **`minPassengerAge`**: sem ele o wizard não teria como avisar sobre idade antes do pagamento, e a recusa só apareceria no POST, depois dos seis passos preenchidos.
 
-**Termo:** não existe `GET /api/termo`. O texto e a versão vigente (`TERM_VERSION`, `TERM_TEXT`) vivem em `lib/terms/quadriciclo-v1.ts` e entram no bundle do cliente por import direto — o formulário é `'use client'`, então buscar por API seria uma volta ao servidor sem necessidade. Versão nova = arquivo novo (`quadriciclo-v2.ts`); a reserva antiga mantém o registro do que aceitou, gravando só a versão (`termo_version`), nunca o texto.
+**Termo:** não existe `GET /api/termo`. O texto e a versão vigente (`TERM_VERSION`, `TERM_TEXT`) vivem em `lib/terms/quadriciclo-v2.ts` e entram no bundle do cliente por import direto — o formulário é `'use client'`, então buscar por API seria uma volta ao servidor sem necessidade. Versão nova = arquivo novo (`quadriciclo-v2.ts`); a reserva antiga mantém o registro do que aceitou, gravando só a versão (`termo_version`), nunca o texto.
 
 **`POST /api/reservations`** — cria cliente, reserva, alocações, participantes e pagamentos. Corpo igual à rev 5, sem campo de pagamento (o modo vem da experiência), **mais `emergencyContact: { name, phone }`** (obrigatório — passo 5 do formulário público, seção 10). `createReservation` valida presença de `termo.version`/`acceptedAt`, mas **não** que a versão seja a vigente — divida registrada em `docs/ESTADO-ATUAL.md`. Garupa abaixo de `experiences.min_passenger_age` na data do passeio responde **422**, com a idade exigida na mensagem e **sem ecoar nome ou data de nascimento** (corpo de erro pode ir para log).
 Resposta `201`:
@@ -889,7 +893,7 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 
 ### 7.2 Admin (sessão)
 
-- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/quadriciclo-v1.ts` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
+- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
 - **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
   **Idade mínima do garupa entra no CRUD** (`idadeMinimaGarupa`, inteiro 0..120; `0` = sem mínimo): é regra de segurança publicada pelo tenant, e escondê-la do dono faria a próxima trilha nascer sem regra em silêncio. Ausente no POST vira `0`, para não quebrar chamador existente.
   **Sinal no CRUD, com o percentual TRAVADO (Fase B):** `payment_mode` aceita `full` e `deposit`. O dono responde "aceita sinal? sim/não"; ele **nunca digita o percentual**, porque a seção 4-B.2 fixou o sinal em 50% para o produto. O servidor grava `deposit_percent = 50` e `deposit_fixed_cents = NULL` (`depositColumns` em `lib/experiences.ts`), que é o que `experiences_deposit_mode_check` exige — gravar `deposit` com os dois nulos viraria 500. **Escrita travada, leitura livre:** `createReservation` continua lendo o percentual da COLUNA, então o cálculo tem uma fonte só e uma linha gravada com outro percentual seguiria honrada. Se o sinal voltar a ser por experiência, o ponto único a mudar é `DEPOSIT_PERCENT`.
@@ -1318,7 +1322,11 @@ Um único login (o dono). Sem provider externo.
                                       # As Fases A..E REUSAM daqui, nunca reimplementam
   /cpf.ts                             # validacao/normalizacao de CPF — modulo PURO, unico algoritmo, usado pelo servidor E pelo wizard
   /maps.ts                            # URL de embed do mapa: lista de permissao http(s) — modulo PURO (secao 4.2)
-  /terms/quadriciclo-v1.ts            # texto do termo + TERM_VERSION (secao 10); versao nova = arquivo novo, nunca edita o antigo
+  /terms/quadriciclo-v1.ts            # NAO IMPORTADO por nada. Fica para sempre: e o registro
+                                      # das reservas que o aceitaram. Protegido por sha256 em
+                                      # tests/x-termo.test.ts
+  /terms/quadriciclo-v2.ts            # VIGENTE (secao 10). Versao nova = arquivo novo, nunca
+                                      # edita o antigo
   /jobs/expire-holds.ts               # expiracao de hold (secao 12)
   /jobs/reconcile-payments.ts         # job de 10 min (secao 8-B); vizinho do expire-holds, mesmo padrao
   /templates/types.ts                 # forma de um template de segmento
