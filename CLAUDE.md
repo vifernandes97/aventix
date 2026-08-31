@@ -34,6 +34,19 @@
 > (c) **Armadilha nova e grave na seção 19** — o seed **nunca roda em produção**;
 > migration aplicada não é dado semeado. Custou quatro dias com o mapa invisível.
 >
+> **Atualização de 31/08/2026 (dentro da rev 7, não é revisão nova):**
+> (a) **Fase C CONCLUÍDA e verificada contra o Asaas sandbox.** Cobrança do saldo
+> sob demanda, idempotente por construção — **seção 8-D nova** com as três
+> camadas. **Não exigiu migration.**
+> (b) O **reconciliador parou de gritar** sobre `balance` sem cobrança (estado
+> esperado); `deposit`/`full` sem id **continuam avisando**, porque são a borda 9
+> e há 3 reservas assim em produção.
+> (c) **Medido e incorporado ao desenho:** duas leituras concorrentes do mesmo QR
+> fazem o Asaas responder 400. Nada era duplicado, mas a mensagem dizia "o
+> provedor recusou a cobrança" — falso, e lido pelo dono com o cliente na frente.
+> (d) **Seção 10 endurecida:** `deposit_policy_text` existe e tem texto, e
+> **nenhum componente a renderiza**. A lacuna do termo é código não escrito.
+>
 > **Revisão 6** — pagamento com sinal + robustez da integração Asaas:
 > (a) **Pagamento parcial (sinal)** configurável por experiência: cliente paga um percentual/valor no ato e o saldo é cobrado presencialmente no dia. Motivação real: parceiro Aventurando (compra coletiva do mesmo segmento e ticket) reportou abandono no checkout por receio de golpe ao pagar o valor integral.
 > (b) **Nova tabela `reservation_payments`** (uma reserva → N pagamentos). Os campos de pagamento saem de `reservations`.
@@ -895,7 +908,28 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
   estado esperado** enquanto os percentuais reais não chegarem.
 - `GET /api/admin/calendar?from=&to=` — calendário nativo.
 - `GET /api/admin/customers` — clientes + histórico.
-- **`GET /api/admin/reservations/{id}/balance`** — retorna o saldo pendente e, sob demanda, o **QR Code Pix atual** da cobrança de saldo (buscado no Asaas **na hora**, nunca cacheado — QR expira).
+- **Cobrança do saldo — DUAS rotas, e a divisão é regra, não estilo:**
+  - **`GET /api/admin/reservations/{id}/balance`** — **só lê.** Saldo, estado,
+    `hasCharge`, e o **QR atual** quando a cobrança já existe (buscado no Asaas
+    **na hora**, nunca cacheado — QR expira). **Nunca cria.**
+  - **`POST /api/admin/reservations/{id}/balance/charge`** — cria ou reaproveita
+    a cobrança. É o botão.
+
+  Criar cobrança num GET poria operação de **dinheiro** atrás do verbo que
+  prefetch, retry de rede e refresh consideram seguro repetir. O "sob demanda"
+  da rota de leitura é honrado pelo POST: a demanda é o dono apertar o botão,
+  não a tela abrir.
+
+  **>>> APERTAR DUAS VEZES NÃO PODE GERAR DUAS COBRANÇAS. <<<** A regra vive em
+  `lib/payments/balance-charge.ts`, em **três camadas** (seção 8-D). A rota só
+  traduz erro tipado em HTTP e **não reimplementa regra nenhuma** — duas cópias
+  da mesma regra divergem, e a que diverge sobre dinheiro cobra errado.
+  Respostas: `200` (com `origin` ∈ `created|reused|adopted`), `404` (inexistente,
+  outro tenant, id malformado, reserva `full`), `409` (`saldo_quitado`,
+  `reserva_inativa`, `sinal_pendente`, `cobranca_em_andamento`), `422`
+  (`provedor_recusou`, **com o detalhe** — o dono precisa saber o que consertar),
+  `502` (`provedor_indisponivel`, `qr_indisponivel`).
+  O `chargeId` do provedor **não sai no corpo** de nenhuma das duas.
 - **`POST /api/admin/reservations/{id}/balance/receive-in-cash`** — chama `receiveInCash` no Asaas, marca `state='paid'`, `received_in_cash=true`, recalcula a reserva. Body: `{ paymentDate, value, notifyCustomer:false }`.
 - `POST /api/admin/reservations/{id}/cancel` — cancela reserva, libera vagas, **remove no Asaas a cobrança de saldo pendente**, marca pagamentos `cancelled`, e-mail ao cliente. Estorno do sinal é manual (seção 8-C).
 
@@ -942,12 +976,17 @@ Também exponha em `/admin` um indicador de saúde da integração (último webh
 
 **>>> PAGAMENTO SEM `asaas_payment_id`: DUAS CAUSAS, e só UMA é anomalia. <<<**
 
-O job avisa em log toda linha `pending` sem id no provedor. Isso nasceu certo,
+O job avisava em log toda linha `pending` sem id no provedor. Isso nasceu certo,
 quando a única causa possível era a **borda 9** (a criação da cobrança falhou
-depois da transação). Desde a Fase B existe uma segunda causa, **rotineira**: a
-linha `kind='balance'` é criada junto da reserva, mas a cobrança do saldo só
-nasce quando o dono a pede (Fase C). Ou seja, **toda reserva com sinal produz um
-aviso a cada 10 minutos, para sempre**.
+depois da transação). A Fase B criou uma segunda causa, **rotineira**: a linha
+`kind='balance'` é criada junto da reserva, mas a cobrança do saldo só nasce
+quando o dono a pede. Sem distinguir as duas, **toda reserva com sinal produzia
+um aviso a cada 10 minutos, para sempre** (medido: 7 linhas por ciclo com 4
+reservas de teste). O filtro por `kind` entrou na Fase C.
+
+**O filtro é por `kind`, NUNCA por "sem id".** Silenciar por ausência de id
+apagaria junto o único sinal que existe das reservas da borda 9 — há **3 em
+produção** hoje.
 
 | `kind` sem id | Significado | O job deve |
 |---|---|---|
@@ -957,7 +996,7 @@ aviso a cada 10 minutos, para sempre**.
 **Nunca silencie `deposit` nem `full`.** Eles significam reserva que nasceu sem
 QR, e o cliente não tem como pagar.
 
-**O silêncio do `balance` é permanente, não um remendo até a Fase C.** Mesmo
+**O silêncio do `balance` é permanente, não foi um remendo até a Fase C.** Mesmo
 depois dela, `balance` sem id continua sendo "o dono ainda não cobrou", que é o
 estado normal da véspera. O que volta a ser assunto do job é `balance` **com**
 id, aí sim consultado como qualquer outra cobrança.
@@ -972,6 +1011,57 @@ dispara sempre não é aviso, é fundo.
 - **As taxas não voltam**: tentar estornar 100% logo após o recebimento pode retornar `400` por saldo insuficiente na conta do tenant.
 - Portanto: **estorno é operação manual do dono** no painel do Asaas. O Aventix apenas registra o cancelamento e sinaliza "estorno pendente" na reserva. Estorno automático é pós go-live.
 
+### 8-D. Idempotência da cobrança de saldo (Fase C)
+
+O saldo é cobrado por um **botão que o dono aperta no celular, em campo, com o
+cliente esperando**. O duplo toque não é hipótese de laboratório: é o caso
+normal de um botão que demora um segundo numa tela de celular sob sol. Duas
+cobranças significam cliente podendo pagar duas vezes, e estorno de Pix é
+**manual** (seção 8-C), com taxa que não volta.
+
+**Três camadas, e nenhuma é redundante:**
+
+1. **Caminho rápido local** — a linha já tem `asaas_payment_id`? Então a cobrança
+   existe: só relê o QR. Cobre o caso comum.
+2. **Trava de serialização** — `pg_try_advisory_xact_lock` chaveada na **linha do
+   pagamento**. Cobre os dois toques **simultâneos**, em que ambos leem o id nulo
+   antes de qualquer um gravar. É `try_`, **não bloqueante**: o segundo volta na
+   hora com `409`, porque do outro lado está um dono que vai apertar de novo de
+   qualquer jeito, e uma fila de conexões só adiaria o mesmo resultado.
+3. **Pergunta ao provedor** pela `external_reference` antes de criar. **Cobre o
+   único buraco que trava local nenhuma alcança:** o processo morrer (deploy,
+   container reiniciado, conexão caída) **depois** de o Asaas criar a cobrança e
+   **antes** de gravarmos o id. Nesse estado a linha está com id nulo e a cobrança
+   existe lá; sem esta camada a próxima tentativa criaria a segunda — e essa é a
+   duplicata mais difícil de perceber, porque nasce de um deploy e não de um
+   clique. **É FAIL-CLOSED: se a pergunta não pode ser feita, NÃO se cria.** Das
+   duas falhas possíveis, "o dono tenta de novo em dez segundos" custa muito menos
+   que "o cliente recebe dois QR e paga os dois".
+
+**A trava vale para o caminho rápido também, e isso foi MEDIDO.** Dois toques
+caindo os dois na releitura disparam duas consultas concorrentes do mesmo QR, e o
+Asaas responde `400` numa delas. **Nada é duplicado** — mas sem tratamento aquilo
+subia como recusa do provedor, e a tela dizia *"o provedor recusou a cobrança"*:
+falso nos dois pontos ao mesmo tempo, e lido pelo dono com o cliente na frente.
+Por isso a invariante é **uma operação de saldo em voo por reserva, sempre**,
+criando ou relendo; e a falha de releitura tem tipo próprio
+(`BalanceQrUnavailableError` → `502 qr_indisponivel`), que diz que a cobrança
+**existe**, que nada foi duplicado, e oferece a `invoiceUrl`.
+
+**A trava não colide com o `pg_advisory_xact_lock(tenant_id)` de
+`createReservation`**, e a garantia é do Postgres: a forma de dois inteiros e a
+de um bigint ocupam espaços distintos. A trava é tomada num **ponto único**
+(`withBalanceLock`) — duas cópias divergiriam sobre o espaço de nomes, e travas
+em espaços diferentes não se veem, produzindo proteção que parece existir e não
+existe.
+
+> **`balance-charge.ts` segura a trava durante a chamada ao provedor, e o
+> cabeçalho de `charge.ts` proíbe isso. A diferença é deliberada.** Aquela
+> proibição protege o caminho **público** de venda, onde a transação segura o
+> advisory lock **do tenant** e pode esgotar o pool sob carga. Aqui a trava é
+> chaveada **na linha do pagamento**, então bloqueia exatamente e somente os
+> outros toques no mesmo botão; e o chamador é o admin de login único. O QR é
+> buscado **depois do commit** para não ser mais uma chamada sob a trava.
 ---
 
 ## 9. Notificações (e-mail via Resend — CORTADO do go-live)
@@ -1007,7 +1097,26 @@ Comprovante inclui ponto de encontro e o que levar (de `settings`). Falha de e-m
 
 ## 10. Termo de aceite digital
 
-Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — **ainda não implementado, e desde a Fase B isso é lacuna ativa**: as duas trilhas do Quadri Club vendem em `deposit` em produção, então já existe cliente pagando sinal sem que o termo diga que ele não é reembolsável. Entra no Termo v2 (seção 17). Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
+Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — **ainda não implementado, e desde a Fase B isso é lacuna ativa**: as duas trilhas do Quadri Club vendem em `deposit` em produção, então já existe cliente pagando sinal sem que o termo diga que ele não é reembolsável. Entra no Termo v2 (seção 17).
+
+> **>>> NÃO É TEXTO FALTANDO. É CÓDIGO NÃO ESCRITO. <<<** A chave
+> `deposit_policy_text` **existe** no tipo (`lib/tenant.ts`), **existe** no
+> template e **tem valor gravado** — marcado `PROVISORIO — confirmar com o
+> cliente`, ou seja, redação que o cliente nunca aprovou. E **nenhum componente
+> a renderiza**: `grep` a encontra só em `lib/tenant.ts` e no template, em
+> nenhum lugar de `app/`. Quem for fazer o Termo v2 precisa escrever a
+> renderização condicional, não só colar texto novo — e a gaveta cheia com
+> texto não aprovado é justamente o que faz a lacuna parecer resolvida.
+>
+> **O que o Termo v1 diz hoje sobre pagamento:** uma cláusula só, e ela não é
+> sobre a reserva — a §3 diz que os condutores podem interromper o passeio *sem
+> direito a reembolso* por má conduta (única ocorrência de "reembolso" no texto
+> inteiro), e a §4 trata de danos ao equipamento. **Sinal, não reembolso em
+> cancelamento, no-show, saldo no dia e remarcação não aparecem em lugar
+> nenhum.** Logo o v2 é **adição de um bloco novo**, não revisão: nada no v1
+> contradiz a política da seção 4-C. **Reserva já vendida mantém o v1** (versão
+> nova é arquivo novo), então o v2 protege dali para frente, nunca
+> retroativamente. Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
 
 ---
 
@@ -1099,7 +1208,7 @@ Um único login (o dono). Sem provider externo.
     /admin/login/page.tsx
     /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto). Abre o painel por ?reserva=id (aditivo ao clique)
     /admin/agendamentos/page.tsx      # lista consultavel de reservas: busca nome/telefone (ILIKE), filtros status/periodo; SOMENTE LEITURA; NAO exibe CPF/documento/contato
-    /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento + admin-nav; `_` = pasta privada, nao vira rota
+    /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento + balance-charge (botao Cobrar saldo) + admin-nav; `_` = pasta privada, nao vira rota
     /admin/reservas/[id]/page.tsx     # detalhe como PAGINA, para link direto. O painel sobreposto (11.1) ja cobre o uso do dia a dia
     /admin/clientes/page.tsx
     /admin/experiencias/page.tsx      # incl. modo de pagamento e sinal
@@ -1123,7 +1232,8 @@ Um único login (o dono). Sem provider externo.
     /admin/operating-hours/           # idem; recusa faixas sobrepostas (409)
     /admin/blackouts/                 # idem; horario LOCAL do tenant, sem fuso
     /admin/financial-config/          # + discounts/[method] e card-machine-rates(/[id])
-    /admin/...                        # + reservations/[id]/balance, balance/receive-in-cash, integration/health
+    /admin/reservations/[id]/balance/  # GET so LE (nunca cria) + charge/ (POST, o botao)
+    /admin/...                        # + balance/receive-in-cash (Fase D), integration/health
 /lib
   /db/schema.ts
   /db/client.ts
@@ -1154,6 +1264,9 @@ Um único login (o dono). Sem provider externo.
   /payments/asaas.ts                  # UNICO arquivo que fala "asaas": cobranca, QR, consultar, cancelar, token do webhook
   /payments/money.ts                  # centavos -> reais SEM ponto flutuante; travessia unica para o provedor
   /payments/charge.ts                 # cria a cobranca da reserva FORA da transacao (secao 5.2 passo 5)
+  /payments/balance-charge.ts         # cobranca do SALDO sob demanda (secao 8-D) — SERVER-ONLY.
+                                      # Tres camadas de idempotencia; withBalanceLock e o
+                                      # PONTO UNICO onde a trava e tomada
   /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao
   /notifications.ts                   # Resend (assincrono) — Fase 4, ainda nao existe
   /auth.ts
@@ -1267,7 +1380,7 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 | **Fase 0** | ~~**Configuração financeira**: tabela própria (fora de `settings`), desconto do Pix por tenant, taxas da maquininha por modalidade (seção 4-B.6).~~ **CONCLUÍDA em 28/08** — migration 0006, `lib/basis-points.ts`, `lib/financial-config.ts`, `/admin/financeiro`. |
 | **Fase A** | ~~**Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2).~~ **CONCLUÍDA em 28/08** — migration 0007 (`full_price_cents`, `discount_basis_points`), desconto aplicado sobre o TOTAL, wizard e servidor pela mesma `applyDiscount`. |
 | **Fase B** | ~~**Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`.~~ **CONCLUÍDA em 28/08** — sem migration; passo de escolha no wizard, `deposit` destravado no CRUD, e as três telas mostrando a pendência. |
-| **Fase C** | **Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças. |
+| **Fase C** | ~~**Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças.~~ **CONCLUÍDA em 31/08** — sem migration; três camadas de idempotência (seção 8-D), `GET`/`POST` separados, e o reconciliador parou de poluir o log. |
 | **Fase D** | **Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7). |
 | **Fase E** | **Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9). |
 | **Transversal** | **Líquido lido do Asaas** em toda reserva (seção 4-B.7). Atravessa as fases, não é etapa isolada. |
