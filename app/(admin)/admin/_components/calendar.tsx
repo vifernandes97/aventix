@@ -253,6 +253,7 @@ export function Calendar(props: Props) {
           // no celular). Custa uma ida ao servidor; paga com uma tela que nunca
           // mente sobre a agenda.
           onCancelled={() => router.refresh()}
+          onPaymentRegistered={() => router.refresh()}
         />
       )}
     </section>

@@ -17,6 +17,7 @@
 
 import { NextResponse } from 'next/server';
 
+import { listCardMachineRates } from '@/lib/financial-config';
 import { asaasProvider } from '@/lib/payments/asaas';
 import { getBalanceState } from '@/lib/payments/balance-charge';
 
@@ -29,7 +30,19 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const { id } = await context.params;
 
   try {
-    const balance = await getBalanceState(id);
+    // As taxas da maquininha viajam junto (Fase D): o painel precisa delas
+    // exatamente quando precisa do saldo, e a previa "recebido X · taxa Y ·
+    // liquido Z" tem que aparecer ANTES de o guia confirmar. A tela calcula com
+    // `applyRate`, a MESMA funcao do servidor — modulo puro, sem `server-only`,
+    // mesmo precedente da Fase A com `applyDiscount`. O servidor recalcula por
+    // autoridade no POST; isto e so o que o guia ve.
+    //
+    // Lista VAZIA e o estado esperado enquanto os percentuais reais nao
+    // chegarem, e a tela e obrigada a dizer isso em palavras.
+    const [balance, cardMachineRates] = await Promise.all([
+      getBalanceState(id),
+      listCardMachineRates(),
+    ]);
 
     // Sem linha de saldo. Tres causas indistinguiveis daqui — reserva
     // inexistente, reserva de outro tenant, reserva vendida no modo `full` — e
@@ -68,6 +81,10 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
           ? {}
           : { code: balance.chargeable.reason, detail: balance.chargeable.detail }),
         payment,
+        cardMachineRates: cardMachineRates.map((r) => ({
+          modality: r.modality,
+          rateBasisPoints: r.rateBasisPoints,
+        })),
       },
       { status: 200, headers: NO_STORE },
     );

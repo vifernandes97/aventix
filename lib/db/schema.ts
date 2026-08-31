@@ -579,10 +579,63 @@ export const reservationPayments = pgTable(
     dueDate: date('due_date').notNull(),
     paidAt: tstz('paid_at'),
     receivedInCash: boolean('received_in_cash').notNull().default(false), // maquininha/dinheiro
+
+    // -- REGISTRO DA MAQUININHA (Fase D, migration 0008) -------------------
+    //
+    // >>> CONGELADOS NO REGISTRO. O SISTEMA SO LE, NUNCA RECALCULA. <<<
+    // Regra da secao 4-B.7, e ela e a razao de estas colunas existirem em vez
+    // de o liquido ser derivado de card_machine_rates na hora de exibir. Taxa
+    // muda com o tempo; registro de dinheiro NAO pode mudar junto. Em setembro
+    // registra R$ 150 a 5% e mostra R$ 142,50; em novembro a operadora reajusta
+    // para 6%, o dono atualiza a tela, e a reserva de SETEMBRO passaria a
+    // mostrar R$ 141,00 — o passado mudando sozinho, e a conferencia com o
+    // extrato quebrando sem nada acusar erro.
+    //
+    // TODAS NULAVEIS, SEM BACKFILL: pagamento anterior a esta funcionalidade
+    // nao tem o dado, e inventa-lo seria fabricar um fato. Mesma regra que
+    // guiou emergency_contact_* (0002) e full_price_cents (0007).
+    //
+    // So se aplica ao que NAO passa pelo provedor. Para o que passa, o liquido
+    // e LIDO do Asaas (secao 4-B.7), nunca calculado.
+    cardMachineModality: cardMachineModality('card_machine_modality'),
+    // Percentual EFETIVAMENTE aplicado, em basis points (secao 4-B.6).
+    // Copia do valor vigente no instante do registro, nao referencia a
+    // card_machine_rates — uma FK reintroduziria o passado mutavel.
+    rateBasisPointsApplied: integer('rate_basis_points_applied'),
+    // >>> NULL = "NAO SEI", JAMAIS 0. <<< 0 significaria "nao teve taxa", e
+    // essa mentira faria o liquido parecer igual ao bruto. NULL acontece
+    // quando a modalidade nao tinha taxa configurada no momento do registro
+    // (decisao de 31/08, que reverte a de 28/08 — ver docs/DECISOES.md).
+    netCents: integer('net_cents'),
+
+    // -- RASTRO (Fase D) ----------------------------------------------------
+    // Esta e a UNICA operacao do sistema em que alguem declara ter recebido
+    // dinheiro SEM prova externa: nao ha webhook, nao ha confirmacao de
+    // terceiro. Sem rastro, uma divergencia de dinheiro entre o dev e o cliente
+    // nao tem como ser reconstituida.
+    // Distinto de paid_at, que e QUANDO o dinheiro entrou; isto e quando e por
+    // quem foi DECLARADO.
+    registeredBy: text('registered_by'),
+    registeredAt: tstz('registered_at'),
+
     createdAt: tstz('created_at').notNull().defaultNow(),
   },
   (t) => [
     check('reservation_payments_amount_check', sql`${t.amountCents} > 0`),
+    // Coerencia do registro manual: liquido so existe se houve percentual
+    // aplicado, e percentual so existe se houve modalidade. O caminho
+    // "modalidade sem taxa configurada" e VALIDO e para nos dois nulos, que e
+    // exatamente o "nao sei" que a coluna precisa poder expressar.
+    check(
+      'reservation_payments_card_machine_check',
+      sql`(${t.rateBasisPointsApplied} IS NULL) = (${t.netCents} IS NULL)
+          AND (${t.rateBasisPointsApplied} IS NULL OR ${t.cardMachineModality} IS NOT NULL)`,
+    ),
+    check(
+      'reservation_payments_rate_applied_range_check',
+      sql`${t.rateBasisPointsApplied} IS NULL
+          OR (${t.rateBasisPointsApplied} >= 0 AND ${t.rateBasisPointsApplied} <= 10000)`,
+    ),
     // idempotencia do webhook no banco (secao 8.2)
     uniqueIndex('idx_rp_asaas')
       .on(t.asaasPaymentId)

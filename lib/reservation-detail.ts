@@ -54,6 +54,22 @@ export type DetailPayment = {
   /** ISO 8601 ou null */
   paidAt: string | null;
   receivedInCash: boolean;
+
+  /**
+   * Registro da maquininha (Fase D), CONGELADO no instante do recebimento
+   * (secao 4-B.7). Estes campos sao LIDOS, nunca recalculados: a taxa vigente
+   * hoje nao tem nada a dizer sobre um recebimento de setembro.
+   *
+   * Todos `null` em pagamento que nao passou pela maquininha. E
+   * `netCents: null` COM `cardMachineModality` preenchida significa "a taxa
+   * nao estava configurada no registro" — nao significa zero (secao 4-B.6).
+   */
+  cardMachineModality: 'debit' | 'credit' | 'credit_installment' | null;
+  rateBasisPointsApplied: number | null;
+  netCents: number | null;
+  /** Quem DECLAROU o recebimento, e quando. Ver o cabecalho de receive-in-cash. */
+  registeredBy: string | null;
+  registeredAt: string | null;
 };
 
 export type ReservationDetail = {
@@ -151,7 +167,10 @@ type Row = {
   emergency_contact_phone: string | null;
   resources: DetailResource[];
   participants: DetailParticipant[];
-  payments: (Omit<DetailPayment, 'paidAt'> & { paidAt: string | null })[];
+  payments: (Omit<DetailPayment, 'paidAt' | 'registeredAt'> & {
+    paidAt: string | null;
+    registeredAt: string | null;
+  })[];
 };
 
 /**
@@ -256,7 +275,12 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
               'amountCents', rp.amount_cents,
               'dueDate', rp.due_date::text,
               'paidAt', rp.paid_at,
-              'receivedInCash', rp.received_in_cash
+              'receivedInCash', rp.received_in_cash,
+              'cardMachineModality', rp.card_machine_modality::text,
+              'rateBasisPointsApplied', rp.rate_basis_points_applied,
+              'netCents', rp.net_cents,
+              'registeredBy', rp.registered_by,
+              'registeredAt', rp.registered_at
             )
             -- enum payment_kind: full, deposit, balance — sinal antes do saldo.
             ORDER BY rp.kind, rp.created_at
@@ -321,7 +345,11 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
       state: row.payment_state,
       amountPaidCents: row.amount_paid_cents,
       balanceCents: Math.max(0, row.total_price_cents - row.amount_paid_cents),
-      rows: row.payments.map((p) => ({ ...p, paidAt: iso(p.paidAt) })),
+      rows: row.payments.map((p) => ({
+      ...p,
+      paidAt: iso(p.paidAt),
+      registeredAt: iso(p.registeredAt),
+    })),
     },
   };
 }

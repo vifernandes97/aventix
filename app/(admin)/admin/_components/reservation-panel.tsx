@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { formatBasisPoints } from '@/lib/basis-points';
 import type { ReservationDetail } from '@/lib/reservation-detail';
 import { BalanceCharge } from './balance-charge';
 import {
@@ -48,6 +49,12 @@ type Props = {
   onClose: () => void;
   /** Chamado depois de um cancelamento bem-sucedido, para a grade se atualizar. */
   onCancelled: () => void;
+  /**
+   * Chamado depois de um registro de pagamento (Fase D), pelo mesmo motivo:
+   * o rotulo do bloco na grade sai de `status` + `payment_state` (secao 11.1),
+   * entao liquidar o saldo muda o que a agenda mostra.
+   */
+  onPaymentRegistered: () => void;
 };
 
 /** O que o dono precisa digitar para confirmar. Maiusculas, exato. */
@@ -56,8 +63,23 @@ const CONFIRM_WORD = 'CANCELAR';
 /** Status em que cancelar faz sentido (secao 5.1). O servidor revalida. */
 const CANCELLABLE: readonly string[] = ['pending_payment', 'confirmed'];
 
-export function ReservationPanel({ reservationId, labels, onClose, onCancelled }: Props) {
+export function ReservationPanel({
+  reservationId,
+  labels,
+  onClose,
+  onCancelled,
+  onPaymentRegistered,
+}: Props) {
   const [detail, setDetail] = useState<ReservationDetail | null>(null);
+  /**
+   * Incrementado apos um registro de pagamento, para RELER o detalhe.
+   *
+   * A grade se atualiza pelo `router.refresh()` do pai, mas este painel busca
+   * o detalhe sob demanda e ficaria mostrando o saldo antigo — o dono acabaria
+   * de registrar e continuaria vendo "em aberto", que e a tela desmentindo a
+   * acao que ele acabou de tomar.
+   */
+  const [reloadToken, setReloadToken] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [confirming, setConfirming] = useState(false);
@@ -96,7 +118,7 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
       });
 
     return () => controller.abort();
-  }, [reservationId]);
+  }, [reservationId, reloadToken]);
 
   // -- fechar por Esc --------------------------------------------------------
   //
@@ -179,6 +201,11 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
       setCancelling(false);
     }
   }
+
+  const handlePaymentRegistered = useCallback(() => {
+    setReloadToken((token) => token + 1);
+    onPaymentRegistered();
+  }, [onPaymentRegistered]);
 
   const canCancel = detail !== null && CANCELLABLE.includes(detail.status);
 
@@ -390,6 +417,37 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
                     <span>
                       {PAYMENT_KIND_LABEL[row.kind]}
                       {row.receivedInCash && ' (recebido por fora)'}
+                      {/*
+                        O REGISTRO CONGELADO (secao 4-B.7). Estes numeros sao
+                        LIDOS da linha, nunca recalculados: a taxa vigente hoje
+                        nao tem nada a dizer sobre um recebimento de setembro.
+                        Congelar sem mostrar nao serviria de nada — e aqui que a
+                        conferencia com o extrato acontece.
+                      */}
+                      {row.cardMachineModality && (
+                        <span className="mt-0.5 block text-[11px] text-neutral-500">
+                          {CARD_MACHINE_LABEL[row.cardMachineModality]}
+                          {row.rateBasisPointsApplied !== null && row.netCents !== null ? (
+                            <>
+                              {' '}
+                              · taxa {formatBasisPoints(row.rateBasisPointsApplied)}% · líquido{' '}
+                              {moneyLabel(row.netCents)}
+                            </>
+                          ) : (
+                            // NUNCA em branco: branco se le como zero.
+                            <span className="text-amber-700 dark:text-amber-400">
+                              {' '}
+                              · líquido não calculado (taxa não estava configurada)
+                            </span>
+                          )}
+                          {row.registeredBy && (
+                            <span className="block">
+                              registrado por {row.registeredBy}
+                              {row.registeredAt && ` em ${stampLabel(row.registeredAt)}`}
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </span>
                     <span className="shrink-0 tabular-nums text-neutral-600 dark:text-neutral-400">
                       {moneyLabel(row.amountCents)} · {PAYMENT_STATE_LABEL[row.state]}
@@ -412,6 +470,7 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
                 <BalanceCharge
                   reservationId={detail.id}
                   balanceCents={detail.payment.balanceCents}
+                  onRegistered={handlePaymentRegistered}
                 />
               )}
             </Section>
@@ -514,6 +573,13 @@ export function ReservationPanel({ reservationId, labels, onClose, onCancelled }
 }
 
 // -- pecas de layout ---------------------------------------------------------
+
+/** Rotulos das modalidades da maquininha (Fase D). */
+const CARD_MACHINE_LABEL: Record<'debit' | 'credit' | 'credit_installment', string> = {
+  debit: 'Débito',
+  credit: 'Crédito à vista',
+  credit_installment: 'Crédito parcelado',
+};
 
 const PAYMENT_KIND_LABEL: Record<'full' | 'deposit' | 'balance', string> = {
   full: 'Valor integral',

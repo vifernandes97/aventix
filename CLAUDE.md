@@ -35,6 +35,10 @@
 > migration aplicada não é dado semeado. Custou quatro dias com o mapa invisível.
 >
 > **Atualização de 31/08/2026 (dentro da rev 7, não é revisão nova):**
+> (0) **Fase D CONCLUÍDA** — migration 0008 congela bruto, modalidade, percentual
+> e líquido na linha do pagamento, mais o rastro de quem declarou. **A regra de
+> "recusar registro sem taxa" foi REVERTIDA** (seção 4-B.6): recusar não impede
+> o dinheiro de ter sido recebido, só impede o sistema de saber.
 > (a) **Fase C CONCLUÍDA e verificada contra o Asaas sandbox.** Cobrança do saldo
 > sob demanda, idempotente por construção — **seção 8-D nova** com as três
 > camadas. **Não exigiu migration.**
@@ -623,10 +627,25 @@ enum) ou colunas nuláveis com CHECK XOR no estilo de
   falhas possíveis, escolhe a que não dá abatimento que ninguém autorizou.
 - **Taxa ausente = `NULL`, JAMAIS 0%.** Uma taxa zero é mentira que faz o líquido
   parecer igual ao bruto — número com aparência de certo, desmentido só na
-  conferência com o extrato, semanas depois. **A Fase D deve RECUSAR o registro**
-  de recebimento cuja modalidade não tenha taxa cadastrada. O tipo de retorno de
+  conferência com o extrato, semanas depois. O tipo de retorno de
   `getCardMachineRate` é `| null` exatamente para o compilador obrigar essa
   decisão no ponto de uso.
+
+  **>>> O QUE A FASE D FAZ COM O `NULL` MUDOU EM 31/08. <<<** A rev 7 mandava
+  **recusar** o registro. Foi revertido: a Fase D **REGISTRA**, gravando
+  `net_cents = NULL`. **Por quê:** recusar não impede o dinheiro de ter sido
+  recebido — impede só o sistema de saber, e isso viola a regra mais antiga e
+  mais forte da seção 1, *"nunca deixe o saldo fora do sistema"*. Recusar também
+  cria o incentivo para o guia, bloqueado em campo, abrir `/admin/financeiro` e
+  **digitar um percentual chutado** (o login é único), produzindo exatamente o
+  número errado com aparência de certo que a regra queria impedir. O que **não**
+  mudou: **nunca gravar 0**. `NULL` é "não sei"; `0` é "não teve taxa".
+
+  A permissão vem com **condição obrigatória**: `/admin/financeiro` exibe a
+  contagem de registros sem líquido (`countReceiptsAwaitingNet`). Sem ela, teria
+  se trocado uma falha visível por uma invisível. Preencher depois é operação
+  **deliberada**, com o percentual histórico do extrato — nunca recálculo
+  automático, que a 4-B.7 proíbe.
 
 É essa assimetria que justifica as duas APIs terem formas diferentes: desconto é
 **upsert por método** (sem create nem delete, porque "sem linha" e "0 bp" dizem o
@@ -655,6 +674,19 @@ com o extrato quebra — sem nada acusar erro.
 **Para pagamentos que passam pelo Asaas, o líquido é LIDO do Asaas** (eles
 informam na consulta da cobrança), não calculado. **Só a maquininha exige
 cálculo**, porque acontece fora do provedor.
+
+**IMPLEMENTADO na Fase D** (migration 0008), em `reservation_payments`:
+`card_machine_modality`, `rate_basis_points_applied`, `net_cents`, mais o rastro
+(`registered_by`, `registered_at`). Todas nuláveis, sem backfill. A escrita é
+`lib/payments/receive-in-cash.ts`; **nenhum leitor recalcula**, e
+`tests/w-maquininha.test.ts` (W4.1 e W4.3) trava isso pelos dois lados — a
+coluna e o caminho de leitura.
+
+**O RASTRO é obrigatório e sai da SESSÃO, nunca do corpo da requisição.** Este é
+o único ponto do sistema em que alguém **declara** ter recebido dinheiro sem
+prova externa: não há webhook, não há confirmação de terceiro. Sem `quem` e
+`quando`, uma divergência de dinheiro entre o dev e o cliente não tem como ser
+reconstituída.
 
 ### 4-B.8 Cartão: via `invoiceUrl` do Asaas, nunca formulário próprio
 
@@ -930,7 +962,26 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
   (`provedor_recusou`, **com o detalhe** — o dono precisa saber o que consertar),
   `502` (`provedor_indisponivel`, `qr_indisponivel`).
   O `chargeId` do provedor **não sai no corpo** de nenhuma das duas.
-- **`POST /api/admin/reservations/{id}/balance/receive-in-cash`** — chama `receiveInCash` no Asaas, marca `state='paid'`, `received_in_cash=true`, recalcula a reserva. Body: `{ paymentDate, value, notifyCustomer:false }`.
+- **`POST /api/admin/reservations/{id}/balance/receive-in-cash`** — registra o
+  saldo recebido na maquininha. Body: `{ valorBrutoCentavos, modalidade }`.
+  Marca `state='paid'`, `received_in_cash=true`, grava os quatro valores
+  congelados (4-B.7) e recalcula a reserva. **O declarante vem da SESSÃO**, nunca
+  do corpo: rastro que o cliente da requisição escolhe não é rastro.
+  `409 saldo_ja_liquidado` é o **caminho duplo** (o cliente pagou por Pix mais
+  cedo); `404` cobre inexistente/outro tenant/id malformado/reserva `full`.
+
+  **>>> NÃO chama `receiveInCash` no Asaas. <<<** O dinheiro **nunca passou pelo
+  provedor**, então não há cobrança a baixar lá. O que a rota faz é **CANCELAR**
+  a cobrança Pix do saldo, se a Fase C tiver gerado uma: sem isso o cliente paga
+  de novo em casa achando que ainda deve, e o webhook — encontrando a linha já
+  `paid` — responderia `200` sem registrar nada, com o dinheiro entrando na
+  conta do tenant **sem aparecer no sistema**.
+
+  **A ordem é deliberada: grava primeiro, cancela depois.** Cancelar antes e
+  falhar na escrita deixaria o cliente sem como pagar online um saldo que o
+  sistema ainda considera em aberto. Gravar antes e falhar no cancelamento deixa
+  o dinheiro corretamente registrado e uma cobrança a cancelar à mão — e a tela
+  é obrigada a avisar (`providerCharge: 'falhou'`).
 - `POST /api/admin/reservations/{id}/cancel` — cancela reserva, libera vagas, **remove no Asaas a cobrança de saldo pendente**, marca pagamentos `cancelled`, e-mail ao cliente. Estorno do sinal é manual (seção 8-C).
 
 ---
@@ -1233,6 +1284,7 @@ Um único login (o dono). Sem provider externo.
     /admin/blackouts/                 # idem; horario LOCAL do tenant, sem fuso
     /admin/financial-config/          # + discounts/[method] e card-machine-rates(/[id])
     /admin/reservations/[id]/balance/  # GET so LE (nunca cria) + charge/ (POST, o botao)
+                                      # + receive-in-cash/ (POST, maquininha — Fase D)
     /admin/...                        # + balance/receive-in-cash (Fase D), integration/health
 /lib
   /db/schema.ts
@@ -1264,6 +1316,9 @@ Um único login (o dono). Sem provider externo.
   /payments/asaas.ts                  # UNICO arquivo que fala "asaas": cobranca, QR, consultar, cancelar, token do webhook
   /payments/money.ts                  # centavos -> reais SEM ponto flutuante; travessia unica para o provedor
   /payments/charge.ts                 # cria a cobranca da reserva FORA da transacao (secao 5.2 passo 5)
+  /payments/receive-in-cash.ts        # registro manual da maquininha (Fase D) — SERVER-ONLY.
+                                      # Congela bruto/modalidade/percentual/liquido (4-B.7),
+                                      # grava o RASTRO e cancela a cobranca Pix do saldo
   /payments/balance-charge.ts         # cobranca do SALDO sob demanda (secao 8-D) — SERVER-ONLY.
                                       # Tres camadas de idempotencia; withBalanceLock e o
                                       # PONTO UNICO onde a trava e tomada
@@ -1381,7 +1436,7 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 | **Fase A** | ~~**Preço por método** + **Pix integral com desconto** (seção 4-B.1 e 4-B.2).~~ **CONCLUÍDA em 28/08** — migration 0007 (`full_price_cents`, `discount_basis_points`), desconto aplicado sobre o TOTAL, wizard e servidor pela mesma `applyDiscount`. |
 | **Fase B** | ~~**Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`.~~ **CONCLUÍDA em 28/08** — sem migration; passo de escolha no wizard, `deposit` destravado no CRUD, e as três telas mostrando a pendência. |
 | **Fase C** | ~~**Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças.~~ **CONCLUÍDA em 31/08** — sem migration; três camadas de idempotência (seção 8-D), `GET`/`POST` separados, e o reconciliador parou de poluir o log. |
-| **Fase D** | **Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7). |
+| **Fase D** | ~~**Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7).~~ **CONCLUÍDA em 31/08** — migration 0008, botão "Recebi na maquininha" no painel, taxa ausente passa a REGISTRAR com líquido `NULL` (reversão registrada em 4-B.6). |
 | **Fase E** | **Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9). |
 | **Transversal** | **Líquido lido do Asaas** em toda reserva (seção 4-B.7). Atravessa as fases, não é etapa isolada. |
 | **Termo v2** | Em **paralelo**: inclui a política de cancelamento e resolve a contradição das 48h (seção 4-C). |

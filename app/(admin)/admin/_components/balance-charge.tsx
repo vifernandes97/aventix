@@ -22,12 +22,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import { ReceiveInCash, type CardMachineRate } from './receive-in-cash';
 import { moneyLabel } from './shared';
 
 type Props = {
   reservationId: string;
   /** Saldo em aberto, do detalhe ja carregado. Fonte do numero exibido. */
   balanceCents: number;
+  /** Fase D: registro na maquininha concluido — o painel rele o detalhe. */
+  onRegistered: () => void;
 };
 
 type Qr = { qrCodeBase64: string; copyPaste: string; expiresAt: string | null };
@@ -38,6 +41,8 @@ type BalanceState = {
   code?: string;
   detail?: string;
   payment: Qr | null;
+  /** Fase D: taxas vigentes, para a previa dos tres numeros. Pode vir vazia. */
+  cardMachineRates: CardMachineRate[];
 };
 
 /** Mensagens por `code` do servidor. O dono precisa saber O QUE fazer. */
@@ -53,7 +58,7 @@ const CODE_MESSAGE: Record<string, string> = {
     'A cobrança existe e nada foi duplicado — só o QR não veio agora. Tente de novo ou abra a fatura.',
 };
 
-export function BalanceCharge({ reservationId, balanceCents }: Props) {
+export function BalanceCharge({ reservationId, balanceCents, onRegistered }: Props) {
   const [state, setState] = useState<BalanceState | null>(null);
   const [qr, setQr] = useState<Qr | null>(null);
   const [charging, setCharging] = useState(false);
@@ -176,6 +181,20 @@ export function BalanceCharge({ reservationId, balanceCents }: Props) {
           Abrir fatura no Asaas
         </a>
       )}
+
+      {/*
+        OS DOIS CAMINHOS DE QUITACAO, lado a lado (secao 1): cobranca online e
+        recebimento por fora. O segundo NAO desaparece quando o QR aparece — o
+        guia pode ter gerado o QR e o cliente ter preferido a maquininha, e
+        esconder a opcao deixaria o saldo fora do sistema, que e o que a secao 1
+        proibe em voz alta.
+      */}
+      <ReceiveInCash
+        reservationId={reservationId}
+        balanceCents={balanceCents}
+        rates={state?.cardMachineRates ?? []}
+        onRegistered={onRegistered}
+      />
 
       {qr && (
         <div className="flex flex-col items-center gap-2 rounded border border-neutral-200 p-3 dark:border-neutral-800">
