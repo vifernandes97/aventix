@@ -115,9 +115,20 @@ export const quadricicloTemplate: SegmentTemplate = {
     // apagado no dia em que alguem rodar o seed de novo.
     support_whatsapp: '5519999015663',
 
-    // So aparece no termo quando a experiencia for 'deposit' (secao 10). Fica
-    // preenchido para nao travar a troca de modo, mesmo com as duas experiencias
-    // em 'full' hoje.
+    // >>> ESTE VALOR NAO E RENDERIZADO EM LUGAR NENHUM. NAO E BUG. <<<
+    // O comentario anterior dizia que ele "aparece no termo quando a
+    // experiencia for 'deposit'". Isso nunca foi implementado, e desde o Termo
+    // v2 (31/08) nao vai ser: a politica do sinal do Quadri Club vive no CORPO
+    // do termo (secao 5 de lib/terms/quadriciclo-v2.ts), porque termo e
+    // registro VERSIONADO e setting e editavel sem gerar versao — ver a nota
+    // longa em SettingKey (lib/tenant.ts) e CLAUDE.md secao 10.
+    //
+    // O valor fica guardado como PONTO DE PARTIDA para um tenant futuro cuja
+    // politica precise variar sem trocar de versao de termo. Duas ressalvas
+    // para quem reaproveitar: ele NUNCA foi aprovado pelo cliente (segue
+    // marcado PROVISORIO) e descreve a operacao do Quadri Club, nao a de
+    // ninguem mais. O texto que VINCULA o cliente hoje e o do termo v2, e e
+    // ele que prevalece sobre qualquer coisa escrita aqui.
     deposit_policy_text:
       'O sinal pago no ato confirma a reserva e nao e reembolsavel em caso de cancelamento pelo cliente. O valor restante e pago no dia do passeio, direto com o guia, antes da saida.', // PROVISORIO — confirmar com o cliente
   },

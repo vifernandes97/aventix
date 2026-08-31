@@ -1148,26 +1148,37 @@ Comprovante inclui ponto de encontro e o que levar (de `settings`). Falha de e-m
 
 ## 10. Termo de aceite digital
 
-Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** `lib/terms/quadriciclo-v1.ts` (seção 14). Trocar o texto é criar `quadriciclo-v2.ts` com nova `TERM_VERSION`, nunca editar o arquivo existente — reserva antiga mantém o registro de que aceitou a versão dela, com o texto dela. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito. **Adição da rev 6:** quando a experiência for `deposit`, o termo deve conter a política do sinal (`settings.deposit_policy_text`), incluindo se é reembolsável — **ainda não implementado, e desde a Fase B isso é lacuna ativa**: as duas trilhas do Quadri Club vendem em `deposit` em produção, então já existe cliente pagando sinal sem que o termo diga que ele não é reembolsável. Entra no Termo v2 (seção 17).
+Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** a versão vigente é `lib/terms/quadriciclo-v2.ts` (`TERM_VERSION = '2026-08-31'`); `quadriciclo-v1.ts` **permanece no repositório para sempre** e não é importado por nada — é o registro das reservas que o aceitaram. Trocar o texto é criar arquivo novo com nova `TERM_VERSION`, **nunca editar o existente**: a reserva grava só a versão, então editar faria uma string já gravada resolver para um texto que aquelas pessoas não leram. `tests/x-termo.test.ts` trava isso com o **sha256 do v1 fixado** — se aquele teste falhar, o conserto é desfazer a edição e criar um v3, jamais atualizar o hash. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito.
 
-> **>>> NÃO É TEXTO FALTANDO. É CÓDIGO NÃO ESCRITO. <<<** A chave
-> `deposit_policy_text` **existe** no tipo (`lib/tenant.ts`), **existe** no
-> template e **tem valor gravado** — marcado `PROVISORIO — confirmar com o
-> cliente`, ou seja, redação que o cliente nunca aprovou. E **nenhum componente
-> a renderiza**: `grep` a encontra só em `lib/tenant.ts` e no template, em
-> nenhum lugar de `app/`. Quem for fazer o Termo v2 precisa escrever a
-> renderização condicional, não só colar texto novo — e a gaveta cheia com
-> texto não aprovado é justamente o que faz a lacuna parecer resolvida.
+**A política do sinal do Quadri Club vive no CORPO do termo (v2, §5), não em `settings`.** A §5 cobre pagamento (integral ou sinal de 50%), não devolução em cancelamento, no-show e remarcação em 48h pelo WhatsApp. Isto encerra a lacuna que a rev 6 abriu e que ficou ativa desde a Fase B.
+
+> **>>> POR QUE A POLÍTICA MORA NO TERMO E NÃO NUMA SETTING <<<**
 >
-> **O que o Termo v1 diz hoje sobre pagamento:** uma cláusula só, e ela não é
-> sobre a reserva — a §3 diz que os condutores podem interromper o passeio *sem
-> direito a reembolso* por má conduta (única ocorrência de "reembolso" no texto
-> inteiro), e a §4 trata de danos ao equipamento. **Sinal, não reembolso em
-> cancelamento, no-show, saldo no dia e remarcação não aparecem em lugar
-> nenhum.** Logo o v2 é **adição de um bloco novo**, não revisão: nada no v1
-> contradiz a política da seção 4-C. **Reserva já vendida mantém o v1** (versão
-> nova é arquivo novo), então o v2 protege dali para frente, nunca
-> retroativamente. Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
+> A rev 6 previa que a política do sinal viesse de `settings.deposit_policy_text`,
+> renderizada condicionalmente quando a experiência fosse `deposit`. **Nunca foi
+> implementado, e o Termo v2 resolveu o problema por outro caminho** — que é o
+> caminho certo, pela razão abaixo.
+>
+> **Termo é registro jurídico VERSIONADO; setting é EDITÁVEL sem gerar versão.**
+> A reserva grava qual versão do termo foi aceita. Uma política que morasse em
+> `settings` poderia ser editada no admin a qualquer momento **sem produzir
+> versão nova** — e então uma reserva antiga, apontando para a mesma
+> `termo_version`, passaria a exibir uma política que aquele cliente nunca leu.
+> É exatamente a falha que o versionamento por arquivo existe para impedir,
+> reintroduzida pela porta dos fundos. **Para o que VINCULA o cliente, o corpo
+> do termo é o único lugar correto.**
+>
+> **A chave NÃO foi apagada, e isso é deliberado.** `deposit_policy_text` vive
+> no tipo **genérico** `SettingKey`, não no template do quadriciclo: é ponto de
+> extensão para um tenant cuja política de sinal precise variar sem trocar de
+> versão de termo — por exemplo, um valor apenas informativo, exibido fora do
+> termo. **Permanece NÃO IMPLEMENTADA e não renderizada por componente nenhum.**
+> Apagar hoje seria jogar fora o ponto de extensão para economizar uma linha, e
+> recriar depois custa mudança de tipo. Quem for implementá-la um dia precisa
+> decidir antes se aquele texto **vincula** — se vincular, o lugar dele é o
+> termo, não a setting.
+>
+> Validade: MP 2.200-2/2001 e Lei 14.063/2020 (texto a validar com o jurídico).
 
 ---
 

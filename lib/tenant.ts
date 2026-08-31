@@ -105,6 +105,23 @@ export type SettingKey =
   // chave falta ou esta em branco, em vez de renderizar rotulo sem valor. Nasce
   // vazia de proposito — o numero ainda nao foi informado pelo cliente.
   | 'support_whatsapp'
+  // >>> NAO E RENDERIZADA POR COMPONENTE NENHUM, E ISSO NAO E BUG. <<<
+  // A rev 6 previa que a politica do sinal viesse daqui para dentro do termo,
+  // condicionada a `payment_mode='deposit'`. Nunca foi implementado, e o Termo
+  // v2 (31/08) resolveu por outro caminho: a politica vive no CORPO do termo
+  // (secao 5 de lib/terms/quadriciclo-v2.ts), que e onde tem de viver.
+  //
+  // O MOTIVO, e ele vale para qualquer texto que VINCULE o cliente: termo e
+  // registro VERSIONADO — a reserva grava qual versao aceitou. Setting e
+  // editavel no admin sem gerar versao nova, entao uma politica guardada aqui
+  // poderia mudar e fazer uma reserva antiga passar a exibir texto que aquele
+  // cliente nunca leu.
+  //
+  // A chave FICA como PONTO DE EXTENSAO nao implementado: ela vive no tipo
+  // GENERICO, e um tenant futuro pode precisar de texto de sinal que varie sem
+  // trocar de versao de termo (informativo, exibido fora do termo). Quem for
+  // implementar decide ANTES se aquele texto vincula; se vincular, o lugar e o
+  // termo. Ver CLAUDE.md secao 10 e docs/DECISOES.md (31/08).
   | 'deposit_policy_text'
   | 'single_experience_per_slot'
   | 'min_lead_minutes';
