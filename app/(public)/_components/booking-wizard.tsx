@@ -24,7 +24,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { splitByBasisPoints } from '@/lib/basis-points';
 import type { PublicExperience } from '@/lib/experiences';
-import { TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
+import { TERM_VERSION } from '@/lib/terms/quadriciclo-v2';
 
 /**
  * Sinal de 50% em basis points (secao 4-B.2). Fixo do produto, nao configuravel

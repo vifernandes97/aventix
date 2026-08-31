@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { formatCpf, normalizeCpf } from '@/lib/cpf';
 import type { PublicExperience } from '@/lib/experiences';
-import { TERM_TEXT, TERM_VERSION } from '@/lib/terms/quadriciclo-v1';
+import { TERM_TEXT, TERM_VERSION } from '@/lib/terms/quadriciclo-v2';
 
 import type { CreatedReservation } from './booking-wizard';
 import {
