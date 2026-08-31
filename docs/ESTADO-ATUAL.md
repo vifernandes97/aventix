@@ -1,7 +1,7 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-28
+> Última atualização: 2026-08-31
 
 ## Enquadramento (leia antes de priorizar qualquer coisa)
 
@@ -12,53 +12,47 @@ os leads caem de uma vez.
 
 O risco não é chegar a tempo — é **chegar testado com gente real antes do pico**.
 
-## PRÓXIMO PASSO — Fase C: cobrança do saldo sob demanda, idempotente
+## PRÓXIMO PASSO — Termo v2 (bloqueado no cliente) e Fase D
 
-O saldo já existe, já aparece nas três telas e já é cobrado presencialmente. O
-que falta é o **botão que gera a cobrança online do saldo** no dia.
+A Fase C fechou. Os dois próximos itens não competem: um depende do cliente e o
+outro depende de percentuais que também dependem do cliente.
 
-**A exigência que define a fase é a idempotência:** apertar duas vezes não pode
-gerar duas cobranças. O dono vai usar isso no celular, em campo, com o cliente
-esperando — o duplo toque não é hipótese, é o caso normal. A linha de `balance`
-já existe em `reservation_payments` desde a criação da reserva, com
-`external_reference` determinístico (`{uuid}:balance`), e é ela que dá a chave
-natural para a idempotência.
+### Termo v2 — o que falta NÃO é texto, é código
 
-### Entra junto: o reconciliador está poluindo o log, e vai piorar
+**Levantamento feito nesta sessão, e ele muda o tamanho da tarefa:**
+`settings.deposit_policy_text` **existe** no tipo (`lib/tenant.ts`), **existe**
+no template e **tem valor gravado** — marcado `PROVISORIO — confirmar com o
+cliente`. E **nenhum componente a renderiza**: `grep` não a encontra em lugar
+nenhum de `app/`. A seção 10 vinha sendo lida como "falta o texto"; **falta a
+renderização condicional**, que não existe.
 
-**Descoberto em produção em 28/08, depois do fim de sessão.** A Fase B cria a
-linha `kind='balance'` na reserva, mas a cobrança do saldo só nasce na Fase C.
-Então existe linha de pagamento sem `asaas_payment_id`, e o job de reconciliação
-a encontra a cada 10 minutos e loga:
+**O que o Termo v1 diz hoje sobre pagamento** (`lib/terms/quadriciclo-v1.ts`,
+`TERM_VERSION = '2026-08-01'`):
 
-```
-[reconcile-payments] pagamento <uuid> (reserva <uuid>) sem id no provedor; nada a consultar
-```
+- §3 — o passeio pode ser interrompido **"sem direito a reembolso"** por má
+  conduta. **Única ocorrência de "reembolso" no texto inteiro.**
+- §4 — responsabilidade por danos ao equipamento (resgate, reparo, peças).
 
-**Medido:** 7 linhas por ciclo com apenas 4 reservas de teste. Com 30 reservas
-depois do vídeo do @grandecampinas, são 30 linhas a cada 10 minutos, **para
-sempre**. Ruído constante faz parar de ler o log, e é olhando log que este
-projeto pegou falha surda três vezes.
+**Não aparecem em lugar nenhum:** sinal, não reembolso em cancelamento pelo
+cliente, no-show, saldo pago no dia, remarcação/48h, formas de pagamento.
 
-**O conserto:** o reconciliador ignora `kind='balance'` **sem** cobrança, porque
-é estado esperado e não anomalia. Encaixa nesta fase porque é ela que passa a
-criar essa cobrança.
+**Portanto o v2 é ADIÇÃO de um bloco novo, não revisão.** Nada no v1 contradiz a
+política da seção 4-C, então não há redação existente para renegociar. Provável
+formato: §5 nova ("Pagamento, cancelamento e remarcação"), com a §5 atual virando
+§6. **Reserva já vendida mantém o v1** (versão nova é arquivo novo), então o v2
+protege dali para frente, nunca retroativamente.
 
-**>>> NÃO SILENCIE `deposit` NEM `full` SEM ID. <<<** Esses **são** anomalia —
-borda 9, a criação da cobrança falhou e a reserva nasceu sem QR. **Há 3 reservas
-assim em produção agora**, de tentativas com valor abaixo do mínimo do Asaas.
-Silenciar por "sem id" em vez de por `kind` apagaria o único sinal que existe
-delas.
+**Bloqueado em duas coisas do cliente:** a redação aprovada, e a contradição
+entre documentos — o texto oficial em `settings.meeting_point` (tela de
+confirmação, **depois** de pagar) promete remarcação em 48h sem dizer como,
+enquanto o termo (**antes** de pagar) dirá que não há devolução.
 
-**Detalhe de implementação:** a query de `lib/jobs/reconcile-payments.ts` **não
-seleciona `kind` hoje** — o filtro precisa desse campo. E o comentário do bloco
-`if (!row.chargeId)` atribui a ausência só à borda 9; ele precisa passar a
-conhecer as duas causas, senão o próximo a ler conclui que silenciar qualquer uma
-é seguro.
+### Fase D — registro manual da maquininha
 
-**O silêncio do `balance` é permanente, não um remendo.** Mesmo depois da Fase C,
-`balance` sem id continua significando "o dono ainda não cobrou" — o estado
-normal da véspera. O que volta a ser assunto do job é `balance` **com** id.
+Bloqueada nos **percentuais reais por modalidade**, que o cliente não enviou. A
+tabela e a tela já os aceitam; vazia é o estado honesto. Regra que já está
+decidida e não pode ser afrouxada: **taxa ausente é `NULL`, jamais 0%**, e a
+Fase D deve **recusar** o registro cuja modalidade não tenha taxa (seção 4-B.6).
 
 ### Faseamento (CLAUDE.md seção 17)
 
@@ -67,116 +61,137 @@ normal da véspera. O que volta a ser assunto do job é `balance` **com** id.
 | **Fase 0** — configuração financeira | **CONCLUÍDA** |
 | **Fase A** — preço cheio + desconto do Pix | **CONCLUÍDA, validada em produção** |
 | **Fase B** — sinal de 50% via Pix | **CONCLUÍDA, validada em produção com dinheiro real** |
-| **Fase C** — cobrança do saldo sob demanda, idempotente | **PRÓXIMA** |
-| **Fase D** — registro manual da maquininha, líquido e taxa congelados | pendente |
+| **Fase C** — cobrança do saldo sob demanda, idempotente | **CONCLUÍDA em 31/08, verificada contra o sandbox** |
+| **Fase D** — registro manual da maquininha | **bloqueada no cliente** (percentuais) |
 | **Fase E** — cartão via `invoiceUrl` + chargeback | pendente |
 | **Transversal** — líquido lido do Asaas | pendente |
-| **Termo v2** — política de cancelamento + remarcação + política do sinal | pendente, **agora urgente** |
+| **Termo v2** | **bloqueado no cliente** (redação), e tem código a escrever |
 | **Antes do vídeo** — testes com clientes reais | em andamento |
-
-## Estado de produção (VERIFICADO por SELECT, não relatado)
-
-- Commit: **`b629a11`** (`main` = `origin/main`).
-- **`experiences`**: Montanha e Fazenda em `payment_mode = 'deposit'`,
-  `deposit_percent = 50`, `price_cents` **34999** e **24999** (os cheios).
-- **`payment_method_discounts`**: `pix | 700`.
-- **`settings`**: `meeting_point` com **876 caracteres e 10 quebras de linha**;
-  `what_to_bring` **vazio de propósito**.
-- **Migrations**: todas aplicadas.
-- **Reserva com sinal validada com DINHEIRO REAL**: entrada e saldo somando o
-  total exato, a tela mostrando a pendência, mapa e WhatsApp renderizando.
-
-> **Divergência a conferir:** o fechamento desta sessão registrou "migrations
-> 7/7", mas o disco tem **oito** arquivos (`0000` a `0007`) e o banco local tem
-> **oito** linhas aplicadas. O mais provável é que "7" se refira ao número da
-> última (`0007`). Como a Fase A depende das colunas da 0007 e ela funcionou em
-> produção, a 0007 está aplicada lá. **Confira o número absoluto** antes de
-> assumir: `SELECT count(*) FROM drizzle.__drizzle_migrations;` deve dar **8**.
 
 ## O que foi entregue nesta sessão
 
-**Fase A** — a experiência guarda o **valor cheio** e o Pix desconta 7%. O preço
-que o cliente paga **não mudou** (R$ 325,49 e R$ 232,49), só a origem. Migration
-0007 congela `full_price_cents` e `discount_basis_points` na reserva. O desconto
-incide sobre o **total**, e o wizard chama a **mesma** `applyDiscount` do
-servidor.
+**Fase C — cobrança do saldo sob demanda, idempotente.** Sem migration.
 
-**Fase B** — sinal de 50% via Pix, com `confirmed` + `partial`. Passo de escolha
-no wizard com as duas opções lado a lado, `deposit` destravado no CRUD com o
-percentual travado em 50, e **as três telas mostrando a pendência**.
+- `lib/payments/balance-charge.ts` — o núcleo, com **três camadas** de
+  idempotência (seção 8-D do CLAUDE.md).
+- `GET /api/admin/reservations/{id}/balance` (só lê, nunca cria) e
+  `POST .../balance/charge` (o botão).
+- `PaymentProvider` ganhou `findChargeByExternalReference`, com conferência
+  defensiva da referência de volta.
+- `app/(admin)/admin/_components/balance-charge.tsx` — botão, QR e copia-e-cola
+  no painel de detalhe.
+- Reconciliador parou de poluir o log.
 
-**Texto oficial do cliente** publicado em `settings.meeting_point`, com o título
-do bloco mudando para "Informações importantes".
+### As três camadas, e por que a terceira existe
 
-## >>> CORREÇÃO DE PREMISSA: o texto do cliente NUNCA esteve publicado <<<
+1. **Caminho rápido local** — a linha já tem `asaas_payment_id`: só relê o QR.
+2. **Trava de serialização** — `pg_try_advisory_xact_lock` na linha do pagamento,
+   **não bloqueante**: o segundo toque volta na hora com 409.
+3. **Pergunta ao provedor** pela `external_reference` antes de criar.
 
-A documentação vinha afirmando que o texto oficial estava em produção desde
-24/08. **Não estava.** O template tinha os placeholders marcados
-`PROVISORIO — confirmar com o cliente`, e produção refletia isso
-(`meeting_point` com **84 caracteres**).
+**A terceira existe porque as duas primeiras vivem inteiramente dentro do nosso
+processo e do nosso banco.** Nenhuma alcança o buraco em que o processo **morre**
+(deploy, container reiniciado, conexão caída) **depois** de o Asaas criar a
+cobrança e **antes** de gravarmos o id: ali a linha tem id nulo, a cobrança
+existe lá, e as camadas 1 e 2 concordam que "não há cobrança" — as duas erradas
+ao mesmo tempo, sem conflito entre si que denuncie o erro. **É a duplicata mais
+perigosa das três, porque nasce de um deploy e não de um clique.** A camada 3 é
+**fail-closed**: não dando para perguntar, não se cria.
 
-O que subiu em 24/08 foi o **componente** que renderiza texto longo com quebras
-preservadas. O **conteúdo** só entrou em 28/08. É a mesma classe de engano do
-mapa: infraestrutura no ar tratada como funcionalidade entregue.
+Verificada no mundo real: recriada a reserva com id nulo e a cobrança ainda viva
+no sandbox, o POST devolveu **`origin=adopted`**.
 
-## >>> A ARMADILHA DO SEED MORDEU QUATRO VEZES NESTA SESSÃO <<<
+### O achado do 400 em leitura concorrente
 
-Quatro `UPDATE` manuais em produção: os dois **preços**, o **`payment_mode`**, o
-**`meeting_point`** e o **`what_to_bring`**. Nenhum acusaria falha se esquecido.
+**MEDIDO contra o sandbox, e mudou o desenho.** Dois toques que caem **os dois**
+no caminho rápido disparam duas consultas concorrentes ao mesmo QR, e o Asaas
+responde `400 "Um erro desconhecido foi encontrado"` numa delas.
 
-**Os dois de conteúdo são os que se esquece**, porque não têm sintoma técnico —
-a tela renderiza perfeitamente com o texto velho. E o `what_to_bring` é o pior:
-é um `UPDATE` que grava **string vazia**, então "não fiz" é indistinguível de
-"não precisava fazer".
+**Nada era duplicado.** O estrago era inteiramente na **mensagem**: aquele 400
+subia como recusa e a tela dizia **"o provedor recusou a cobrança"** — falso em
+dois pontos ao mesmo tempo, e chegando ao dono **em campo, com o cliente na
+frente**, que é exatamente o cenário em que ele reage refazendo uma cobrança que
+já existe.
 
-**`POST /api/admin/seed` deixou de ser conveniência.** Com quatro ocorrências
-numa sessão só, o custo de não a ter passou o de construí-la. É candidata real a
-entrar antes da Fase D.
+Consertos: a trava passou a valer para o caminho rápido (invariante: **uma
+operação de saldo em voo por reserva, sempre**), e a falha de releitura ganhou
+tipo próprio, `BalanceQrUnavailableError` → `502 qr_indisponivel`, que diz que a
+cobrança **existe**, que nada foi duplicado, e oferece a `invoiceUrl`.
 
-**Conferir conteúdo exige contar as quebras, não só os caracteres:** o console
-pode entregar o texto com os `\n` colapsados, e aí o tamanho confere e a tela
-vira parede de texto.
+**Nenhum teste com provedor mockado teria produzido esse 400:** ele é
+comportamento do Asaas sob concorrência, não do nosso código.
+
+### O teste de corrida foi verificado POR MUTAÇÃO
+
+O caso V1.2 passou na primeira execução, e **isso não é evidência de nada**: um
+teste de concorrência passa igual quando a corrida não acontece. A trava foi
+**removida de propósito** e o teste rodado de novo — falhou com
+`expected [...] to have a length of 1 but got 2`. Só então a trava voltou.
+
+**Regra que fica: todo teste de corrida deste projeto precisa ser visto FALHANDO
+com a proteção desligada antes de ser aceito como verde.** Sem esse passo, o que
+se tem é um teste que afirma a propriedade e um sistema que talvez não a tenha, e
+os dois combinam perfeitamente.
+
+## >>> AS TELAS DO ADMIN FORAM VISTAS EM NAVEGADOR AUTENTICADO <<<
+
+**Lacuna que este documento arrastava desde 22/08, fechada em parte.** `/admin/*`
+está atrás do login e só existe o hash da senha, então tudo ali era provado por
+teste e por build, **nunca por olho**.
+
+Método: cookie de sessão selado com `iron-session` a partir do `SESSION_SECRET`
+do `.env` **local** (script temporário, apagado), injetado no navegador, contra o
+banco de desenvolvimento com uma reserva-fixture `confirmed` + `partial`.
+
+O que só apareceu por causa disso:
+
+- o botão **"Cobrar saldo (R$ 162,74)"** com o valor certo;
+- o **QR real** vindo do sandbox, e o achado do 400 acima;
+- **não previsto:** o rótulo **"SALDO R$ 162,74" no bloco da agenda**, que é a
+  correção mais importante da Fase B e nunca tinha sido olhada.
+
+**A dívida NÃO está integralmente fechada:** experiências, horários, bloqueios,
+exceções, financeiro e clientes continuam sem verificação em navegador.
+
+## Estado de produção
+
+- Commit em produção: **`b629a11`**. **`main` local está 2 commits à frente**
+  (`4feae41` da Fase C + o commit de docs desta sessão) e **a Fase C ainda não
+  foi deployada.**
+- **Fase C não exige migration nem setting nova**, então o deploy dela **não cai
+  na armadilha do seed** (seção 19). É o primeiro deploy em várias sessões que
+  não precisa de conferência por `SELECT`.
+- `experiences`: Montanha e Fazenda em `payment_mode = 'deposit'`,
+  `deposit_percent = 50`, `price_cents` 34999 e 24999.
+- `payment_method_discounts`: `pix | 700`.
+- **3 reservas da borda 9** (cobrança nunca criada) seguem em produção. O
+  reconciliador continua avisando sobre elas, e é o único sinal que existe.
 
 ## Pendências que NÃO podem se perder
 
-**1. A experiência TESTE está ATIVA em produção.** Foi reativada na apresentação
-de quarta e **aparece em `/api/experiences`**, ou seja, na LP pública. Precisa
-ser desativada (`PATCH { ativo: false }` no admin, ou `UPDATE experiences SET
-active = false`) **antes de o link ir para a LP**. Se o vídeo sair com ela no ar,
-o cliente vê uma trilha que não existe.
+**1. A experiência TESTE continua ATIVA em produção.** Passo do CRUD entregue
+nesta sessão (`/admin/experiencias` → `Desativar` → `Sim, desativar`), mas **não
+há confirmação de que foi executado**. Enquanto estiver ativa ela aparece em
+`/api/experiences`, ou seja, na LP pública. Conferir com:
+`curl -s https://app.aventix.com.br/api/experiences | grep -i teste`
 
-**2. Duplicação de título na tela de confirmação.** O `<h2>` "Informações
-importantes" repete a primeira linha do texto do cliente
-(`📌 INFORMAÇÕES IMPORTANTES DO PASSEIO`). As duas metades estão travadas por
-decisão: o título foi definido pelo dono do produto, o texto é do cliente e não
-pode ser editado. **Decisão pendente:** omitir o `<h2>` (não custa nada em código
-e não mexe no texto dele) ou pedir ao cliente para tirar a primeira linha.
+**2. Deploy da Fase C não feito.** O botão "Cobrar saldo" não existe em produção.
 
-**3. A tela de confirmação com o texto NOVO ainda não foi vista em produção.** A
-verificação em navegador desta sessão foi **local**, contra o banco de
-desenvolvimento já semeado — lá o texto novo renderizou certo nas duas telas
-(6 parágrafos, `pre-line`, sem HTML, sem rótulo órfão). Em **produção** ninguém
-abriu ainda uma reserva confirmada depois do `UPDATE`. Conferir.
+**3. Duplicação de título na tela de confirmação.** O `<h2>` "Informações
+importantes" repete a primeira linha do texto do cliente. **Decisão pendente:**
+omitir o `<h2>` ou pedir ao cliente para tirar a primeira linha.
 
-**4. O termo NÃO menciona a política do sinal, e agora isso é lacuna ativa.** As
-duas trilhas vendem em `deposit` em produção, então já pode haver cliente pagando
-sinal sem que o termo diga que ele **não é reembolsável**. A seção 10 prevê
-`settings.deposit_policy_text` no termo quando a experiência for `deposit`; não
-está implementado. **Entra no Termo v2 e subiu de prioridade.**
+**4. A tela de confirmação com o texto novo ainda não foi vista em produção.** A
+verificação continua sendo local.
+
+**5. Cobrança de teste viva no sandbox** do Asaas (`3aa77hmzw2yshk6r`),
+inofensiva. Cancelar se incomodar.
 
 ## Dívidas conhecidas
 
 **Dependem do cliente**
-- **Percentuais reais da maquininha por modalidade**: não enviados. Bloqueiam a
-  Fase D. A tabela e a tela já os aceitam; vazia é o estado honesto.
-
-**Do texto do cliente**
-- **Termo v2** precisa resolver: política do sinal (item 4 acima) e a redação da
-  remarcação. A frase proposta e ainda **não aprovada**: *"Remarcação. Você pode
-  remarcar seu passeio até 48 horas antes do horário agendado, falando com a
-  gente pelo WhatsApp — a remarcação não é feita pelo site. A nova data fica
-  sujeita à disponibilidade. Valores já pagos não são devolvidos em caso de
-  cancelamento."* O texto oficial vive fora do repositório.
+- Percentuais reais da maquininha por modalidade (bloqueiam a Fase D).
+- Redação aprovada do Termo v2 e a contradição das 48h.
 
 **Multi-tenancy pela metade (dívida de propósito, 23/08)**
 - Etapa 2 não feita: `getTenantId()` devolve 1 fixo, com
@@ -184,32 +199,31 @@ está implementado. **Entra no Termo v2 e subiu de prioridade.**
 - Critério de conclusão: poder apagar aquela função e
   `tests/o-barreira-multi-tenant.test.ts`.
 
-**Verificação que continua não feita**
-- **As telas do admin nunca foram renderizadas em navegador autenticado.** Isso
-  agora cobre a correção mais importante da Fase B: o rótulo "Saldo R$ X" no
-  bloco da agenda e o selo em `/admin/agendamentos` estão provados por teste e
-  por build, **não por olho**. `/admin/*` está atrás do login e só existe o hash
-  da senha.
-
 **Integração de pagamento**
 - Indicador de saúde da integração no `/admin` não construído (seção 8-B).
 - Cinco divergências entre a seção 8 e o que foi medido, não resolvidas.
 - `receiveInCash` não implementado (Fase D).
+- `findChargeByExternalReference` usa `GET /payments?externalReference=` e
+  **filtra a referência de volta** por segurança. O filtro do Asaas **não foi
+  medido isoladamente**: o comportamento observado (adoção correta) é consistente
+  com ele funcionando, mas a conferência defensiva é o que garante o resultado.
 
 **Dívida técnica registrada de propósito**
 - Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`.
+- Na adoção de cobrança órfã (camada 3), o `invoiceUrl` fica `null` — o
+  `ChargeSnapshot` não o carrega. Sem impacto conhecido; o QR vem normalmente.
 
 **Gerais**
 - Sem CI/CD; deploy é clique manual no Easypanel.
 - `npm install` de 18/08 reportou 10 vulnerabilidades (4 moderate, 6 high).
 - `instrumentation.ts` compila para Edge Runtime e falha lá: **3 avisos no
-  build** (`lib/payments/asaas.ts` com `node:crypto`, `lib/auth.ts` com
-  `bcrypt`). Reconfirmados nesta sessão; nenhum novo.
+  build**, reconfirmados nesta sessão; nenhum novo.
 - Sem rate limiting em `POST /api/admin/login`, `GET /api/availability`,
   `GET /api/experiences` e `POST /api/reservations` — **o vídeo torna isto mais
   relevante do que era**.
 - Sem proteção contra duplo clique em `POST /api/reservations` no servidor.
-  **Reavaliar antes do vídeo**; é parente direto da idempotência da Fase C.
+  **Agora existe precedente pronto:** a Fase C resolveu o mesmo problema com
+  advisory lock + chave natural determinística. **Reavaliar antes do vídeo.**
 - Sessão sem revogação (iron-session, 8h).
 - A âncora dos testes de lead time vence em junho de 2027.
 - Cancelamento e CRUD de experiências não têm teste automatizado.
@@ -223,20 +237,25 @@ está implementado. **Entra no Termo v2 e subiu de prioridade.**
 
 ## Testes
 
-`npm test`: **21 arquivos, 199 casos, todos passando**.
+`npm test`: **22 arquivos, 221 casos, todos passando**.
 
-- Grupo **T** (`t-preco-por-metodo.test.ts`, 13 casos): valores literais da seção
-  4-B.2, e o **T2.4** com fixture de preço 33333 que separa "desconto sobre o
-  total" de "unitário descontado × 2" — com 34999 os dois coincidem por acaso.
-- Grupo **U** (`u-sinal.test.ts`, 14 casos): a divisão 16275/16274, o desconto
-  **antes** da divisão, e **U1 e U4.2**, que não consertam nada e existem só para
-  travar as duas barreiras que impedem o cron de expirar uma reserva já paga.
+- Grupo **V** (`v-cobranca-saldo.test.ts`, 22 casos) — a Fase C. Os testes de V1
+  não verificam "respondeu 200": contam **quantas vezes o provedor foi mandado
+  criar**, que é o único número que importa. **V1.2 foi validado por mutação.**
+- Grupo **U** (`u-sinal.test.ts`, 14 casos): a divisão 16275/16274, e U1/U4.2
+  travando as barreiras que impedem o cron de expirar reserva já paga.
+- Grupo **T** (`t-preco-por-metodo.test.ts`, 13 casos): T2.4 com fixture 33333
+  separando "desconto sobre o total" de "unitário descontado × 2".
 
 ## Banco local
 
-Container `aventix-db-dev` no ar. Catálogo semeado e reconciliado com o template:
-preços cheios, `pix | 700`, `meeting_point` com o texto oficial (876 caracteres,
-idêntico ao template), `what_to_bring` vazio. **`payment_mode` local está em
-`full`** nas duas trilhas (foi revertido depois da verificação do wizard) —
-diferente de produção, onde está `deposit`. Para exercitar o sinal localmente,
-ligue e desligue à mão, como faz o helper `comSinal` do grupo U.
+Container `aventix-db-dev` no ar. **8 migrations no disco, 8 aplicadas**
+(`npm run db:generate` responde "No schema changes"). A divergência "7/7" que a
+sessão anterior registrou como dúvida está **resolvida**: eram 8, e o "7" era o
+número da última (`0007`).
+
+Catálogo semeado e reconciliado com o template. **`payment_mode` local está em
+`full`** nas duas trilhas — diferente de produção, onde está `deposit`. Para
+exercitar o sinal localmente, ligue e desligue à mão, como faz o helper `comSinal`
+dos grupos U e V. A reserva-fixture usada na verificação em navegador foi
+**apagada** ao final; `reservations` local está vazia.
