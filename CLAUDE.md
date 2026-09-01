@@ -55,6 +55,17 @@
 > a política que **vincula** o cliente mora no corpo do termo — porque termo é
 > versionado e setting é editável sem gerar versão (seção 10).
 >
+> **Atualização de 01/09/2026, parte 2 (área nova de trabalho):**
+> (0) **O faseamento de pagamento acabou, e a área seguinte é AUTONOMIA DO
+> TENANT** (seção 17). O enquadramento mudou: o Quadri Club é o **primeiro**
+> cliente, não **o** cliente.
+> (a) **O seed deixou de reconciliar `experiences`** (insert-only), e passou a
+> **relatar** o que não corrige. Isso fecha a AUT-4 e é infraestrutura das
+> outras três. `settings` e `resources` seguem reconciliando **por falta de
+> tela**, não por princípio — seção 19.
+> (b) **A decisão de 09/08 sobre o termo foi REABERTA** (AUT-1): editor no
+> admin, com a restrição de versionamento imutável da seção 10.
+>
 > **Atualização de 01/09/2026 (dentro da rev 7, não é revisão nova):**
 > (0) **Fase E CONCLUÍDA — o faseamento de pagamento da rev 7 ACABOU.** Cartão de
 > crédito pela `invoiceUrl` (4-B.8), estados de análise de risco e chargeback
@@ -1020,7 +1031,7 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 
 ### 7.2 Admin (sessão)
 
-- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09, `docs/DECISOES.md`): o texto vive em `lib/terms/` (seção 10 e 14), versionado por arquivo novo. Reabre se algum dia o texto precisar mudar sem deploy.
+- CRUD: `experiences`, `resources`, `operating_hours`, `blackouts`, `settings`, `shared_calendar_links`. **Termo NÃO tem CRUD nem editor no admin** (decisão de 2026-08-09): o texto vive em `lib/terms/` (seção 10 e 14), versionado por arquivo novo. **>>> ESSA DECISÃO FOI REABERTA EM 01/09. <<<** Ela mesma previa a condição — *"reabre se algum dia o texto precisar mudar sem deploy"* — e a condição se cumpriu: o Aventix é vendido para outras empresas, e o dev sendo o único caminho para editar o termo é o que impede vender o segundo cliente. É a **AUT-1**, a mais complexa das quatro fases de autonomia; a restrição inviolável está na seção 10.
 - **`GET|POST /api/admin/experiences` e `PATCH /api/admin/experiences/{id}`** — catálogo do dono. Lista ativas **e** inativas (a tela esmaece, nunca esconde: o dono precisa enxergar a trilha sazonal para reativá-la). **Não existe DELETE**: reservas referenciam a experiência, então desativar é `PATCH { ativo: false }`, reversível. Corpo semanticamente inválido responde **422** (`400` fica só para JSON malformado). Preço zero é recusado (seção 4.6). Editar duração, buffer ou preço não afeta reserva já vendida — os três são congelados na reserva (seção 4.6), e é isso que permite o CRUD não ter trava nenhuma.
   **Idade mínima do garupa entra no CRUD** (`idadeMinimaGarupa`, inteiro 0..120; `0` = sem mínimo): é regra de segurança publicada pelo tenant, e escondê-la do dono faria a próxima trilha nascer sem regra em silêncio. Ausente no POST vira `0`, para não quebrar chamador existente.
   **Sinal no CRUD, com o percentual TRAVADO (Fase B):** `payment_mode` aceita `full` e `deposit`. O dono responde "aceita sinal? sim/não"; ele **nunca digita o percentual**, porque a seção 4-B.2 fixou o sinal em 50% para o produto. O servidor grava `deposit_percent = 50` e `deposit_fixed_cents = NULL` (`depositColumns` em `lib/experiences.ts`), que é o que `experiences_deposit_mode_check` exige — gravar `deposit` com os dois nulos viraria 500. **Escrita travada, leitura livre:** `createReservation` continua lendo o percentual da COLUNA, então o cálculo tem uma fonte só e uma linha gravada com outro percentual seguiria honrada. Se o sinal voltar a ser por experiência, o ponto único a mudar é `DEPOSIT_PERCENT`.
@@ -1287,7 +1298,31 @@ Comprovante inclui ponto de encontro e o que levar (de `settings`). Falha de e-m
 
 ## 10. Termo de aceite digital
 
-Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** a versão vigente é `lib/terms/quadriciclo-v2.ts` (`TERM_VERSION = '2026-08-31'`); `quadriciclo-v1.ts` **permanece no repositório para sempre** e não é importado por nada — é o registro das reservas que o aceitaram. Trocar o texto é criar arquivo novo com nova `TERM_VERSION`, **nunca editar o existente**: a reserva grava só a versão, então editar faria uma string já gravada resolver para um texto que aquelas pessoas não leram. `tests/x-termo.test.ts` trava isso com o **sha256 do v1 fixado** — se aquele teste falhar, o conserto é desfazer a edição e criar um v3, jamais atualizar o hash. Editor de termo no admin fica fora do MVP (mesma lógica do form builder proibido, seção 11-B): o dono não tem hoje como publicar texto sem revisão de código, e é assim de propósito.
+Exibe o termo completo numa caixa de rolagem (320px); botão de aceite só habilita após **rolar até o fim** (`scrollTop + clientHeight >= scrollHeight`, tolerância de 20px; termo curto o bastante para caber sem rolar já nasce liberado); captura dados do form + IP + timestamp + user agent + `version`; grava em `reservations.termo_*`. **Texto versionado por ARQUIVO, não editável no admin:** a versão vigente é `lib/terms/quadriciclo-v2.ts` (`TERM_VERSION = '2026-08-31'`); `quadriciclo-v1.ts` **permanece no repositório para sempre** e não é importado por nada — é o registro das reservas que o aceitaram. Trocar o texto é criar arquivo novo com nova `TERM_VERSION`, **nunca editar o existente**: a reserva grava só a versão, então editar faria uma string já gravada resolver para um texto que aquelas pessoas não leram. `tests/x-termo.test.ts` trava isso com o **sha256 do v1 fixado** — se aquele teste falhar, o conserto é desfazer a edição e criar um v3, jamais atualizar o hash. Editor de termo no admin **estava** fora do MVP pela mesma lógica do form builder proibido (seção 11-B). **Reaberto em 01/09 como AUT-1** — ver abaixo.
+
+> ### >>> AUT-1: o termo vai virar editável, e a restrição é VERSIONAMENTO, não confiança <<<
+>
+> **O problema não é o dono escrever besteira.** É que `reservations.termo_version`
+> grava **qual versão** o cliente aceitou, e nunca o corpo. Se a tela editar o
+> texto de uma versão **existente**, toda reserva que já apontava para aquela
+> string passa a resolver para um texto que aquelas pessoas **nunca leram** — e o
+> registro jurídico, cuja única função é provar o que alguém aceitou, vira ficção.
+> É a mesma falha que o versionamento por arquivo existe para impedir, entrando
+> pela porta da tela.
+>
+> **A regra que a implementação tem de honrar: cada publicação CRIA VERSÃO NOVA.**
+> Editar versão publicada é impossível, não desaconselhado.
+>
+> **O que isso implica, e é por isso que a AUT-1 é a mais cara das quatro:**
+> - o termo **sai de `lib/terms/` e vai para o banco** (tabela própria);
+> - as versões **v1 e v2 migram** para lá, preservando byte a byte o que já foi
+>   aceito;
+> - a **imutabilidade é imposta pelo BANCO**, não por disciplina de código —
+>   trigger ou permissão, não um comentário pedindo para não editar;
+> - **`tests/x-termo.test.ts` precisa ser repensado.** Ele fixa hoje o sha256 do
+>   v1 **do arquivo**; com o texto no banco, aquele hash deixa de ter o que
+>   proteger, e a proteção equivalente passa a ser o teste de que uma versão
+>   publicada não pode ser alterada.
 
 **A política do sinal do Quadri Club vive no CORPO do termo (v2, §5), não em `settings`.** A §5 cobre pagamento (integral ou sinal de 50%), não devolução em cancelamento, no-show e remarcação em 48h pelo WhatsApp. Isto encerra a lacuna que a rev 6 abriu e que ficou ativa desde a Fase B.
 
@@ -1640,6 +1675,36 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 | **Transversal** | ~~**Líquido lido do Asaas**~~ **CONCLUÍDA junto da Fase E**: o `netValue` já vinha no corpo do webhook e passou a ser gravado congelado no mesmo UPDATE que marca o pagamento. |
 | **Termo v2** | Em **paralelo**: inclui a política de cancelamento e resolve a contradição das 48h (seção 4-C). |
 | **Antes do vídeo** | **Testes com clientes reais.** O vídeo é evento de volume; descobrir problema com ele no ar é caro. |
+
+### Autonomia do tenant — a área que vem DEPOIS do pagamento (01/09/2026)
+
+**>>> O ENQUADRAMENTO MUDOU: o Quadri Club é o PRIMEIRO cliente, não O cliente. <<<**
+Num produto vendido para outras empresas, **"o dev configura" é o que impede
+vender o segundo**. Telas de configuração deixaram de ser conveniência e viraram
+**requisito de produto**.
+
+Ordem executável. Cinco dos sete itens levantados são a **mesma peça técnica**
+(`settings`), então uma tela resolve quatro de uma vez:
+
+| Fase | O que entra |
+|---|---|
+| **AUT-1** | **Termo de aceite editável, com versionamento IMUTÁVEL.** A mais complexa; a restrição está na seção 10 |
+| **AUT-2** | **`/admin/configuracoes`**: telefone de suporte, o que levar, mapa e ponto de encontro (mais os rótulos e o nome do negócio, que são a mesma tela) |
+| **AUT-3** | **CRUD de recursos** (os quadriciclos) — última entidade do catálogo sem tela |
+| **AUT-4** | ~~**Idade mínima do garupa.**~~ **FECHADA** pelo seed insert-only |
+
+**Regra de ordem, inviolável e transversal às quatro:**
+
+> **TELA PRIMEIRO, `insert-only` no seed JUNTO com ela, item a item. Nunca antes.**
+
+Tirar a reconciliação de um campo **sem tela** deixa o valor sem caminho de
+conserto que não seja psql em produção (seção 19). É por isso que `settings` e
+`resources` ainda reconciliam: **por falta de tela, não por decisão de que
+devam.**
+
+**Fora de escopo desta área, prioridade menor:** integração Asaas por tela e
+criação de tenant novo — as duas dependem da **Etapa 2** (`getTenantId()` real,
+seção 2-B).
 
 ---
 

@@ -1037,6 +1037,35 @@ O helper `comSinal` (grupos U, V, W e Y) ligava o sinal numa experiência e, no 
 
 **O que isso descobriu:** `U3.2` ("experiência SEM sinal, cliente pedindo sinal: RECUSA") **passava por acidente de ordem de execução**. Ele afirmava testar uma experiência sem sinal e nunca estabelecia esse estado — dependia de um `comSinal` anterior ter deixado `'full'` para trás. Removida a coincidência, o teste caiu, corretamente. **Corrigido com um helper `semSinal` simétrico**, que declara a precondição em vez de assumi-la.
 
-**A regra que fica, e ela generaliza a de 31/08 sobre mutação:** teste que depende do estado deixado por outro teste passa e não prova nada. **Toda precondição de catálogo se declara no próprio caso.** O sintoma aqui foi benigno — um teste verde sem lastro —, mas a mesma classe produz suíte que passa na máquina de quem escreveu e falha em banco limpo, que é exatamente onde este projeto não pode falhar (o `global-setup` existe para garantir o contrário).
+**A regra que fica é IRMÃ da regra da mutação (31/08), e vale escrever as duas juntas: nos dois casos o verde não prova o que afirma.** A mutação pega o teste que passa sem que a proteção exista; esta pega o teste que passa sem que o cenário exista. **Teste que depende do estado deixado por outro teste passa e não prova nada** — toda precondição se declara no próprio caso. **Toda precondição de catálogo se declara no próprio caso.** O sintoma aqui foi benigno — um teste verde sem lastro —, mas a mesma classe produz suíte que passa na máquina de quem escreveu e falha em banco limpo, que é exatamente onde este projeto não pode falhar (o `global-setup` existe para garantir o contrário).
 
 **Verificado com banco ZERADO:** `docker compose down -v` seguido de `npm test` cria as 10 migrations, semeia 21 registros e passa 277/277. O caminho de tenant novo não depende de reconciliação — ele é o mesmo `if (!current) insert` de sempre, e é por isso que insert-only não podia quebrá-lo.
+
+## 2026-09-01 — A área depois do pagamento é AUTONOMIA DO TENANT, e a mudança é de enquadramento
+
+Com o faseamento de pagamento encerrado, a próxima área foi decidida: **autonomia do dono do tenant**. Não é uma lista de conveniências acumuladas; é consequência de uma mudança de enquadramento registrada no mesmo dia da reversão do seed.
+
+**>>> O QUADRI CLUB É O PRIMEIRO CLIENTE, NÃO O CLIENTE. <<<** Num produto vendido para outras empresas, **"o dev configura" é o que impede vender o segundo**. Cada configuração que passa por edição de código, commit e deploy transforma o dev em gargalo permanente de cada venda — e isso não é um custo que cresce linearmente, é o que torna a venda seguinte inviável. **Telas de configuração deixaram de ser conveniência e viraram requisito de produto.**
+
+**Quatro fases, e a ordem é executável, não arbitrária.** Dos sete itens levantados em `docs/LEVANTAMENTO-AUTONOMIA.md`, **cinco são a mesma peça técnica** (`settings`), então uma tela resolve quatro de uma vez:
+
+- **AUT-1** — termo de aceite editável, com versionamento **imutável**. A mais complexa, por razão própria (entrada seguinte).
+- **AUT-2** — `/admin/configuracoes`: telefone de suporte, o que levar, mapa, ponto de encontro, mais os rótulos e o nome do negócio.
+- **AUT-3** — CRUD de recursos, última entidade do catálogo sem tela.
+- **AUT-4** — idade mínima do garupa. **JÁ FECHADA** pela branch `feat/seed-nao-sobrescreve`, que é também infraestrutura das outras três.
+
+**A regra de ordem é inviolável e atravessa as quatro: TELA PRIMEIRO, `insert-only` no seed JUNTO com ela, item a item. Nunca antes.** Tirar a reconciliação de um campo sem tela deixa o valor sem caminho de conserto que não seja psql em produção, que a seção 19 documenta como armadilha. É por isso que `settings` e `resources` ainda reconciliam: **por falta de tela, não por decisão de que devam.**
+
+**Fora de escopo desta área, prioridade menor:** integração Asaas por tela e criação de tenant novo. **As duas dependem da Etapa 2** (`getTenantId()` real), e enfiá-las aqui esconderia essa dependência atrás de trabalho de UI.
+
+## 2026-09-01 — AUT-1: a decisão de 09/08 sobre o termo foi REABERTA, e a restrição é versionamento
+
+A decisão de 2026-08-09 — *"termo não tem CRUD nem editor no admin"* — **previa a própria condição de reabertura**: *"reabre se algum dia o texto precisar mudar sem deploy"*. **A condição se cumpriu**, pelo enquadramento da entrada anterior: com o Aventix vendido para outras empresas, o dev sendo o único caminho para editar um termo é exatamente o que impede o segundo cliente.
+
+**>>> A RESTRIÇÃO É VERSIONAMENTO, NÃO CONFIANÇA. <<<** Registrado assim porque a leitura natural é "não deixamos o dono editar porque ele pode escrever besteira", e não é isso. `reservations.termo_version` grava **qual versão** o cliente aceitou, e **nunca o corpo**. Se a tela editar o texto de uma versão **existente**, toda reserva que já apontava para aquela string passa a resolver para um texto que aquelas pessoas **nunca leram** — e um documento cuja única função é provar o que alguém aceitou vira ficção. É a mesma falha que o versionamento por arquivo existe para impedir (decisões de 31/08 sobre o Termo v2 e sobre `deposit_policy_text`), entrando pela porta da tela.
+
+**A regra que a implementação tem de honrar: cada publicação CRIA VERSÃO NOVA.** Editar versão publicada precisa ser **impossível**, não desaconselhado.
+
+**O que isso implica, e é por isso que a AUT-1 é a mais cara das quatro:** o termo **sai de `lib/terms/` e vai para o banco**, em tabela própria; **v1 e v2 migram** para lá preservando byte a byte o que já foi aceito; a **imutabilidade é imposta pelo BANCO** (trigger ou permissão), não por disciplina de código nem por comentário pedindo para não editar — porque a disciplina de código é justamente o que a tela remove; e **`tests/x-termo.test.ts` precisa ser repensado**, já que ele fixa o sha256 do v1 **do arquivo** e, com o texto no banco, aquele hash deixa de ter o que proteger. A proteção equivalente passa a ser o teste de que uma versão publicada não pode ser alterada.
+
+**Alternativa que será tentada e precisa ser recusada:** tela que edita o texto e "lembra" de bumpar a versão. Recusada porque põe a integridade do registro jurídico na mão de quem está com pressa, e porque a falha é **silenciosa** — nada quebra no dia da edição, e o problema só aparece quando alguém for provar o que um cliente aceitou.
