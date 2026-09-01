@@ -55,6 +55,24 @@
 > a política que **vincula** o cliente mora no corpo do termo — porque termo é
 > versionado e setting é editável sem gerar versão (seção 10).
 >
+> **Atualização de 01/09/2026 (dentro da rev 7, não é revisão nova):**
+> (0) **Fase E CONCLUÍDA — o faseamento de pagamento da rev 7 ACABOU.** Cartão de
+> crédito pela `invoiceUrl` (4-B.8), estados de análise de risco e chargeback
+> (4-B.9). Migration 0009. **Ainda em branch, não deployado.**
+> (a) **Achado que definiu a fase:** os seis status de estorno/chargeback já eram
+> traduzidos por `toPaymentState` e **descartados sem tocar no banco** — pior que
+> não implementado, porque *parecia* implementado a quem lesse a tradução.
+> (b) **Chargeback NÃO muda `reservations.status`.** A reversão é derivada de
+> `recalcReservationPayment`, sem coluna nova, e a disputa ganha volta sozinha
+> porque `processCharge` converge para o provedor em vez de aplicar transições.
+> (c) **O CHECK do líquido da Fase D barrava o próprio Asaas** (era bicondicional
+> e exigia modalidade de maquininha). A 0009 troca pela implicação, e isso
+> encerrou a tarefa transversal do líquido.
+> (d) **`charge_stage` (enum novo) é vocabulário de EXIBIÇÃO e não decide nada** —
+> os cinco estados intermediários do cartão colapsam em `pending`.
+> (e) **O hold de 15 min NÃO foi estendido** para análise de risco: falta o dado
+> de frequência real, que outubro dá. Está na lista de observação.
+>
 > **Revisão 6** — pagamento com sinal + robustez da integração Asaas:
 > (a) **Pagamento parcial (sinal)** configurável por experiência: cliente paga um percentual/valor no ato e o saldo é cobrado presencialmente no dia. Motivação real: parceiro Aventurando (compra coletiva do mesmo segmento e ticket) reportou abandono no checkout por receio de golpe ao pagar o valor integral.
 > (b) **Nova tabela `reservation_payments`** (uma reserva → N pagamentos). Os campos de pagamento saem de `reservations`.
@@ -112,7 +130,7 @@ Regras invioláveis do modo `deposit`:
 
 - **Runtime:** Node.js 22 LTS + TypeScript. **Framework:** Next.js 16 (App Router, Turbopack default) — público, admin e API no mesmo repo.
 - **Banco:** PostgreSQL (Docker no VPS). Requer `btree_gist`. **ORM:** Drizzle, migrations versionadas.
-- **Pagamento:** **Asaas**, **somente Pix no MVP** (cartão pós go-live). Conta do tenant. Atrás de `PaymentProvider`.
+- **Pagamento:** **Asaas**, **Pix e cartão de crédito**. Conta do tenant. Atrás de `PaymentProvider`. O cartão paga na **fatura hospedada do provedor** (`invoiceUrl`), nunca por formulário nosso — seção 4-B.8.
 - **Termo:** aceite digital próprio. Sem plataforma de assinatura externa.
 - **Notificações:** **e-mail via Resend no MVP.** WhatsApp (Evolution) pós go-live.
 - **Calendário:** **nativo**. Google Calendar = espelho opcional pós go-live.
@@ -231,13 +249,21 @@ precisar existir, a Etapa 2 não terminou.
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 CREATE TYPE reservation_status AS ENUM ('pending_payment','confirmed','cancelled','expired');
-CREATE TYPE payment_method AS ENUM ('pix','card');              -- 'card' pos go-live
+CREATE TYPE payment_method AS ENUM ('pix','card');              -- 'card' entrou na Fase E
 CREATE TYPE participant_role AS ENUM ('operator','passenger');
 CREATE TYPE price_mode AS ENUM ('per_resource');                -- 'per_person' e futuro
 CREATE TYPE payment_mode AS ENUM ('full','deposit');            -- rev 6
 CREATE TYPE payment_kind AS ENUM ('full','deposit','balance');  -- rev 6: papel de cada cobranca
 CREATE TYPE payment_state AS ENUM ('pending','paid','cancelled','refunded');       -- por cobranca
 CREATE TYPE reservation_payment_state AS ENUM ('pending','partial','settled');     -- agregado da reserva
+
+-- rev 7 / Fase E: ESTAGIO da cobranca no provedor. VOCABULARIO DE EXIBICAO.
+-- >>> NAO DECIDE NADA. <<< Quem governa dinheiro e payment_state. Isto existe
+-- porque os cinco estados intermediarios do CARTAO (analise de risco,
+-- autorizado-sem-captura, captura recusada) colapsam todos em 'pending' — o que
+-- e o mapeamento seguro para DECIDIR e insuficiente para EXIBIR. Ver 4-B.9.
+CREATE TYPE charge_stage AS ENUM
+  ('aguardando','em_analise','recusado','pago','estornado','cancelado');
 ```
 
 ### 4.2 Tenant e configuração
@@ -440,7 +466,27 @@ CREATE TABLE reservation_payments (
   due_date date NOT NULL,
   paid_at timestamptz,
   received_in_cash boolean NOT NULL DEFAULT false,  -- quitado por fora (maquininha/dinheiro)
-  created_at timestamptz NOT NULL DEFAULT now()
+
+  -- Fase D (migration 0008): registro da maquininha, CONGELADO (secao 4-B.7).
+  card_machine_modality card_machine_modality,
+  rate_basis_points_applied int,
+  net_cents int,
+  registered_by text,
+  registered_at timestamptz,
+
+  -- Fase E (migration 0009): estagio no provedor, para a TELA (secao 4-B.9).
+  charge_stage charge_stage,
+
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  -- >>> ERA BICONDICIONAL ATE A FASE E, E A BICONDICIONAL BARRAVA O ASAAS. <<<
+  -- A regra da 0008 era `(rate IS NULL) = (net IS NULL)`: gravar liquido
+  -- OBRIGAVA a gravar percentual e modalidade. Nasceu certa, porque o unico
+  -- produtor de net_cents era a maquininha. O provedor INFORMA o liquido pronto
+  -- (netValue) sem nenhum dos dois, entao a regra antiga obrigaria a INVENTA-los.
+  -- A implicacao preserva o que ela protegia e libera o caso novo.
+  CHECK (rate_basis_points_applied IS NULL
+         OR (net_cents IS NOT NULL AND card_machine_modality IS NOT NULL))
 );
 
 CREATE UNIQUE INDEX idx_rp_asaas ON reservation_payments (asaas_payment_id) WHERE asaas_payment_id IS NOT NULL;
@@ -503,7 +549,15 @@ Exemplo com a Trilha da Montanha (cheio R$ 349,99, desconto Pix 7%):
 Regras que a tabela não mostra e que são invioláveis:
 
 - **O sinal é 50% fixo.** Não é configurável por experiência.
-- **Sinal existe SOMENTE no Pix.** Não há sinal no cartão.
+- **Sinal existe SOMENTE no Pix.** Não há sinal no cartão. A combinação é
+  **recusada no servidor** (`422`) antes de qualquer escrita, nunca rebaixada
+  para integral em silêncio — rebaixar cobraria agora o dobro do que a tela
+  mostrou. No wizard ela sequer é representável: a escolha é **um valor só**
+  (`pix_full | pix_deposit | card`), e não duas dimensões que podem se combinar
+  errado.
+- **O cartão paga o cheio porque NÃO TEM linha de desconto**, jamais por
+  acréscimo. `getDiscountBasisPoints('card')` devolve `0` e o cliente paga
+  `full_price_cents`. Não existe campo de acréscimo em lugar nenhum do schema.
 - **O desconto do Pix incide TAMBÉM sobre o sinal**: o sinal é 50% de **325,49**
   (o valor já com desconto), nunca 50% de 349,99. Calcular sobre o cheio faria o
   cliente do sinal pagar mais que o do Pix integral, punindo justamente quem
@@ -679,6 +733,19 @@ com o extrato quebra — sem nada acusar erro.
 informam na consulta da cobrança), não calculado. **Só a maquininha exige
 cálculo**, porque acontece fora do provedor.
 
+**IMPLEMENTADO na Fase E, e isto encerra a tarefa TRANSVERSAL do líquido.** O
+`netValue` já vinha no corpo do webhook e na consulta; `processCharge` o grava no
+**mesmo UPDATE** que marca o pagamento como pago, e **nenhum leitor recalcula**.
+Grava **só quando o provedor informa**: sobrescrever um líquido conhecido com
+`null` é perda de informação, a mesma distinção entre `NULL` e `0` da 4-B.6 um
+nível acima.
+
+**>>> `net_cents` TEM DUAS PROCEDÊNCIAS, E A MODALIDADE É QUE AS SEPARA. <<<**
+Com `card_machine_modality` preenchida é maquininha, e o líquido foi
+**calculado** por nós. Com ela nula, o líquido foi **lido** do provedor. É por
+isso que `countReceiptsAwaitingNet` recorta por modalidade — sem esse recorte,
+pagamento do Asaas apareceria como pendência da Fase D.
+
 **IMPLEMENTADO na Fase D** (migration 0008), em `reservation_payments`:
 `card_machine_modality`, `rate_basis_points_applied`, `net_cents`, mais o rastro
 (`registered_by`, `registered_at`). Todas nuláveis, sem backfill. A escrita é
@@ -694,8 +761,19 @@ reconstituída.
 
 ### 4-B.8 Cartão: via `invoiceUrl` do Asaas, nunca formulário próprio
 
-O cliente é **redirecionado para a fatura do Asaas** e digita o cartão lá. **Não
-existe formulário de cartão dentro do wizard.**
+**IMPLEMENTADO na Fase E.** O cliente é **redirecionado para a fatura do Asaas** e
+digita o cartão lá. **Não existe formulário de cartão dentro do wizard.**
+
+**Método PRÓPRIO no provedor (`createCardCharge`), não `billingType` parametrizado.**
+O que separa os dois não é o meio, é o **retorno**: `createPixCharge` busca o QR
+numa chamada obrigatória logo após criar, e `PixCharge` exige `qrCodeBase64` e
+`copyPaste` não-nulos. Cobrança de cartão não tem QR Pix — aquela busca falharia,
+ou pior, devolveria algo que a tela renderizaria como um QR que nenhum banco lê.
+`CardCharge.invoiceUrl` é **`string`, não nulável**, diferente de `PixCharge`: no
+Pix a fatura é conveniência, no cartão ela **é** o caminho de pagamento, e tipá-la
+assim obriga a falhar alto em vez de entregar um botão que leva a lugar nenhum.
+**MEDIDO contra o sandbox em 01/09:** o Asaas aceita `billingType: CREDIT_CARD`
+sem dados de cartão e devolve `invoiceUrl`.
 
 **Por quê:** a documentação de PCI-DSS do Asaas diz que, na integração via API,
 "os dados passam pelo back-end da sua aplicação" e "sua infraestrutura permanece
@@ -717,8 +795,44 @@ conta do tenant e **o passeio já aconteceu**. O sistema passa a poder ter reser
 `confirmed`, realizada, **com pagamento revertido** — combinação que hoje não
 existe na máquina de estados (seção 5).
 
-O Asaas tem eventos de webhook próprios para isso. **Lacuna conhecida**, a ser
-tratada na fase do cartão (Fase E). Não invente o estado antes disso.
+**RESOLVIDO na Fase E, e a resposta é que o estado novo NÃO EXISTE.**
+
+**>>> `reservations.status` NÃO MUDA NUM CHARGEBACK. <<<** Duas razões, as duas
+estruturais:
+
+1. `cancelled` significa "não vai acontecer, vaga liberada", e
+   `setReservationStatus` liberaria as linhas de `reservation_resources` —
+   apagando o registro de que aquele recurso esteve ocupado num passeio que
+   **aconteceu**. Evento financeiro destruindo histórico operacional.
+2. `status` governa a **vaga** e `payment_state` governa o **dinheiro** (seção 5,
+   eixos independentes). Chargeback é puramente dinheiro.
+
+O efeito sai todo de `recalcReservationPayment`, que soma só as linhas `paid`:
+a linha vira `refunded`, `amount_paid_cents` cai e `payment_state` regride
+sozinho. **Nenhuma coluna nova** — mesmo precedente do estorno pendente da
+seção 8.3 ("o estado JÁ é derivável"). **`paid_at` e `net_cents` FICAM**: o
+dinheiro entrou de verdade naquela data, e apagá-la reescreveria a história para
+caber no presente.
+
+**A disputa ganha volta sozinha, pelo mesmo caminho.** `processCharge`
+**converge** para o estado do provedor a cada leitura em vez de aplicar
+transições, então `refunded → paid` não precisa de código próprio. É a
+propriedade que torna o desenho robusto, e `tests/y-cartao.test.ts` (Y4.5) a
+trava: transformar a função numa máquina de transições quebra aquele teste.
+
+**Visibilidade é obrigatória, porque a reserva continua idêntica às outras no
+calendário.** `/admin` exibe faixa vermelha no painel de detalhe com o valor
+revertido e dizendo **em voz alta que a reserva NÃO foi cancelada** — é a
+primeira pergunta de quem lê "pagamento revertido", e a resposta errada faria o
+dono não ligar para o cliente. O predicado é derivável, sem coluna:
+`reservation_payments.state = 'refunded'`.
+
+**`AWAITING_CHARGEBACK_REVERSAL` é mapeado como `refunded`, e a imprecisão é
+deliberada:** o nome diz que a disputa foi ganha e o dinheiro está voltando.
+Errar para `refunded` faz o dono cobrar de novo alguém que já pagou
+(recuperável); errar para `paid` faz o sistema afirmar ter dinheiro que não
+voltou. **Não "conserte" sem trazer o dado que falta** — quanto esse estado dura
+e se há evento próprio para o fim dele.
 
 ---
 
@@ -775,6 +889,11 @@ consequências que já morderam:
   liberaria a vaga de quem já pagou metade, com o dinheiro na conta do tenant.
   `tests/u-sinal.test.ts` (U1 e U4.2) existe só para travar as duas.
 - **Nenhuma tela pode dizer só "confirmada".** Ver a regra na seção 11.1.
+- **A Fase E acrescentou a combinação `confirmed` + dinheiro REVERTIDO** (seção
+  4-B.9): reserva confirmada, passeio possivelmente já realizado, pagamento
+  estornado ou contestado. Continua sendo `status` × `payment_state`, sem estado
+  novo — e é justamente por os dois eixos serem independentes que o chargeback
+  não precisou de um.
 
 ### 5.2 Criação (transação única)
 
@@ -880,10 +999,18 @@ tela calcula o tempo restante pela diferenca entre os dois campos, nunca por
 `Date.now()` local. **`paymentMode` e o UNICO campo que autoriza a tela a falar
 em saldo** — numa reserva `full` nao paga o `balanceCents` vale o preco inteiro,
 e derivar "restante no dia" dele mentiria para o cliente.
+**`chargeStage` e SO EXIBICAO** (`aguardando|em_analise|recusado|pago|estornado|
+cancelado`; `null` antes do primeiro reporte do provedor). Existe porque os cinco
+estados intermediarios do CARTAO colapsam em `paymentState='pending'`, e sem ele a
+tela repetiria "aguardando pagamento" para quem ACABOU de digitar o cartao — que
+conclui que travou e paga de novo. **Nao decide nada.**
 
-**`GET /api/reservations/{id}/payment`** → `{ qrCodeBase64, copyPaste, expiresAt, dueNowCents }`
-QR **atual**, buscado no provedor na hora, **nunca cacheado nem persistido** (ele
-expira). Uma chamada por carga da pagina, nunca no polling. `409` quando a
+**`GET /api/reservations/{id}/payment`** → **uniao por `method`**:
+`{ method:'pix', qrCodeBase64, copyPaste, expiresAt, dueNowCents }` ou
+`{ method:'card', invoiceUrl, dueNowCents }`.
+No Pix o QR e **atual**, buscado no provedor na hora, **nunca cacheado nem
+persistido** (ele expira). No cartao a fatura **nao expira** e ja esta persistida
+desde a criacao, entao esse caminho **nao chama o provedor**. Uma chamada por carga da pagina, nunca no polling. `409` quando a
 reserva nao esta mais aguardando pagamento, com `code: 'sem_cobranca'` no caso de
 reserva pendente cuja cobranca falhou (borda 9). O `chargeId` do provedor **nao
 sai** no corpo. Mesmas regras de 404 e de dado sensivel.
@@ -1008,12 +1135,20 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
 ### 8.2 Fluxo do handler
 
 1. Valida o token. Inválido → `401`.
-2. Lê `event` + `payment.id`. Eventos relevantes no MVP (Pix): **`PAYMENT_RECEIVED`** (pago) e **`PAYMENT_OVERDUE`** (vencido, usado só para sinalizar saldo em aberto).
+2. Lê `event` + `payment.id`. **A lista de eventos tratados é FILTRO DE RUÍDO, não decisão:** `processCharge` nunca olha o nome do evento, recebe o id e reconsulta. Um evento fora da lista custa uma linha de log; um de dentro custa uma consulta ao provedor.
+   - **Pix:** `PAYMENT_RECEIVED`, `PAYMENT_CONFIRMED`, `PAYMENT_OVERDUE`.
+   - **Cartão:** `PAYMENT_AWAITING_RISK_ANALYSIS`, `PAYMENT_APPROVED_BY_RISK_ANALYSIS`, `PAYMENT_REPROVED_BY_RISK_ANALYSIS`, `PAYMENT_AUTHORIZED`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED`. Nenhum confirma reserva; entram pelo `charge_stage`.
+   - **Estorno e chargeback:** `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_CHARGEBACK_DISPUTE`, `PAYMENT_AWAITING_CHARGEBACK_REVERSAL`.
+
+   **>>> NO CARTÃO É O `PAYMENT_CONFIRMED` QUE CONFIRMA A RESERVA. <<<** Ele significa "pago, dinheiro ainda não disponível"; o `PAYMENT_RECEIVED` do crédito só chega **~32 dias depois**, e esperar por ele deixaria a vaga do cliente valendo daqui a um mês. Não há código especial: `toPaymentState` mapeia `CONFIRMED` para `paid`, e o `RECEIVED` posterior sai por `already_paid`.
+
+   **A lista só vale se os eventos estiverem MARCADOS no painel do Asaas.** Evento não assinado não chega, e não há erro nem log — simplesmente não acontece.
 3. **Reconsulta `GET /v3/payments/{id}`** — nunca decida pelo payload.
 4. Localiza `reservation_payments` por `asaas_payment_id` (fallback: `external_reference`). Não achou → log + `200`.
-5. Já `paid` → `200`, nada a fazer (idempotência).
-6. Pago: numa transação, `state='paid'`, `paid_at`, e `recalcReservationPayment(reservationId)`. Se o pagamento é `full`/`deposit` e a reserva está `pending_payment` com vagas livres → `setReservationStatus('confirmed')`.
-7. Enfileira efeitos (e-mail de confirmação/quitação). Responde `200`.
+5. **Provedor reporta `refunded` e a linha local está `paid`** (estorno ou chargeback): numa transação, `state='refunded'` e `recalcReservationPayment`. **`reservations.status` NÃO muda** (seção 4-B.9). Este teste vem **ANTES** da idempotência do passo seguinte — sem isso a linha `paid` sairia por `already_paid` e o chargeback seria descartado em silêncio.
+6. Já `paid` e o provedor concorda → `200`, nada a fazer (idempotência).
+7. Pago: numa transação, `state='paid'`, `paid_at`, `charge_stage`, o **líquido lido do provedor** (4-B.7), e `recalcReservationPayment(reservationId)`. Se o pagamento é `full`/`deposit` e a reserva está `pending_payment` com vagas livres → `setReservationStatus('confirmed')`.
+8. Enfileira efeitos (e-mail de confirmação/quitação). Responde `200`.
 
 ### 8.3 Pagamento tardio (hold vencido)
 
@@ -1341,7 +1476,9 @@ Um único login (o dono). Sem provider externo.
   /payments/balance-charge.ts         # cobranca do SALDO sob demanda (secao 8-D) — SERVER-ONLY.
                                       # Tres camadas de idempotencia; withBalanceLock e o
                                       # PONTO UNICO onde a trava e tomada
-  /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao
+  /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao.
+                                      # O ramo de REVERSAO (estorno/chargeback) vem ANTES da
+                                      # idempotencia, de proposito — secao 4-B.9
   /notifications.ts                   # Resend (assincrono) — Fase 4, ainda nao existe
   /auth.ts
   /time.ts
@@ -1349,7 +1486,8 @@ Um único login (o dono). Sem provider externo.
   /seed.ts                            # aplica o template ao tenant (npm run db:seed)
   /hash-password.ts                   # gera o hash bcrypt do admin (npm run auth:hash)
   /seed-demo-reservations.ts          # movimento FALSO p/ ver o admin (npm run db:seed:demo) — NUNCA em producao
-/tests                                # integracao contra o Postgres local (Vitest)
+/tests                                # integracao contra o Postgres local (Vitest).
+                                      # Grupo Y = cartao e chargeback (Fase E)
 /drizzle
 /instrumentation.ts                   # fail-fast de auth e de pagamento + agenda os crons de hold (1 min) e reconciliacao (10 min)
 /proxy.ts                             # NAO pode redirecionar /api/webhooks/*
@@ -1400,7 +1538,8 @@ vitest.config.ts
 - Motor de disponibilidade por `resourcesNeeded`; buffer; anti-overbooking.
 - Máquina de estados com hold 15min e pagamento tardio.
 - Horários recorrentes + blackouts + exceções de agenda, com CRUD no admin (seção 7.2).
-- **Pagamento Pix via Asaas**: modo **integral** e modo **sinal**. **REDESENHADO na rev 7 (seção 4-B):** preço cheio na experiência, desconto do Pix configurável por tenant, cartão sem acréscimo, sinal de **50% fixo só no Pix**, configuração financeira em tabela própria e valores congelados no registro.
+- **Pagamento via Asaas**: **Pix** (integral e sinal) e **cartão de crédito**
+  (integral, pela `invoiceUrl`, com chargeback tratado). **REDESENHADO na rev 7 (seção 4-B):** preço cheio na experiência, desconto do Pix configurável por tenant, cartão sem acréscimo, sinal de **50% fixo só no Pix**, configuração financeira em tabela própria e valores congelados no registro.
 - **`reservation_payments`** (sinal + saldo), com `recalcReservationPayment`.
 - **Cobrança do saldo no dia**: QR na hora + **`receiveInCash`** para recebimento por fora.
 - **Webhook robusto** (200 exato, sem redirect, assíncrono, tolerante, órfã ignorada) + **job de reconciliação**.
@@ -1420,7 +1559,11 @@ vitest.config.ts
 
 ### Pós go-live / v2 (NÃO construir agora)
 
-- **Cartão de crédito** (Asaas) — **entra na Fase E da rev 7** (seção 17), via `invoiceUrl` (seção 4-B.8), com chargeback (4-B.9). ATENÇÃO ao implementar: confirmar a reserva no evento **`PAYMENT_CONFIRMED`** (pago, saldo ainda não liberado) e **não** no `PAYMENT_RECEIVED`, que no crédito só chega ~32 dias depois. Tratar parcelamento (taxa cresce por parcela) e antecipação.
+- ~~**Cartão de crédito** (Asaas)~~ — **CONCLUÍDO na Fase E** (seções 4-B.8 e
+  4-B.9). Continua **fora do escopo**: **parcelamento** (a taxa cresce por
+  parcela) e **antecipação de recebíveis**. Hoje a cobrança é sempre à vista, e o
+  líquido vem lido do provedor, então parcelar não exigiria conta nova — exigiria
+  decidir quem paga a diferença, que é decisão de negócio.
 - **Asaas Tap** (celular do guia como maquininha) como caminho oficial do saldo, com baixa automática.
 - **WhatsApp** (Evolution + n8n).
 - **Google Calendar** (espelho opcional).
@@ -1456,8 +1599,8 @@ caem **de uma vez** — o primeiro volume real que o sistema vai ver.
 | **Fase B** | ~~**Sinal de 50% via Pix** (seção 4-B.2, 4-B.3 e 4-B.5), incluindo `confirmed` + `partial`.~~ **CONCLUÍDA em 28/08** — sem migration; passo de escolha no wizard, `deposit` destravado no CRUD, e as três telas mostrando a pendência. |
 | **Fase C** | ~~**Cobrança do saldo sob demanda**, **idempotente** — apertar duas vezes não pode gerar duas cobranças.~~ **CONCLUÍDA em 31/08** — sem migration; três camadas de idempotência (seção 8-D), `GET`/`POST` separados, e o reconciliador parou de poluir o log. |
 | **Fase D** | ~~**Registro manual da maquininha**, com **líquido e taxa congelados** (seção 4-B.7).~~ **CONCLUÍDA em 31/08** — migration 0008, botão "Recebi na maquininha" no painel, taxa ausente passa a REGISTRAR com líquido `NULL` (reversão registrada em 4-B.6). |
-| **Fase E** | **Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9). |
-| **Transversal** | **Líquido lido do Asaas** em toda reserva (seção 4-B.7). Atravessa as fases, não é etapa isolada. |
+| **Fase E** | ~~**Cartão via `invoiceUrl`** (seção 4-B.8) + **chargeback** (seção 4-B.9).~~ **CONCLUÍDA em 01/09** — migration 0009 (`charge_stage` + CHECK do líquido relaxado), `createCardCharge`, terceira opção no wizard, telas de análise de risco, e o chargeback que **antes era traduzido e descartado**. |
+| **Transversal** | ~~**Líquido lido do Asaas**~~ **CONCLUÍDA junto da Fase E**: o `netValue` já vinha no corpo do webhook e passou a ser gravado congelado no mesmo UPDATE que marca o pagamento. |
 | **Termo v2** | Em **paralelo**: inclui a política de cancelamento e resolve a contradição das 48h (seção 4-C). |
 | **Antes do vídeo** | **Testes com clientes reais.** O vídeo é evento de volume; descobrir problema com ele no ar é caro. |
 

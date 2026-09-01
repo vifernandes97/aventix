@@ -1,151 +1,207 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-08-31
+> Última atualização: 2026-09-01
 
 ## Enquadramento (leia antes de priorizar qualquer coisa)
 
-**O sistema está em produção com todas as formas de pagamento do MVP prontas,
-mas o link de agendamento ainda não foi divulgado.** Não há campanha em curso.
-Tudo é **preparação para outubro**, quando sai o vídeo do **@grandecampinas** e
-os leads caem de uma vez.
+**O faseamento de pagamento da rev 7 ACABOU.** Fases 0, A, B, C, D e E
+concluídas. O sistema tem as três formas de pagamento que o cliente pôs como
+condição de lançamento: Pix integral, Pix com sinal de 50% e cartão de crédito.
 
-O risco não é chegar a tempo — é **chegar testado com gente real antes do pico**.
+**O link de agendamento continua não divulgado.** Não há campanha, não há cliente
+real, ninguém está pagando. Tudo é preparação para outubro, quando sai o vídeo do
+**@grandecampinas** e os leads caem de uma vez.
 
-## PRÓXIMO PASSO — testes com clientes reais, e a lista de conferência antes do vídeo
+O risco não é chegar a tempo. É **chegar testado com gente real antes do pico**.
 
-O faseamento de pagamento **acabou**, menos a Fase E (cartão), que a rev 7 pôs
-como condição de lançamento. Duas frentes, nesta ordem:
+## PRÓXIMO PASSO
 
-### 1. Antes de qualquer outra coisa: desativar a experiência TESTE
+O código acabou; o que falta agora é **operação e verificação com gente real**,
+nesta ordem.
 
-**Segue ATIVA em produção e aparece em `/api/experiences`**, ou seja, na LP
-pública. É a pendência mais antiga em aberto e a única que o cliente final veria.
-Caminho pelo admin (`/admin/experiencias` → `Desativar` → `Sim, desativar`), e a
-conferência:
+### 1. Decidir o que fazer com a merge não aprovada de `feat/cartao`
+
+**`feat/cartao` foi mergeada em `main` e enviada para `origin/main`
+(`77a64d7`), sem a aprovação que a tarefa exigia.** O reflog mostra o `checkout`
+e o `merge --ff` acontecendo **depois** do commit na branch, fora da sessão do
+agente. **Produção NÃO mudou** — o deploy é clique manual no Easypanel e ela
+segue em `9b38512`.
+
+Duas saídas: revisar e seguir, ou `git reset --hard f6f4283` em `main` mais
+force-push. Enquanto não decidir, **não deploye**: um deploy do Easypanel a
+partir de `main` sobe a Fase E inteira.
+
+### 2. Habilitar os eventos de cartão no painel do Asaas — ANTES do deploy
+
+**Sem isso a Fase E sobe e não acontece nada, sem erro e sem log.** O webhook de
+produção foi cadastrado só com os eventos do Pix.
+
+| Evento | Consequência de faltar |
+|---|---|
+| **`PAYMENT_CONFIRMED`** | **o mais grave.** É o que confirma reserva no cartão. Sem ele o cliente paga e a vaga só vale ~32 dias depois |
+| `PAYMENT_AWAITING_RISK_ANALYSIS` | a tela repete "aguardando pagamento" para quem já pagou |
+| `PAYMENT_APPROVED_BY_RISK_ANALYSIS` | idem |
+| `PAYMENT_REPROVED_BY_RISK_ANALYSIS` | o cliente não sabe que foi recusado |
+| `PAYMENT_AUTHORIZED` | idem análise |
+| `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED` | idem recusa |
+| `PAYMENT_REFUNDED` | estorno invisível |
+| `PAYMENT_CHARGEBACK_REQUESTED` | **chargeback invisível** |
+| `PAYMENT_CHARGEBACK_DISPUTE` | idem |
+| `PAYMENT_AWAITING_CHARGEBACK_REVERSAL` | idem |
+
+`PAYMENT_RECEIVED` e `PAYMENT_OVERDUE` já estão.
+
+### 3. Desativar a experiência TESTE em produção
+
+Segue **ATIVA** e aparece em `/api/experiences`, ou seja, na LP pública. É a
+pendência mais antiga em aberto e a única que o cliente final veria. Pelo admin
+(`/admin/experiencias` → `Desativar`), e a conferência:
 
 ```bash
 curl -s https://app.aventix.com.br/api/experiences | grep -i teste
 ```
 
-### 2. Fase E — cartão via `invoiceUrl`
+### 4. Testes com clientes reais
 
-É o que falta para o lançamento que o cliente condicionou a "todas as formas de
-pagamento" (seção 17). Duas armadilhas já documentadas e não resolvidas:
-confirmar a reserva no evento **`PAYMENT_CONFIRMED`** e não no `PAYMENT_RECEIVED`
-(que no crédito só chega ~32 dias depois), e o **chargeback** (seção 4-B.9), que
-cria uma combinação de estados que a seção 5 ainda não prevê.
+O que o vídeo torna caro descobrir com ele no ar. Ver a lista de observação
+abaixo.
 
 ### Faseamento (CLAUDE.md seção 17)
 
 | Fase | Estado |
 |---|---|
-| **Fase 0** — configuração financeira | **CONCLUÍDA** |
+| **Fase 0** — configuração financeira | **CONCLUÍDA, em produção** |
 | **Fase A** — preço cheio + desconto do Pix | **CONCLUÍDA, em produção** |
 | **Fase B** — sinal de 50% via Pix | **CONCLUÍDA, validada com dinheiro real** |
 | **Fase C** — cobrança do saldo, idempotente | **CONCLUÍDA, em produção** |
 | **Fase D** — registro da maquininha | **CONCLUÍDA, em produção**; falta o dado (percentuais) |
-| **Fase E** — cartão via `invoiceUrl` + chargeback | **PRÓXIMA fase de código** |
-| **Transversal** — líquido lido do Asaas | pendente |
-| **Termo v2** | **CONCLUÍDO e em produção** |
+| **Fase E** — cartão + chargeback | **CONCLUÍDA em código. NÃO deployada** |
+| **Transversal** — líquido lido do Asaas | **CONCLUÍDA junto da Fase E** |
+| **Termo v2** | **CONCLUÍDO, em produção** (aprovação do cliente pendente, por decisão) |
 | **Antes do vídeo** — testes com clientes reais | em andamento |
 
 ## Estado de produção
 
-**Deploy feito nesta sessão.** Produção está em **`9b38512`** (`main` =
-`origin/main`), saindo de `b629a11`. Entraram de uma vez: Fase C, Fase D,
-Termo v2 e a correção da faixa do `/admin/financeiro`.
+**Nada foi deployado nesta sessão.** Produção segue em **`9b38512`**.
 
-- **Migrations: 9 no disco, 9 aplicadas em local.** A 0008 (colunas da Fase D)
-  roda no boot. **Confira o número absoluto em produção**, que é a única
-  verificação que este deploy pede:
-  `SELECT count(*) FROM drizzle.__drizzle_migrations;` deve dar **9**.
-- **Este deploy NÃO cai na armadilha do seed** (seção 19): a 0008 só acrescenta
-  colunas nuláveis, e não houve setting nova nem tabela de configuração nova.
-  Não há `UPDATE` manual a fazer.
-- **`card_machine_rates` está VAZIA**, e é o estado esperado: os percentuais
-  reais não chegaram. Enquanto isso, todo registro de maquininha grava
-  `net_cents = NULL` e aparece na contagem de `/admin/financeiro`.
-- **Termo v2 vigente.** Reserva nova grava `termo_version = '2026-08-31'`; as
-  antigas seguem apontando para o v1, com o texto do v1.
+- **Migrations: 10 no disco, 10 aplicadas em local, 9 em produção.** A 0009 é a
+  da Fase E; ela roda no boot do próximo deploy. Conferência obrigatória na
+  mesma janela: `SELECT count(*) FROM drizzle.__drizzle_migrations;` deve dar
+  **10**.
+- **A 0009 NÃO cai na armadilha do seed (seção 19):** ela cria um enum, acrescenta
+  uma coluna nulável e relaxa um CHECK. **Nenhuma setting nova, nenhuma tabela de
+  configuração nova.** Não há `UPDATE` manual a fazer.
+- **`card_machine_rates` continua VAZIA** — estado esperado; os percentuais reais
+  não chegaram. Registro de maquininha grava `net_cents = NULL` e aparece na
+  contagem de `/admin/financeiro`.
 - **3 reservas da borda 9** (cobrança nunca criada) continuam em produção. O
   reconciliador ainda avisa sobre elas, e é o único sinal que existe.
+- **Uma cobrança de teste ficou no sandbox** desta sessão (`invoiceUrl`
+  `.../i/uwgiwc7t7e35bkad`), somando à da Fase C (`3aa77hmzw2yshk6r`).
 
 ## O que foi entregue nesta sessão
 
-**Fase C — cobrança do saldo sob demanda, idempotente.** Sem migration. Três
-camadas: caminho rápido local, `pg_try_advisory_xact_lock` na linha do pagamento,
-e pergunta ao provedor pela `external_reference` antes de criar. A terceira cobre
-o único buraco que trava local nenhuma alcança: o processo morrer entre o Asaas
-criar e nós gravarmos o id. É **fail-closed**.
+**Fase E — cartão de crédito via `invoiceUrl`.** Terceira opção no wizard, ao
+lado das duas de Pix. O cartão paga o cheio **porque não tem linha de desconto**,
+jamais por acréscimo — não existe campo de acréscimo em lugar nenhum do schema.
+Método próprio no provedor (`createCardCharge`), porque o que separa os dois não
+é o meio e sim o retorno: `createPixCharge` busca um QR que não existe para
+cartão. **Nenhum dado de cartão atravessa o servidor** (PCI-DSS, seção 4-B.8).
 
-**Fase D — registro da maquininha.** Migration 0008 congela bruto, modalidade,
-percentual e líquido, mais o rastro de quem declarou. Recusa o **caminho duplo**
-(saldo já pago por Pix) e **cancela** a cobrança Pix viva, gravando antes e
-cancelando depois.
+**O achado que definiu a fase: o chargeback era traduzido e descartado.**
+`toPaymentState` sempre mapeou os seis status de estorno/chargeback para
+`refunded`, mas nada agia sobre isso — a linha estava `paid`, o processamento
+saía por `already_paid` e o evento ia embora sem tocar no banco. Pior que não
+implementado, porque *parecia* implementado a quem lesse a tradução.
 
-**Termo v2** (`quadriciclo-v2.ts`, `TERM_VERSION '2026-08-31'`), com a §5 de
-pagamento, cancelamento e remarcação.
+**Chargeback reverte o dinheiro, não a reserva.** A linha vira `refunded`,
+`recalcReservationPayment` derruba o agregado sozinho, `reservations.status` não
+muda, e o painel do dono ganhou faixa vermelha dizendo em voz alta que a reserva
+**não** foi cancelada. Disputa ganha volta sozinha, porque `processCharge`
+converge para o provedor em vez de aplicar transições.
 
-**Correção da Fase A:** a faixa do `/admin/financeiro` dizia que o desconto não
-estava ligado ao preço, e o dono que acreditasse nela baixaria 349,99 para
-325,49, fazendo o sistema cobrar 302,71.
+**O CHECK do líquido da Fase D barrava o próprio Asaas.** Era bicondicional e
+exigia modalidade de maquininha para aceitar `net_cents`; o provedor informa o
+líquido sem nenhum dos dois. A 0009 troca pela implicação, e isso **encerrou a
+tarefa transversal do líquido** — o `netValue` já vinha no corpo do webhook.
 
-**`deposit_policy_text`** documentada como ponto de extensão não implementado.
+**`charge_stage`** (enum novo): os cinco estados intermediários do cartão
+colapsam em `pending`, e sem distinguir a tela repetiria "aguardando pagamento"
+para quem acabou de digitar o cartão. **Não decide nada.**
 
-## Três coisas desta sessão que valem como método, não como tarefa
+**Confirmação no `PAYMENT_CONFIRMED` já funcionava por construção** — o
+processamento nunca olha o nome do evento. Não havia código a escrever; havia
+teste a escrever, porque a propriedade era verdadeira sem ninguém a afirmar.
 
-**1. Verificação em navegador encontra o que teste não encontra.** Duas vezes.
-Na Fase C, o duplo toque no caminho rápido fazia o Asaas responder 400 e a tela
-dizer *"o provedor recusou a cobrança"* — falso, com o cliente na frente. Na
-Fase D, a faixa obsoleta do Financeiro. **Nenhum dos dois apareceria em teste com
-provedor mockado nem em build verde.**
+## Duas coisas desta sessão que valem como método
 
-**2. Teste de corrida só prova algo depois de falhar por mutação.** O caso do
-duplo toque (V1.2) e o do congelamento (W4.3) foram validados desligando a
-proteção e vendo o teste quebrar. **Regra do projeto agora:** todo teste de
-corrida precisa ser visto falhando antes de ser aceito como verde.
+**1. Sete mutações, todas pegas.** Os 23 casos do grupo Y passaram de primeira, o
+que não prova nada. Cada mutação (remover o bloco de reversão, cancelar a reserva
+no chargeback, reescrever o líquido, cartão caindo no `createPixCharge`,
+cartão+sinal rebaixando, desconto do Pix no cartão, `CONFIRMED` deixando de ser
+pago) quebrou exatamente os casos certos. **A regra de 31/08 deixou de valer só
+para teste de corrida: vale para qualquer teste que trave regra de dinheiro.**
 
-**3. Documento que envelhece junto com a fase que o motivou vira instrução
-errada.** Aconteceu com a faixa do Financeiro e quase aconteceu com o termo. É a
-mesma classe da armadilha do seed: nada quebra, nada acusa, e alguém age sobre
-uma informação falsa.
+**2. Terceira vez que o navegador acha o que build verde não acha.** A tela de
+cartão recusado prometia *"ou pagar por Pix"*, caminho que **não existe** —
+mesma falha da frase removida do Termo v2. As três: o 400 do duplo toque (Fase
+C), a faixa obsoleta do Financeiro (Fase D), esta. **Teste prova comportamento;
+navegador prova o que a pessoa lê.**
+
+## A observar nos testes com gente real (não são tarefas ainda)
+
+**1. Quantas análises de risco do cartão passam de 15 minutos.** O hold continua
+correndo durante a análise, e quando vence o cron expira a reserva — caindo no
+pagamento tardio (seção 8.3), que já existe e já trata. **Não foi estendido de
+propósito:** mexer no cron, que tem duas barreiras deliberadas, sem saber a
+frequência real é otimização às cegas. **Rotina → vira tarefa. Raro → o caminho
+tardio já trabalha.**
+
+**2. Se algum cliente procura como trocar de meio de pagamento** depois de o
+cartão ser recusado. Hoje não existe caminho, e a tela deixou de prometer um.
 
 ## Pendências que NÃO podem se perder
 
-**1. A experiência TESTE segue ATIVA em produção.** Ver o Próximo Passo.
+**1. A merge não aprovada de `feat/cartao` em `main`.** Ver o Próximo Passo.
 
-**2. Termo v2 está em produção sem confirmação de aprovação do cliente.**
-Perguntei duas vezes se o texto voltou aprovado pelo Quadri Club e não houve
-resposta. É documento com valor legal, e a política (seção 4-C) foi decidida por
-mensagem, não por escrito dele. **Se não estiver aprovado, é a pendência mais
-séria da lista.**
+**2. A experiência TESTE segue ATIVA em produção.**
 
-**3. Cancelar reserva não cancela a cobrança de saldo no Asaas.** O cliente
-cancelado ainda consegue pagar. Era teórico até a Fase C; agora aquela cobrança
-existe de verdade. A Fase D trouxe o primeiro chamador real de `cancelCharge`,
-então a costura está a um passo. Registrado para o Orbi.
+**3. Termo v2 está em produção sem aprovação do cliente.** **Decisão do dono, não
+pendência do agente:** produção é ambiente de homologação, o link não foi
+divulgado, o termo só vincula quem o aceita, e a aprovação sai numa reunião. Está
+no board do Orbi.
 
-**4. Percentuais da maquininha** não enviados pelo cliente.
+**4. Cancelar reserva não cancela a cobrança de saldo no Asaas.** O cliente
+cancelado ainda consegue pagar. **Adiado para DEPOIS da Fase E de propósito**, e
+agora o quadro está completo: o chargeback toca a mesma região (cancelamento,
+estorno, cobrança viva no provedor). É o momento de tratar os dois de uma vez.
+
+**5. Percentuais da maquininha** não enviados pelo cliente.
 
 ## Dívidas conhecidas
 
 **Verificação**
-- Telas do admin conferidas em navegador autenticado: **agenda, painel de
-  detalhe e financeiro**. Continuam sem conferência: experiências, horários,
-  bloqueios, exceções, clientes e agendamentos.
-- O método está estabelecido: cookie de sessão selado com `iron-session` a partir
-  do `SESSION_SECRET` local, script temporário, apagado depois.
+- Telas conferidas em navegador autenticado: agenda, painel de detalhe,
+  financeiro, e agora o **wizard público e a tela de status** (as três telas de
+  cartão: fatura, em análise, recusado).
+- Continuam sem conferência: experiências, horários, bloqueios, exceções,
+  clientes e agendamentos.
+- Método: cookie de sessão selado com `iron-session` a partir do `SESSION_SECRET`
+  local, script temporário, apagado depois.
+
+**Cartão (fora de escopo, decidido)**
+- **Parcelamento** e **antecipação de recebíveis**. A cobrança é sempre à vista.
+  Parcelar não exige conta nova (o líquido vem lido do provedor); exige decidir
+  quem paga a diferença, que é decisão de negócio.
+- Não há caminho para trocar o meio de pagamento de uma reserva já criada.
 
 **Integração de pagamento**
 - Indicador de saúde da integração no `/admin` não construído (seção 8-B).
 - Cinco divergências entre a seção 8 e o que foi medido, não resolvidas.
-- Transversal do líquido lido do Asaas não implementada.
 - `findChargeByExternalReference` filtra a referência de volta por segurança; o
-  filtro do Asaas **não foi medido isoladamente**, e a conferência defensiva é o
-  que garante o resultado.
-- Na adoção de cobrança órfã, o `invoiceUrl` fica `null` (o `ChargeSnapshot` não
-  o carrega). Sem impacto conhecido.
+  filtro do Asaas **não foi medido isoladamente**.
+- Na adoção de cobrança órfã o `invoiceUrl` fica `null`. Sem impacto conhecido.
 
 **Multi-tenancy pela metade (dívida de propósito, 23/08)**
 - Etapa 2 não feita: `getTenantId()` devolve 1 fixo, com
@@ -155,9 +211,9 @@ então a costura está a um passo. Registrado para o Orbi.
 
 **Ambiente de teste**
 - O `.env` guarda o hash escapado (`\$`) para o Next, e o `dotenv` puro dos testes
-  não expande. Qualquer grupo que teste rota autenticada precisa desfazer o
-  escape no `process.env` antes da primeira chamada, como faz o grupo W. Se
-  virarem três, vira helper em `tests/helpers/`.
+  não expande. Grupo que teste rota autenticada precisa desfazer o escape no
+  `process.env` antes da primeira chamada, como faz o grupo W. Se virarem três,
+  vira helper em `tests/helpers/`.
 
 **Gerais**
 - Sem CI/CD; deploy é clique manual no Easypanel.
@@ -167,8 +223,8 @@ então a costura está a um passo. Registrado para o Orbi.
   `GET /api/experiences` e `POST /api/reservations` — **o vídeo torna isto mais
   relevante do que era**.
 - Sem proteção contra duplo clique em `POST /api/reservations` no servidor.
-  **Agora existe precedente pronto**: a Fase C resolveu o mesmo problema com
-  advisory lock e chave natural determinística. Reavaliar antes do vídeo.
+  Precedente pronto na Fase C (advisory lock + chave natural determinística).
+  Reavaliar antes do vídeo.
 - Sessão sem revogação (iron-session, 8h).
 - A âncora dos testes de lead time vence em junho de 2027.
 - Cancelamento e CRUD de experiências não têm teste automatizado.
@@ -176,31 +232,32 @@ então a costura está a um passo. Registrado para o Orbi.
 - E-mail cortado do go-live; a tela `confirmed` é a única confirmação ao cliente.
 - Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`.
 - Chave SSH do VPS não configurada; acesso por senha de root.
-- Branches locais mergeadas, podem ser apagadas: `feat/maquininha`,
-  `feat/tenant-slug`, `feat/idade-e-mapa`, `feat/config-financeira`,
-  `feat/preco-por-metodo`, `feat/sinal-50`, `feat/texto-informacoes`.
+- Branches locais mergeadas, podem ser apagadas: `feat/cartao`,
+  `feat/maquininha`, `feat/tenant-slug`, `feat/idade-e-mapa`,
+  `feat/config-financeira`, `feat/preco-por-metodo`, `feat/sinal-50`,
+  `feat/texto-informacoes`.
 
 ## Testes
 
-`npm test`: **24 arquivos, 254 casos, todos passando**.
+`npm test`: **25 arquivos, 277 casos, todos passando**.
 
-- Grupo **V** (`v-cobranca-saldo.test.ts`, 24 casos) — Fase C. Os testes de V1
-  não verificam "respondeu 200": contam **quantas vezes o provedor foi mandado
-  criar**. V1.2 validado por mutação.
-- Grupo **W** (`w-maquininha.test.ts`, 24 casos) — Fase D. W4.1 trava a coluna e
-  **W4.3 trava o caminho de leitura**, que é onde o risco real mora; validado por
-  mutação (leitor recalculando devolve 14100 em vez de 14250).
-- Grupo **X** (`x-termo.test.ts`, 9 casos) — versionamento do termo, com o
-  **sha256 do v1 fixado**. Se X1.1 falhar, o conserto é desfazer a edição e criar
-  um v3, **nunca** atualizar o hash.
+- Grupo **V** (`v-cobranca-saldo.test.ts`, 24 casos) — Fase C, validado por mutação.
+- Grupo **W** (`w-maquininha.test.ts`, 24 casos) — Fase D, validado por mutação.
+- Grupo **X** (`x-termo.test.ts`, 9 casos) — versionamento do termo, sha256 do v1
+  fixado. Se X1.1 falhar, o conserto é desfazer a edição e criar um v3, **nunca**
+  atualizar o hash.
+- Grupo **Y** (`y-cartao.test.ts`, 23 casos) — Fase E. **Todos validados por
+  mutação.** Y4.1 trava a regressão do chargeback descartado; Y4.2 trava a outra
+  metade da regra (a reserva não é cancelada); Y5.2 trava o congelamento do
+  líquido; Y5.4 trava que ninguém o calcula.
 
 ## Banco local
 
-Container `aventix-db-dev` no ar. **9 migrations no disco, 9 aplicadas**
+Container `aventix-db-dev` no ar. **10 migrations no disco, 10 aplicadas**
 (`npm run db:generate` responde "No schema changes"). `reservations` vazia e
 `card_machine_rates` vazia: as fixtures da verificação em navegador foram
 apagadas ao final.
 
 **`payment_mode` local está em `full`** nas duas trilhas, diferente de produção,
 onde está `deposit`. Para exercitar sinal ou saldo localmente, ligue e desligue à
-mão, como faz o helper `comSinal` dos grupos U, V e W.
+mão, como faz o helper `comSinal` dos grupos U, V, W e Y.
