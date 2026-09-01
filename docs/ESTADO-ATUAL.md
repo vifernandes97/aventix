@@ -1,7 +1,7 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-09-01
+> Última atualização: 2026-09-01 (revisado após o deploy da Fase E)
 
 ## Enquadramento (leia antes de priorizar qualquer coisa)
 
@@ -17,55 +17,30 @@ O risco não é chegar a tempo. É **chegar testado com gente real antes do pico
 
 ## PRÓXIMO PASSO
 
-O código acabou; o que falta agora é **operação e verificação com gente real**,
-nesta ordem.
+**A Fase E foi deployada.** Os itens operacionais que este documento listava como
+bloqueio foram todos executados pelo dono, fora da sessão do agente:
 
-### 1. Decidir o que fazer com a merge não aprovada de `feat/cartao`
+- **Os dez eventos de cartão e chargeback estão habilitados** no painel do Asaas.
+- **A experiência TESTE está desativada** (`active = f`).
+- **Produção está com 10 migrations**, incluindo a 0009.
+- **A merge de `feat/cartao` em `main` foi deliberada**, feita pelo dono para
+  deployar. Não há nada a desfazer.
 
-**`feat/cartao` foi mergeada em `main` e enviada para `origin/main`
-(`77a64d7`), sem a aprovação que a tarefa exigia.** O reflog mostra o `checkout`
-e o `merge --ff` acontecendo **depois** do commit na branch, fora da sessão do
-agente. **Produção NÃO mudou** — o deploy é clique manual no Easypanel e ela
-segue em `9b38512`.
+### O passo agora é AUTONOMIA DO DONO, e há uma exposição ativa
 
-Duas saídas: revisar e seguir, ou `git reset --hard f6f4283` em `main` mais
-force-push. Enquanto não decidir, **não deploye**: um deploy do Easypanel a
-partir de `main` sobe a Fase E inteira.
+O levantamento de 01/09 (`docs/LEVANTAMENTO-AUTONOMIA.md`) mapeou tudo que o dono
+não controla sozinho. **Ele encontrou uma exposição que não é dívida futura, é
+risco hoje:**
 
-### 2. Habilitar os eventos de cartão no painel do Asaas — ANTES do deploy
+**>>> RODAR `seedTenant()` EM PRODUÇÃO DESLIGA O SINAL DE 50% DAS DUAS TRILHAS. <<<**
+O seed **reconcilia experiências** (`lib/seed.ts`), não só as insere: preço,
+duração, buffer, `payment_mode`, idade mínima e `active` voltam ao template
+quando divergem. O template tem `paymentMode: 'full'` nas duas trilhas; produção
+está em `deposit`. Sem erro, sem log, e a opção de sinal some do wizard.
 
-**Sem isso a Fase E sobe e não acontece nada, sem erro e sem log.** O webhook de
-produção foi cadastrado só com os eventos do Pix.
-
-| Evento | Consequência de faltar |
-|---|---|
-| **`PAYMENT_CONFIRMED`** | **o mais grave.** É o que confirma reserva no cartão. Sem ele o cliente paga e a vaga só vale ~32 dias depois |
-| `PAYMENT_AWAITING_RISK_ANALYSIS` | a tela repete "aguardando pagamento" para quem já pagou |
-| `PAYMENT_APPROVED_BY_RISK_ANALYSIS` | idem |
-| `PAYMENT_REPROVED_BY_RISK_ANALYSIS` | o cliente não sabe que foi recusado |
-| `PAYMENT_AUTHORIZED` | idem análise |
-| `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED` | idem recusa |
-| `PAYMENT_REFUNDED` | estorno invisível |
-| `PAYMENT_CHARGEBACK_REQUESTED` | **chargeback invisível** |
-| `PAYMENT_CHARGEBACK_DISPUTE` | idem |
-| `PAYMENT_AWAITING_CHARGEBACK_REVERSAL` | idem |
-
-`PAYMENT_RECEIVED` e `PAYMENT_OVERDUE` já estão.
-
-### 3. Desativar a experiência TESTE em produção
-
-Segue **ATIVA** e aparece em `/api/experiences`, ou seja, na LP pública. É a
-pendência mais antiga em aberto e a única que o cliente final veria. Pelo admin
-(`/admin/experiencias` → `Desativar`), e a conferência:
-
-```bash
-curl -s https://app.aventix.com.br/api/experiences | grep -i teste
-```
-
-### 4. Testes com clientes reais
-
-O que o vídeo torna caro descobrir com ele no ar. Ver a lista de observação
-abaixo.
+Isto vale para **qualquer** edição feita pelo `/admin/experiencias` — a tela
+existe e funciona, e o seed a desfaz. Ver o levantamento, seção "o que eu faria
+primeiro".
 
 ### Faseamento (CLAUDE.md seção 17)
 
@@ -76,25 +51,23 @@ abaixo.
 | **Fase B** — sinal de 50% via Pix | **CONCLUÍDA, validada com dinheiro real** |
 | **Fase C** — cobrança do saldo, idempotente | **CONCLUÍDA, em produção** |
 | **Fase D** — registro da maquininha | **CONCLUÍDA, em produção**; falta o dado (percentuais) |
-| **Fase E** — cartão + chargeback | **CONCLUÍDA em código. NÃO deployada** |
+| **Fase E** — cartão + chargeback | **CONCLUÍDA, em produção** |
 | **Transversal** — líquido lido do Asaas | **CONCLUÍDA junto da Fase E** |
 | **Termo v2** | **CONCLUÍDO, em produção** (aprovação do cliente pendente, por decisão) |
 | **Antes do vídeo** — testes com clientes reais | em andamento |
 
 ## Estado de produção
 
-**Nada foi deployado nesta sessão.** Produção segue em **`9b38512`**.
+**A Fase E foi deployada.** Produção está em `77a64d7` ou adiante.
 
-- **Migrations: 10 no disco, 10 aplicadas em local, 9 em produção.** A 0009 é a
-  da Fase E; ela roda no boot do próximo deploy. Conferência obrigatória na
-  mesma janela: `SELECT count(*) FROM drizzle.__drizzle_migrations;` deve dar
-  **10**.
+- **Migrations: 10 no disco, 10 aplicadas em local, 10 em produção.**
 - **A 0009 NÃO cai na armadilha do seed (seção 19):** ela cria um enum, acrescenta
   uma coluna nulável e relaxa um CHECK. **Nenhuma setting nova, nenhuma tabela de
   configuração nova.** Não há `UPDATE` manual a fazer.
 - **`card_machine_rates` continua VAZIA** — estado esperado; os percentuais reais
   não chegaram. Registro de maquininha grava `net_cents = NULL` e aparece na
   contagem de `/admin/financeiro`.
+- **A experiência TESTE está desativada** (`active = f`), conferida pelo dono.
 - **3 reservas da borda 9** (cobrança nunca criada) continuam em produção. O
   reconciliador ainda avisa sobre elas, e é o único sinal que existe.
 - **Uma cobrança de teste ficou no sandbox** desta sessão (`invoiceUrl`
@@ -163,21 +136,21 @@ cartão ser recusado. Hoje não existe caminho, e a tela deixou de prometer um.
 
 ## Pendências que NÃO podem se perder
 
-**1. A merge não aprovada de `feat/cartao` em `main`.** Ver o Próximo Passo.
+**1. >>> O SEED DESLIGA O SINAL EM PRODUÇÃO. <<<** Ver o Próximo Passo. É a
+pendência mais urgente da lista, porque o gatilho é alguém rodar um seed por
+outro motivo.
 
-**2. A experiência TESTE segue ATIVA em produção.**
-
-**3. Termo v2 está em produção sem aprovação do cliente.** **Decisão do dono, não
+**2. Termo v2 está em produção sem aprovação do cliente.** **Decisão do dono, não
 pendência do agente:** produção é ambiente de homologação, o link não foi
 divulgado, o termo só vincula quem o aceita, e a aprovação sai numa reunião. Está
 no board do Orbi.
 
-**4. Cancelar reserva não cancela a cobrança de saldo no Asaas.** O cliente
+**3. Cancelar reserva não cancela a cobrança de saldo no Asaas.** O cliente
 cancelado ainda consegue pagar. **Adiado para DEPOIS da Fase E de propósito**, e
 agora o quadro está completo: o chargeback toca a mesma região (cancelamento,
 estorno, cobrança viva no provedor). É o momento de tratar os dois de uma vez.
 
-**5. Percentuais da maquininha** não enviados pelo cliente.
+**4. Percentuais da maquininha** não enviados pelo cliente.
 
 ## Dívidas conhecidas
 
