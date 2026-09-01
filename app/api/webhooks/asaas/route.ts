@@ -53,11 +53,54 @@ const bodySchema = z.object({
   payment: z.object({ id: z.string() }).optional(),
 });
 
-/** Eventos que este MVP processa. Qualquer outro e reconhecido e ignorado. */
+// ============================================================================
+// Eventos que este sistema processa. Qualquer outro e reconhecido e ignorado.
+//
+// >>> ESTA LISTA NAO DECIDE NADA — E UM FILTRO DE RUIDO. <<<
+// `processCharge` recebe so o ID e RECONSULTA o provedor (secao 8.2 passo 3);
+// ele nunca olha o nome do evento. Entao acrescentar um evento aqui nao muda
+// como ele e tratado: muda apenas se ele chega a ser processado. Um evento de
+// fora da lista custa uma linha de log; um evento de dentro custa uma consulta
+// ao provedor.
+//
+// >>> A LISTA SO VALE SE OS EVENTOS ESTIVEREM MARCADOS NO PAINEL DO ASAAS. <<<
+// O webhook de producao foi cadastrado com os eventos do Pix. Os de cartao
+// (analise de risco) e os de chargeback provavelmente NAO estao marcados, e
+// nesse caso nunca chegam aqui — nao ha erro, nao ha log, simplesmente nao
+// acontece. Ver a lista no fim de docs/ESTADO-ATUAL.md.
+// ============================================================================
 const HANDLED_EVENTS = new Set([
-  'PAYMENT_RECEIVED', // Pix caiu
-  'PAYMENT_CONFIRMED', // no Pix chega junto com RECEIVED; no cartao (v2) e o que confirma
+  // -- comuns aos dois meios ------------------------------------------------
+  'PAYMENT_RECEIVED', // dinheiro NA CONTA. No Pix e a confirmacao; no cartao chega ~32 dias depois
+  // >>> NO CARTAO, E ESTE QUE CONFIRMA A RESERVA. <<<
+  // Significa "pago, dinheiro ainda nao disponivel". No Pix chega junto com o
+  // RECEIVED e nao faz diferenca; no CREDITO o RECEIVED so vem ~32 dias depois,
+  // e esperar por ele deixaria a vaga do cliente valendo daqui a um mes.
+  // Nao ha codigo especial para isso: `toPaymentState` mapeia CONFIRMED para
+  // 'paid', e o RECEIVED que chega depois sai por `already_paid`.
+  'PAYMENT_CONFIRMED',
   'PAYMENT_OVERDUE', // vencido: nao muda estado, so sinaliza pendencia
+
+  // -- cartao: analise de risco e captura (secao 4-B.9) ---------------------
+  // Nenhum destes confirma reserva: todos caem em `state='pending'`. Entram na
+  // lista pelo `charge_stage`, que e o que permite a tela dizer "em analise" em
+  // vez de repetir "aguardando pagamento" — e "em analise" que nao se distingue
+  // de "aguardando" faz o cliente concluir que travou e pagar de novo.
+  'PAYMENT_AWAITING_RISK_ANALYSIS',
+  'PAYMENT_APPROVED_BY_RISK_ANALYSIS',
+  'PAYMENT_REPROVED_BY_RISK_ANALYSIS',
+  'PAYMENT_AUTHORIZED', // autorizado, aguardando captura — NAO e pago
+  'PAYMENT_CREDIT_CARD_CAPTURE_REFUSED',
+
+  // -- estorno e chargeback (secao 4-B.9) -----------------------------------
+  // O cliente pode contestar a compra MESES depois, com o passeio ja realizado.
+  // Ate a Fase E estes eventos eram traduzidos corretamente por `toPaymentState`
+  // e DESCARTADOS sem tocar no banco — o pior estado possivel, porque parecia
+  // implementado. Ver o bloco de `refunded` em lib/payments/process.ts.
+  'PAYMENT_REFUNDED',
+  'PAYMENT_CHARGEBACK_REQUESTED',
+  'PAYMENT_CHARGEBACK_DISPUTE',
+  'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
 ]);
 
 /** Resposta de sucesso. SEMPRE 200, corpo minimo. */

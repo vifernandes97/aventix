@@ -41,6 +41,18 @@ export type PublicReservationStatus = 'pending_payment' | 'confirmed' | 'cancell
 /** Estado do pagamento DEVIDO (o `full` ou o `deposit`), nao do saldo. */
 export type DuePaymentState = 'pending' | 'paid' | 'cancelled' | 'refunded';
 
+/** Meio do pagamento devido. Espelha o enum `payment_method`. */
+export type DuePaymentMethod = 'pix' | 'card';
+
+/** Estagio da cobranca no provedor. Espelha o enum `charge_stage`. */
+export type DueChargeStage =
+  | 'aguardando'
+  | 'em_analise'
+  | 'recusado'
+  | 'pago'
+  | 'estornado'
+  | 'cancelado';
+
 export type PublicReservationView = {
   status: PublicReservationStatus;
   /**
@@ -64,6 +76,27 @@ export type PublicReservationView = {
    * quebrar se um dia produzir.
    */
   paymentState: DuePaymentState | null;
+  /**
+   * MEIO da cobranca devida (secao 4-B.2). Decide o que a tela oferece: QR e
+   * copia-e-cola no Pix, botao para a fatura do provedor no cartao (4-B.8).
+   */
+  paymentMethod: DuePaymentMethod;
+  /**
+   * Estagio da cobranca no provedor — a granularidade que `paymentState` nao
+   * tem (ver `ChargeStage` em lib/payments/provider.ts).
+   *
+   * >>> E O QUE IMPEDE "EM ANALISE" DE PARECER "TRAVOU". <<<
+   * No cartao, a analise de risco pode durar e o pagamento fica `pending` esse
+   * tempo todo. Sem este campo a tela repetiria a mesma mensagem de "aguardando
+   * pagamento" que mostra antes de o cliente pagar — e quem acabou de passar o
+   * cartao conclui que nao funcionou e paga de novo.
+   *
+   * `null` em cobranca que o provedor ainda nao reportou (nenhum evento e
+   * nenhuma reconciliacao desde a criacao). A tela trata como `aguardando`.
+   *
+   * NAO DECIDE NADA. `paymentState` continua sendo quem governa o dinheiro.
+   */
+  chargeStage: DueChargeStage | null;
   amountPaidCents: number;
   /**
    * max(0, total - pago). Nunca negativo.
@@ -100,6 +133,21 @@ export type DueCharge = {
   chargeId: string | null;
   state: DuePaymentState;
   amountCents: number;
+  /** decide se a rota busca QR no provedor ou devolve a fatura ja persistida */
+  method: DuePaymentMethod;
+  /**
+   * Fatura do provedor, persistida na criacao da cobranca.
+   *
+   * >>> NO CARTAO E O UNICO CAMINHO DE PAGAMENTO, e por isso a rota publica a
+   * devolve. <<< Diferente do QR, ela NAO expira e nao precisa ser buscada na
+   * hora — o que poupa uma chamada ao provedor a cada carga da tela.
+   *
+   * Nao e segredo: quem tem a URL da reserva ja tem a credencial (secao 7.1), e
+   * a fatura pede os dados de pagamento a quem a abre. O `chargeId` continua
+   * FORA do payload, esse sim uma referencia utilizavel contra a conta do
+   * tenant no provedor.
+   */
+  invoiceUrl: string | null;
 };
 
 // ============================================================================
@@ -112,7 +160,8 @@ export type DueCharge = {
  * dois (secao 5.2 passo 3). O `balance` fica de fora de proposito.
  */
 const DUE_PAYMENT = sql`
-  SELECT rp.id, rp.state, rp.amount_cents, rp.asaas_payment_id
+  SELECT rp.id, rp.state, rp.amount_cents, rp.asaas_payment_id,
+         rp.method, rp.charge_stage, rp.asaas_invoice_url
   FROM reservation_payments rp
   WHERE rp.reservation_id = r.id
     AND rp.kind IN ('full', 'deposit')
@@ -124,6 +173,8 @@ type StatusRow = {
   status: PublicReservationStatus;
   payment_mode: 'full' | 'deposit';
   payment_state: DuePaymentState | null;
+  payment_method: DuePaymentMethod | null;
+  charge_stage: DueChargeStage | null;
   amount_paid_cents: number;
   total_price_cents: number;
   hold_expires_at: string | null;
@@ -161,6 +212,8 @@ export async function getPublicReservationStatus(
       r.status::text          AS status,
       r.payment_mode::text    AS payment_mode,
       (SELECT d.state::text FROM (${DUE_PAYMENT}) d) AS payment_state,
+      (SELECT d.method::text FROM (${DUE_PAYMENT}) d) AS payment_method,
+      (SELECT d.charge_stage::text FROM (${DUE_PAYMENT}) d) AS charge_stage,
       r.amount_paid_cents     AS amount_paid_cents,
       r.total_price_cents     AS total_price_cents,
       r.hold_expires_at       AS hold_expires_at,
@@ -190,6 +243,10 @@ export async function getPublicReservationStatus(
     status: row.status,
     paymentMode: row.payment_mode,
     paymentState: row.payment_state,
+    // Reserva sem linha devida (caso degenerado que a criacao nao produz) cai
+    // em 'pix', que e o default do schema e o que a tela ja sabia desenhar.
+    paymentMethod: row.payment_method ?? 'pix',
+    chargeStage: row.charge_stage,
     amountPaidCents: row.amount_paid_cents,
     balanceCents: Math.max(0, row.total_price_cents - row.amount_paid_cents),
     holdExpiresAt: iso(row.hold_expires_at),
@@ -205,6 +262,8 @@ type DueChargeRow = {
   asaas_payment_id: string | null;
   state: DuePaymentState;
   amount_cents: number;
+  method: DuePaymentMethod;
+  asaas_invoice_url: string | null;
 };
 
 /**
@@ -227,7 +286,9 @@ export async function getDueCharge(reservationId: string): Promise<DueCharge | n
       r.status::text  AS reservation_status,
       d.asaas_payment_id,
       d.state::text   AS state,
-      d.amount_cents  AS amount_cents
+      d.amount_cents  AS amount_cents,
+      d.method::text  AS method,
+      d.asaas_invoice_url
     FROM reservations r
     JOIN LATERAL (${DUE_PAYMENT}) d ON true
     WHERE r.id = ${reservationId}::uuid
@@ -242,5 +303,7 @@ export async function getDueCharge(reservationId: string): Promise<DueCharge | n
     chargeId: row.asaas_payment_id,
     state: row.state,
     amountCents: row.amount_cents,
+    method: row.method,
+    invoiceUrl: row.asaas_invoice_url,
   };
 }

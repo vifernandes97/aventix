@@ -25,7 +25,11 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { localToUtc } from '../time';
 import { centsToReaisNumber } from './money';
 import {
+  type CardCharge,
   type ChargeSnapshot,
+  type ChargeStage,
+  type ChargePayer,
+  type CreateCardChargeParams,
   type CreatePixChargeParams,
   type PaymentProvider,
   type PaymentState,
@@ -321,6 +325,26 @@ export function toPaymentState(asaasStatus: string): PaymentState {
     case 'REFUND_IN_PROGRESS':
     case 'CHARGEBACK_REQUESTED':
     case 'CHARGEBACK_DISPUTE':
+    // ======================================================================
+    // >>> `AWAITING_CHARGEBACK_REVERSAL` E IMPRECISO AQUI, E E DE PROPOSITO. <<<
+    // O nome do status diz o contrario do que este mapeamento afirma: ele
+    // significa que a disputa foi GANHA e o dinheiro esta voltando para o
+    // lojista. Traduzi-lo como 'refunded' e dizer "o dinheiro esta fora"
+    // enquanto ele esta a caminho de volta.
+    //
+    // Mantido assim porque as duas falhas nao custam o mesmo. Errar para
+    // 'refunded' faz o dono cobrar de novo alguem que ja pagou —
+    // constrangedor e RECUPERAVEL, com uma conversa. Errar para 'paid' faz o
+    // sistema afirmar ter dinheiro que ainda nao voltou, e se a reversao nao
+    // se completar o passeio saiu de graca, sem nada acusar.
+    //
+    // Quando o dinheiro efetivamente cair, o Asaas emite um status terminal e
+    // processCharge converge sozinho na proxima leitura — a imprecisao dura o
+    // tempo da reversao, e nao para sempre.
+    //
+    // NAO "conserte" isto sem trazer o dado que falta: quanto tempo esse
+    // estado dura na pratica, e se ha evento proprio para o fim dele.
+    // ======================================================================
     case 'AWAITING_CHARGEBACK_REVERSAL':
       return 'refunded';
 
@@ -332,6 +356,61 @@ export function toPaymentState(asaasStatus: string): PaymentState {
   }
 }
 
+/**
+ * Status do Asaas -> `charge_stage` do Aventix. Ponto unico, vizinho do de
+ * cima e pela mesma razao.
+ *
+ * ============================================================================
+ * >>> ISTO E PARA A TELA, NAO PARA DECIDIR. <<<
+ * `toPaymentState` governa o dinheiro. Esta funcao existe porque aquela colapsa
+ * cinco status de CARTAO num `pending` so — o que e a traducao segura para
+ * decidir e inutil para escrever a tela. Analise de risco pode DURAR, e um
+ * cliente que ve a mesma mensagem de "aguardando pagamento" que veria antes de
+ * pagar conclui que travou, tenta de novo e gera a segunda cobranca.
+ * ============================================================================
+ *
+ * Status desconhecido cai em `aguardando`, pelo mesmo motivo do outro mapa: o
+ * Asaas acrescenta valores sem aviso (secao 8.1 regra 5), e "ainda nao
+ * resolvido" e a leitura que nao promete nada ao cliente.
+ */
+export function toChargeStage(asaasStatus: string): ChargeStage {
+  switch (asaasStatus) {
+    case 'RECEIVED':
+    case 'CONFIRMED':
+    case 'RECEIVED_IN_CASH':
+      return 'pago';
+
+    // Cartao em analise. `AUTHORIZED` entra aqui porque autorizado NAO e
+    // capturado: o limite foi reservado e o dinheiro nao saiu, entao prometer
+    // "pago" seria mentira que so se desfaz na captura.
+    // `APPROVED_BY_RISK_ANALYSIS` e transitorio — o CONFIRMED vem atras — e
+    // mostrar "aprovado" no meio do caminho faria a tela regredir se a captura
+    // falhasse depois.
+    case 'AWAITING_RISK_ANALYSIS':
+    case 'APPROVED_BY_RISK_ANALYSIS':
+    case 'AUTHORIZED':
+      return 'em_analise';
+
+    case 'REPROVED_BY_RISK_ANALYSIS':
+    case 'CREDIT_CARD_CAPTURE_REFUSED':
+      return 'recusado';
+
+    case 'REFUNDED':
+    case 'REFUND_REQUESTED':
+    case 'REFUND_IN_PROGRESS':
+    case 'CHARGEBACK_REQUESTED':
+    case 'CHARGEBACK_DISPUTE':
+    case 'AWAITING_CHARGEBACK_REVERSAL':
+      return 'estornado';
+
+    case 'DELETED':
+      return 'cancelado';
+
+    default:
+      return 'aguardando';
+  }
+}
+
 // -- respostas da API --------------------------------------------------------
 
 type AsaasCustomer = { id: string };
@@ -340,6 +419,12 @@ type AsaasPayment = {
   id: string;
   status: string;
   value: number;
+  /**
+   * Liquido: o bruto menos a taxa DELES. Vem no corpo do webhook e na consulta
+   * da cobranca. Opcional porque o Asaas so o preenche quando ha o que
+   * descontar — tipicamente a partir do pagamento (secao 4-B.7).
+   */
+  netValue?: number | null;
   externalReference?: string | null;
   invoiceUrl?: string | null;
   paymentDate?: string | null;
@@ -403,56 +488,95 @@ async function fetchPixQrCode(chargeId: string): Promise<PixQrCode> {
   };
 }
 
+/**
+ * Garante que o pagador existe no provedor e devolve o id dele.
+ *
+ * Reutiliza o id quando ja existe. O Asaas ACEITA cadastro duplicado do mesmo
+ * nome/telefone sem reclamar, entao "criar sempre" nao daria erro: daria um
+ * cliente novo por reserva, e a base do tenant viraria lixo.
+ *
+ * Extraido na Fase E porque o cartao precisa do MESMO passo, palavra por
+ * palavra. Duas copias divergiriam no primeiro campo novo — e a copia que
+ * esquecesse o `onProviderCustomerCreated` voltaria a vazar cliente orfao a cada
+ * falha de cobranca, que e exatamente o bug que aquele gancho existe para
+ * fechar.
+ */
+async function ensureProviderCustomer(payer: ChargePayer): Promise<string> {
+  if (payer.providerCustomerId) return payer.providerCustomerId;
+
+  const created = await request<AsaasCustomer>('/customers', {
+    method: 'POST',
+    body: {
+      name: payer.name,
+      mobilePhone: payer.phone,
+      ...(payer.email ? { email: payer.email } : {}),
+      // Sem cpfCnpj o cadastro passa e a COBRANCA e que falha (ver taxId em
+      // provider.ts). Mandamos quando existe para nao criar o cliente ja
+      // condenado a nao conseguir ser cobrado.
+      ...(payer.taxId ? { cpfCnpj: payer.taxId } : {}),
+      externalReference: payer.externalReference,
+    },
+  });
+
+  // Persiste ANTES de tentar a cobranca (ver ChargePayer): se o passo seguinte
+  // falhar, este id continua valido e a proxima tentativa o reaproveita em vez
+  // de criar outro cliente.
+  await payer.onProviderCustomerCreated?.(created.id);
+
+  return created.id;
+}
+
+/**
+ * Corpo do `POST /payments`, identico nos dois meios de pagamento exceto pelo
+ * `billingType`. Ponto unico para a conversao de dinheiro nao ter duas casas.
+ */
+function chargeBody(params: CreatePixChargeParams, providerCustomerId: string, billingType: string) {
+  return {
+    customer: providerCustomerId,
+    billingType,
+    // O Asaas cobra em REAIS com decimal; o banco guarda centavos. A travessia
+    // e sempre por lib/payments/money.ts, nunca `/100` solto.
+    value: centsToReaisNumber(params.amountCents),
+    dueDate: params.dueDate,
+    externalReference: params.externalReference,
+    ...(params.description ? { description: params.description } : {}),
+  };
+}
+
+/** Reais do provedor -> centavos inteiros, que e a unidade do banco. */
+function reaisToCents(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  return Math.round(value * 100);
+}
+
+/** `AsaasPayment` -> `ChargeSnapshot`. Ponto unico: getCharge e a busca por
+ *  referencia externa devolvem o MESMO objeto, e um campo novo entra uma vez so. */
+function toSnapshot(payment: AsaasPayment): ChargeSnapshot {
+  return {
+    chargeId: payment.id,
+    state: toPaymentState(payment.status),
+    stage: toChargeStage(payment.status),
+    amountCents: reaisToCents(payment.value) ?? 0,
+    externalReference: payment.externalReference ?? null,
+    paidAt: toIsoOrNull(payment.paymentDate ?? payment.confirmedDate ?? payment.clientPaymentDate),
+    // LIDO, nunca calculado (secao 4-B.7).
+    netCents: reaisToCents(payment.netValue),
+  };
+}
+
 // -- implementacao -----------------------------------------------------------
 
 export const asaasProvider: PaymentProvider = {
   async createPixCharge(params: CreatePixChargeParams): Promise<PixCharge> {
-    const { payer } = params;
+    const providerCustomerId = await ensureProviderCustomer(params.payer);
 
-    // -- 1. cliente no provedor ------------------------------------------
-    // Reutiliza o id quando ja existe. O Asaas ACEITA cadastro duplicado do
-    // mesmo nome/telefone sem reclamar, entao "criar sempre" nao daria erro:
-    // daria um cliente novo por reserva, e a base do tenant viraria lixo.
-    let providerCustomerId = payer.providerCustomerId;
-
-    if (!providerCustomerId) {
-      const created = await request<AsaasCustomer>('/customers', {
-        method: 'POST',
-        body: {
-          name: payer.name,
-          mobilePhone: payer.phone,
-          ...(payer.email ? { email: payer.email } : {}),
-          // Sem cpfCnpj o cadastro passa e a COBRANCA e que falha (ver taxId em
-          // provider.ts). Mandamos quando existe para nao criar o cliente ja
-          // condenado a nao conseguir ser cobrado.
-          ...(payer.taxId ? { cpfCnpj: payer.taxId } : {}),
-          externalReference: payer.externalReference,
-        },
-      });
-      providerCustomerId = created.id;
-
-      // Persiste ANTES de tentar a cobranca (ver ChargePayer): se o passo
-      // seguinte falhar, este id continua valido e a proxima tentativa o
-      // reaproveita em vez de criar outro cliente.
-      await payer.onProviderCustomerCreated?.(providerCustomerId);
-    }
-
-    // -- 2. cobranca ------------------------------------------------------
     const payment = await request<AsaasPayment>('/payments', {
       method: 'POST',
-      body: {
-        customer: providerCustomerId,
-        billingType: 'PIX',
-        // O Asaas cobra em REAIS com decimal; o banco guarda centavos. A
-        // travessia e sempre por lib/payments/money.ts, nunca `/100` solto.
-        value: centsToReaisNumber(params.amountCents),
-        dueDate: params.dueDate,
-        externalReference: params.externalReference,
-        ...(params.description ? { description: params.description } : {}),
-      },
+      body: chargeBody(params, providerCustomerId, 'PIX'),
     });
 
-    // -- 3. QR Code (chamada separada, obrigatoria) -----------------------
+    // QR Code: chamada SEPARADA e obrigatoria — `POST /payments` devolve a
+    // cobranca sem QR nenhum.
     const qr = await fetchPixQrCode(payment.id);
 
     return {
@@ -463,6 +587,34 @@ export const asaasProvider: PaymentProvider = {
     };
   },
 
+  async createCardCharge(params: CreateCardChargeParams): Promise<CardCharge> {
+    const providerCustomerId = await ensureProviderCustomer(params.payer);
+
+    // >>> `creditCard` e `creditCardHolderInfo` NAO SAO ENVIADOS. <<<
+    // Nao e omissao: e a decisao da secao 4-B.8. Mandar dados de cartao pela API
+    // poe a nossa infraestrutura no escopo de PCI-DSS, e o Asaas nao oferece
+    // tokenizacao client-side que permitisse evitar isso. O cliente digita o
+    // cartao na `invoiceUrl`, que e pagina do provedor.
+    const payment = await request<AsaasPayment>('/payments', {
+      method: 'POST',
+      body: chargeBody(params, providerCustomerId, 'CREDIT_CARD'),
+    });
+
+    // Sem fatura nao ha como pagar no cartao — nao existe segundo caminho, como
+    // o copia-e-cola e para o Pix. Falhar aqui devolve a reserva ao caso de
+    // borda 9 (expira, libera a vaga, cliente avisado), que e ruim; entregar um
+    // botao que leva a lugar nenhum e pior, porque o cliente fica achando que
+    // pagou.
+    if (!payment.invoiceUrl) {
+      throw new PaymentProviderApiError(
+        502,
+        `cobranca ${payment.id} criada sem invoiceUrl; nao ha como o cliente pagar no cartao`,
+      );
+    }
+
+    return { chargeId: payment.id, providerCustomerId, invoiceUrl: payment.invoiceUrl };
+  },
+
   async getPixQrCode(chargeId: string): Promise<PixQrCode> {
     return fetchPixQrCode(chargeId);
   },
@@ -470,16 +622,7 @@ export const asaasProvider: PaymentProvider = {
   async getCharge(chargeId: string): Promise<ChargeSnapshot> {
     const payment = await request<AsaasPayment>(`/payments/${chargeId}`, { method: 'GET' });
 
-    return {
-      chargeId: payment.id,
-      state: toPaymentState(payment.status),
-      // De volta para centavos inteiros, que e a unidade do banco.
-      amountCents: Math.round(payment.value * 100),
-      externalReference: payment.externalReference ?? null,
-      paidAt: toIsoOrNull(
-        payment.paymentDate ?? payment.confirmedDate ?? payment.clientPaymentDate,
-      ),
-    };
+    return toSnapshot(payment);
   },
 
   async findChargeByExternalReference(externalReference: string): Promise<ChargeSnapshot | null> {
@@ -514,17 +657,7 @@ export const asaasProvider: PaymentProvider = {
       );
     }
 
-    const payment = matches[0];
-
-    return {
-      chargeId: payment.id,
-      state: toPaymentState(payment.status),
-      amountCents: Math.round(payment.value * 100),
-      externalReference: payment.externalReference ?? null,
-      paidAt: toIsoOrNull(
-        payment.paymentDate ?? payment.confirmedDate ?? payment.clientPaymentDate,
-      ),
-    };
+    return toSnapshot(matches[0]);
   },
 
   async cancelCharge(chargeId: string): Promise<void> {

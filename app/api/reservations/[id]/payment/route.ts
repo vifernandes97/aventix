@@ -1,5 +1,11 @@
-// GET /api/reservations/{id}/payment — QR Code Pix ATUAL da reserva
-// (CLAUDE.md secoes 7.1, 7.2 e 14).
+// GET /api/reservations/{id}/payment — como pagar a reserva AGORA
+// (CLAUDE.md secoes 7.1, 7.2, 4-B.8 e 14).
+//
+// >>> DOIS FORMATOS DE RESPOSTA, DISCRIMINADOS POR `method` <<<
+// Pix devolve QR + copia-e-cola, buscados no provedor na hora porque EXPIRAM.
+// Cartao devolve `invoiceUrl`, a fatura hospedada no provedor onde o cliente
+// digita o cartao — ela nao expira, ja esta persistida desde a criacao da
+// cobranca, e por isso o caminho do cartao NAO chama o provedor.
 //
 // >>> POR QUE ESTA ROTA EXISTE, SE O 201 JA DEVOLVE UM QR <<<
 // O 201 de POST /api/reservations entrega o QR uma vez, na memoria do wizard. A
@@ -70,10 +76,30 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       );
     }
 
+    // -- CARTAO: a fatura ja esta no banco, nao ha o que buscar --------------
+    // Sem `invoiceUrl` o cliente nao tem como pagar e nao havera como: a criacao
+    // da cobranca falha alto quando o provedor nao a devolve (ver
+    // createCardCharge). Se mesmo assim faltar, e o mesmo desfecho da borda 9 —
+    // 409 com codigo proprio, para a tela mandar falar com o tenant em vez de
+    // ficar tentando pagar.
+    if (due.method === 'card') {
+      if (!due.invoiceUrl) {
+        return NextResponse.json(
+          { error: 'cobranca nao disponivel', code: 'sem_cobranca' },
+          { status: 409, headers: NO_STORE },
+        );
+      }
+
+      return NextResponse.json(
+        { method: 'card', invoiceUrl: due.invoiceUrl, dueNowCents: due.amountCents },
+        { status: 200, headers: NO_STORE },
+      );
+    }
+
     const qr = await asaasProvider.getPixQrCode(due.chargeId);
 
     return NextResponse.json(
-      { ...qr, dueNowCents: due.amountCents },
+      { method: 'pix', ...qr, dueNowCents: due.amountCents },
       { status: 200, headers: NO_STORE },
     );
   } catch (error) {

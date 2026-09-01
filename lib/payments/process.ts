@@ -44,7 +44,11 @@ export type ProcessChargeOutcome =
   /** pagamento registrado, sem mudanca de status (saldo, ou reserva ja confirmada) */
   | 'recorded'
   /** PIX TARDIO com a vaga ja tomada: dinheiro entrou, reserva segue expirada */
-  | 'refund_pending';
+  | 'refund_pending'
+  /** o dinheiro SAIU: estorno ou chargeback. A reserva NAO muda de status */
+  | 'reverted'
+  /** ja estava `refunded` — nada a fazer (idempotencia do caminho de reversao) */
+  | 'already_refunded';
 
 export type ProcessChargeResult = {
   outcome: ProcessChargeOutcome;
@@ -117,7 +121,128 @@ export async function processCharge(chargeId: string): Promise<ProcessChargeResu
     return { outcome: 'orphan', chargeId };
   }
 
-  // -- 4. idempotencia (secao 8.2 passo 5) -----------------------------------
+  // ==========================================================================
+  // -- 4. O DINHEIRO SAIU: estorno ou chargeback (secao 4-B.9) ---------------
+  //
+  // >>> ESTE BLOCO VEM ANTES DA IDEMPOTENCIA DE PROPOSITO, E ATE A FASE E ELE
+  // NAO EXISTIA — O QUE ERA PIOR QUE NAO ESTAR IMPLEMENTADO. <<<
+  //
+  // `toPaymentState` sempre soube traduzir os seis status da familia de estorno
+  // e chargeback para 'refunded'. Mas nada aqui agia sobre isso: a linha local
+  // estava 'paid', o passo 5 devolvia `already_paid` e o evento ia embora sem
+  // tocar no banco. Ou seja, um chargeback era corretamente traduzido e
+  // silenciosamente descartado — e quem lesse `toPaymentState` concluiria que o
+  // caso estava coberto, que e o modo de falha mais caro que existe: o que
+  // PARECE pronto.
+  //
+  // O caso real: cliente contesta a compra meses depois, o dinheiro sai da conta
+  // do tenant e O PASSEIO JA ACONTECEU.
+  //
+  // >>> `reservations.status` NAO MUDA. <<< Duas razoes, e as duas sao
+  // estruturais:
+  //   1. `cancelled` significa "nao vai acontecer, vaga liberada", e
+  //      setReservationStatus liberaria as linhas de reservation_resources —
+  //      apagando o registro de que aquele recurso esteve ocupado num passeio
+  //      que ACONTECEU. Um evento financeiro destruindo historico operacional.
+  //   2. `status` governa a VAGA e `payment_state` governa o DINHEIRO; a secao 5
+  //      diz que sao eixos independentes. Chargeback e puramente dinheiro.
+  //
+  // O efeito sai todo de `recalcReservationPayment`, que soma so as linhas
+  // 'paid': `amount_paid_cents` cai e `payment_state` regride sozinho. Nenhuma
+  // regra nova de agregacao, nenhuma coluna nova — mesmo precedente do estorno
+  // pendente da secao 8.3 ("o estado JA e derivavel").
+  //
+  // A DISPUTA GANHA VOLTA SOZINHA e por este mesmo caminho: quando o provedor
+  // devolver a cobranca a CONFIRMED/RECEIVED, a linha estara 'refunded' e o
+  // passo 6 a remarcara 'paid' (o `WHERE state <> 'paid'` casa). Nada aqui e
+  // terminal, porque esta funcao CONVERGE para o provedor em vez de aplicar
+  // transicoes — e e isso que torna a reversao robusta sem codigo proprio.
+  // ==========================================================================
+  if (charge.state === 'refunded') {
+    if (payment.state === 'refunded') {
+      // Reentrega do mesmo evento, ou a reconciliacao passando por cima. Os
+      // quatro eventos de chargeback chegam em sequencia e todos traduzem para
+      // 'refunded': sem esta saida, cada um reescreveria a linha e logaria de
+      // novo o alerta abaixo, treinando o dono a ignora-lo.
+      return {
+        outcome: 'already_refunded',
+        chargeId,
+        paymentId: payment.id,
+        reservationId: payment.reservationId,
+      };
+    }
+
+    // Linha que nunca chegou a ser paga (cobranca cancelada, por exemplo) nao
+    // tem dinheiro a reverter. Nao e anomalia e nao merece alarme.
+    if (payment.state !== 'paid') {
+      return {
+        outcome: 'not_paid_yet',
+        chargeId,
+        paymentId: payment.id,
+        reservationId: payment.reservationId,
+      };
+    }
+
+    return db.transaction(async (tx) => {
+      const reverted = await tx
+        .update(reservationPayments)
+        .set({
+          state: 'refunded',
+          chargeStage: charge.stage,
+          // `paid_at` FICA. O dinheiro entrou de verdade naquela data, e essa
+          // continua sendo a data em que entrou; apaga-la reescreveria a
+          // historia para caber no presente. Que ele saiu esta dito pelo
+          // `state`, e o quando pelo log e pelo painel do provedor.
+          // `net_cents` tambem fica: congelado no registro (secao 4-B.7).
+        })
+        .where(
+          and(eq(reservationPayments.id, payment.id), sql`${reservationPayments.state} = 'paid'`),
+        )
+        .returning({ id: reservationPayments.id });
+
+      if (reverted.length === 0) {
+        // Outra transacao chegou primeiro (webhook e reconciliacao no mesmo
+        // pagamento). Mesma protecao do passo 6.
+        return {
+          outcome: 'already_refunded' as const,
+          chargeId,
+          paymentId: payment.id,
+          reservationId: payment.reservationId,
+        };
+      }
+
+      await recalcReservationPayment(payment.reservationId, tx);
+
+      // ====================================================================
+      // >>> O DONO PRECISA VER ISTO. <<<
+      // Nao ha estado novo na reserva e nao deve haver — mas alguem pode ter
+      // feito um passeio que nao foi pago, e a unica forma de saber e esta.
+      // O predicado e derivavel, sem coluna nova: reserva ativa com
+      // payment_state diferente de 'settled' e start_at no passado.
+      // ====================================================================
+      console.error(
+        '[payments] PAGAMENTO REVERTIDO — estorno ou chargeback: ' +
+          JSON.stringify({
+            evento: 'reverted',
+            reservationId: payment.reservationId,
+            paymentId: payment.id,
+            chargeId,
+            kind: payment.kind,
+            motivo: 'o provedor reporta a cobranca como estornada/contestada',
+            acao: 'conferir a disputa no painel do Asaas; a reserva NAO foi cancelada',
+          }),
+      );
+
+      return {
+        outcome: 'reverted' as const,
+        chargeId,
+        paymentId: payment.id,
+        reservationId: payment.reservationId,
+      };
+    });
+  }
+
+  // -- 5. idempotencia (secao 8.2 passo 5) -----------------------------------
   if (payment.state === 'paid') {
     return {
       outcome: 'already_paid',
@@ -127,10 +252,21 @@ export async function processCharge(chargeId: string): Promise<ProcessChargeResu
     };
   }
 
-  // -- 5. o provedor ainda nao viu o dinheiro --------------------------------
+  // -- 6. o provedor ainda nao viu o dinheiro --------------------------------
   // PAYMENT_OVERDUE cai aqui: vencido e devido, nao e estado terminal e nao
   // muda nada localmente. O hold ja tera expirado pelo cron.
+  //
+  // O CARTAO enche este caminho de casos novos — analise de risco, autorizado
+  // sem captura, captura recusada — e todos sao corretamente "ainda nao pago".
+  // O que eles precisam e ser DISTINGUIVEIS na tela, e para isso o estagio e
+  // gravado mesmo sem mudanca de estado: sem isto, "em analise" e "aguardando
+  // pagamento" seriam a mesma tela, e o cliente concluiria que travou.
   if (charge.state !== 'paid') {
+    await db
+      .update(reservationPayments)
+      .set({ chargeStage: charge.stage })
+      .where(eq(reservationPayments.id, payment.id));
+
     return {
       outcome: 'not_paid_yet',
       chargeId,
@@ -139,7 +275,7 @@ export async function processCharge(chargeId: string): Promise<ProcessChargeResu
     };
   }
 
-  // -- 6. registra o pagamento e reflete no status (secao 8.2 passo 6) -------
+  // -- 7. registra o pagamento e reflete no status (secao 8.2 passo 6) -------
   return db.transaction(async (tx) => {
     // Marca paga. O WHERE repete `state <> 'paid'`: se outra transacao (o job e
     // o webhook processando o mesmo pagamento) tiver marcado entre a leitura
@@ -149,11 +285,26 @@ export async function processCharge(chargeId: string): Promise<ProcessChargeResu
       .update(reservationPayments)
       .set({
         state: 'paid',
+        chargeStage: charge.stage,
         // Data do provedor quando ele informa; senao o relogio do BANCO.
         paidAt: charge.paidAt ? new Date(charge.paidAt).toISOString() : sql`now()`,
         // Preenche o id do provedor quando a linha foi achada por referencia
         // externa — dali em diante ela reconcilia pelo caminho rapido.
         ...(payment.asaasPaymentId ? {} : { asaasPaymentId: chargeId }),
+        // ================================================================
+        // >>> LIQUIDO LIDO DO PROVEDOR, CONGELADO AQUI (secao 4-B.7). <<<
+        // Ele informa `netValue` (bruto menos a taxa dele) e nos apenas
+        // gravamos. Nao ha calculo: a taxa varia com meio, parcelamento e
+        // antecipacao, e reproduzi-la produziria um numero com aparencia de
+        // certo, desmentido semanas depois na conferencia com o extrato. Isto
+        // resolve a tarefa TRANSVERSAL do liquido, que atravessava as fases.
+        //
+        // >>> SO GRAVA QUANDO O PROVEDOR INFORMA. <<< `netCents` nulo e "nao
+        // sei", e sobrescrever um liquido conhecido com "nao sei" e perda de
+        // informacao — a mesma distincao entre NULL e 0 da secao 4-B.6, um
+        // nivel acima. (Tambem protege o CHECK: apagar o liquido de uma linha
+        // que tem percentual aplicado seria incoerencia recusada pelo banco.)
+        ...(charge.netCents === null ? {} : { netCents: charge.netCents }),
       })
       .where(
         and(eq(reservationPayments.id, payment.id), sql`${reservationPayments.state} <> 'paid'`),

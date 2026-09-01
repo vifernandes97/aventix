@@ -48,7 +48,7 @@ export const reservationStatus = pgEnum('reservation_status', [
   'expired',
 ]);
 
-export const paymentMethod = pgEnum('payment_method', ['pix', 'card']); // 'card' reservado pos go-live
+export const paymentMethod = pgEnum('payment_method', ['pix', 'card']); // 'card' entrou na Fase E
 
 export const participantRole = pgEnum('participant_role', ['operator', 'passenger']); // UI: Condutor / Garupa
 
@@ -89,6 +89,36 @@ export const cardMachineModality = pgEnum('card_machine_modality', [
   'debit',
   'credit',
   'credit_installment',
+]);
+
+// rev 7 — Fase E (cartao)
+
+// ============================================================================
+// ESTAGIO da cobranca no provedor. VOCABULARIO DE EXIBICAO, e SO isso.
+//
+// >>> NUNCA DECIDA NADA POR ESTA COLUNA. <<<
+// Quem governa dinheiro e `reservation_payments.state` (payment_state), escrito
+// por processCharge a partir de `toPaymentState`. Este enum existe porque o
+// CARTAO tem estados intermediarios que o Pix nao tem — analise de risco pode
+// durar, e "em analise" precisa ser distinguivel de "recusado" NA TELA DO
+// CLIENTE. Os dois colapsam em `state='pending'`, que e o mapeamento seguro e
+// que continua sendo o que manda.
+//
+// Se um dia alguem escrever `if (charge_stage === 'pago')` para liberar algo,
+// tera criado uma segunda fonte da verdade sobre dinheiro que pode divergir da
+// primeira — exatamente o que o resto deste schema evita.
+//
+// `aguardando` cobre o Pix inteiro enquanto nao pago; os outros so aparecem no
+// cartao. NULO em pagamento anterior a Fase E e no registro da maquininha, que
+// nao passa pelo provedor.
+// ============================================================================
+export const chargeStage = pgEnum('charge_stage', [
+  'aguardando',
+  'em_analise',
+  'recusado',
+  'pago',
+  'estornado',
+  'cancelado',
 ]);
 
 // -- 4.2 tenant e configuracao ---------------------------------------------
@@ -618,18 +648,42 @@ export const reservationPayments = pgTable(
     registeredBy: text('registered_by'),
     registeredAt: tstz('registered_at'),
 
+    // -- CARTAO (Fase E, migration 0009) ------------------------------------
+    //
+    // Estagio no provedor, para a TELA distinguir "em analise" de "recusado"
+    // (secao 4-B.9). Ver o comentario do enum: nao decide nada.
+    // Escrito por processCharge junto do `state`, na MESMA transacao — os dois
+    // saem da mesma leitura do provedor e por isso nao podem divergir.
+    chargeStage: chargeStage('charge_stage'),
+
     createdAt: tstz('created_at').notNull().defaultNow(),
   },
   (t) => [
     check('reservation_payments_amount_check', sql`${t.amountCents} > 0`),
-    // Coerencia do registro manual: liquido so existe se houve percentual
-    // aplicado, e percentual so existe se houve modalidade. O caminho
-    // "modalidade sem taxa configurada" e VALIDO e para nos dois nulos, que e
-    // exatamente o "nao sei" que a coluna precisa poder expressar.
+    // Coerencia do registro manual: percentual aplicado exige liquido E
+    // modalidade. O caminho "modalidade sem taxa configurada" e VALIDO e para
+    // nos dois nulos, que e exatamente o "nao sei" que a coluna precisa poder
+    // expressar.
+    //
+    // >>> ERA BICONDICIONAL ATE A FASE E, E A BICONDICIONAL BARRAVA O ASAAS. <<<
+    // A regra antiga era `(rate IS NULL) = (net IS NULL)`: gravar liquido
+    // OBRIGAVA a gravar percentual e modalidade. Isso nasceu correto porque o
+    // unico produtor de `net_cents` era a maquininha, onde nos aplicamos a taxa.
+    // O provedor INFORMA o liquido pronto (`netValue`, secao 4-B.7) — nao ha
+    // modalidade de maquininha e nao ha percentual aplicado por nos. Sob a regra
+    // antiga, gravar o liquido do Asaas seria obrigar a INVENTAR os outros dois,
+    // que e fabricar fato sobre dinheiro.
+    //
+    // A implicacao que fica (`rate => net AND modality`) preserva integralmente
+    // o que a bicondicional protegia — percentual aplicado sem liquido continua
+    // sendo incoerencia impossivel — e libera o caso novo. A PROVENIENCIA
+    // continua legivel: `card_machine_modality IS NULL` com `net_cents` cheio e
+    // liquido do provedor; e por isso que `countReceiptsAwaitingNet` recorta por
+    // modalidade e nao mistura os dois.
     check(
       'reservation_payments_card_machine_check',
-      sql`(${t.rateBasisPointsApplied} IS NULL) = (${t.netCents} IS NULL)
-          AND (${t.rateBasisPointsApplied} IS NULL OR ${t.cardMachineModality} IS NOT NULL)`,
+      sql`${t.rateBasisPointsApplied} IS NULL
+          OR (${t.netCents} IS NOT NULL AND ${t.cardMachineModality} IS NOT NULL)`,
     ),
     check(
       'reservation_payments_rate_applied_range_check',

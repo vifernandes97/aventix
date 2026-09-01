@@ -40,6 +40,14 @@ type StatusPayload = {
   status: ReservationStatus;
   paymentMode: 'full' | 'deposit';
   paymentState: 'pending' | 'paid' | 'cancelled' | 'refunded' | null;
+  /** decide se a tela oferece QR (Pix) ou o botao da fatura (cartao) */
+  paymentMethod: 'pix' | 'card';
+  /**
+   * Estagio no provedor. So o cartao produz valor diferente de 'aguardando'
+   * enquanto pendente — e e o que separa "em analise" de "recusado".
+   * `null` quando o provedor ainda nao reportou nada; trata-se como 'aguardando'.
+   */
+  chargeStage: 'aguardando' | 'em_analise' | 'recusado' | 'pago' | 'estornado' | 'cancelado' | null;
   amountPaidCents: number;
   balanceCents: number;
   holdExpiresAt: string | null;
@@ -49,13 +57,22 @@ type StatusPayload = {
   durationMinutes: number;
 };
 
-/** Espelha GET /api/reservations/{id}/payment. */
-type QrPayload = {
-  qrCodeBase64: string;
-  copyPaste: string;
-  expiresAt: string | null;
-  dueNowCents: number;
-};
+/**
+ * Espelha GET /api/reservations/{id}/payment.
+ *
+ * UNIAO por `method`, espelhando a rota: o Pix entrega um QR que EXPIRA e um
+ * copia-e-cola; o cartao entrega o endereco da fatura do provedor, onde o
+ * cliente digita os dados (secao 4-B.8 — nao existe formulario de cartao aqui).
+ */
+type PaymentPayload =
+  | {
+      method: 'pix';
+      qrCodeBase64: string;
+      copyPaste: string;
+      expiresAt: string | null;
+      dueNowCents: number;
+    }
+  | { method: 'card'; invoiceUrl: string; dueNowCents: number };
 
 /**
  * Textos do TENANT (secao 3: nada hardcoded). Qualquer um pode chegar VAZIO —
@@ -114,8 +131,8 @@ export function ReservationStatusView({
   const [stopReason, setStopReason] = useState<StopReason | null>(null);
   const [checking, setChecking] = useState(false);
 
-  const [qr, setQr] = useState<QrPayload | null>(null);
-  const [qrError, setQrError] = useState<'sem_cobranca' | 'falhou' | null>(null);
+  const [payment, setPayment] = useState<PaymentPayload | null>(null);
+  const [paymentError, setPaymentError] = useState<'sem_cobranca' | 'falhou' | null>(null);
 
   /**
    * Correcao do relogio: `serverNow - Date.now()` na ultima resposta. Vive em
@@ -310,14 +327,14 @@ export function ReservationStatusView({
         if (cancelled) return;
 
         if (response.ok) {
-          setQr((await response.json()) as QrPayload);
+          setPayment((await response.json()) as PaymentPayload);
           return;
         }
 
         const body = (await response.json().catch(() => null)) as { code?: string } | null;
-        setQrError(body?.code === 'sem_cobranca' ? 'sem_cobranca' : 'falhou');
+        setPaymentError(body?.code === 'sem_cobranca' ? 'sem_cobranca' : 'falhou');
       } catch {
-        if (!cancelled) setQrError('falhou');
+        if (!cancelled) setPaymentError('falhou');
       }
     })();
 
@@ -417,8 +434,8 @@ export function ReservationStatusView({
       <PendingPayment
         status={status}
         reservationId={reservationId}
-        qr={qr}
-        qrError={qrError}
+        payment={payment}
+        paymentError={paymentError}
         clockOffsetMs={clockOffsetMs}
         nowMs={nowMs}
         onManualCheck={onManualCheck}
@@ -455,8 +472,8 @@ export function ReservationStatusView({
 function PendingPayment({
   status,
   reservationId,
-  qr,
-  qrError,
+  payment,
+  paymentError,
   clockOffsetMs,
   nowMs,
   onManualCheck,
@@ -465,8 +482,8 @@ function PendingPayment({
 }: {
   status: StatusPayload;
   reservationId: string;
-  qr: QrPayload | null;
-  qrError: 'sem_cobranca' | 'falhou' | null;
+  payment: PaymentPayload | null;
+  paymentError: 'sem_cobranca' | 'falhou' | null;
   clockOffsetMs: number;
   nowMs: number;
   onManualCheck: () => void;
@@ -483,16 +500,51 @@ function PendingPayment({
   // A tela para de contar e passa a dizer "verificando", NUNCA "expirou".
   const overdue = remainingMs !== null && remainingMs <= 0;
 
+  // ==========================================================================
+  // >>> ANALISE DE RISCO: O ESTADO QUE PRECISA NAO PARECER "TRAVOU". <<<
+  // So acontece no cartao. O pagamento fica `pending` durante a analise, entao
+  // sem o estagio esta tela repetiria "Falta pagar" com o botao da fatura — e
+  // quem acabou de digitar o cartao concluiria que nao funcionou e pagaria de
+  // novo. Duas cobrancas, e estorno de cartao e manual (secao 8-C).
+  //
+  // O texto DIZ QUE A VAGA ESTA GUARDADA, e a contagem regressiva continua
+  // visivel logo abaixo: sem isso, "em analise" e uma espera sem prazo, que e
+  // exatamente o que faz alguem desistir ou tentar outro caminho.
+  // ==========================================================================
+  const underReview = status.chargeStage === 'em_analise';
+  const declined = status.chargeStage === 'recusado';
+
   return (
     <>
       <Card>
         <h1 className="text-lg font-semibold text-orange-200">
-          {overdue ? 'Verificando pagamento…' : 'Falta pagar'}
+          {overdue
+            ? 'Verificando pagamento…'
+            : underReview
+              ? 'Pagamento em análise'
+              : declined
+                ? 'O pagamento não foi aprovado'
+                : 'Falta pagar'}
         </h1>
         <p className="mt-1 text-sm text-stone-400">
           {overdue
             ? 'O prazo terminou, mas ainda estamos confirmando se o seu pagamento chegou.'
-            : 'Sua vaga está guardada. Pague o Pix abaixo para confirmar a reserva.'}
+            : underReview
+              ? 'O banco está conferindo os dados do seu cartão. Isso pode levar alguns minutos — sua vaga está guardada e você não precisa pagar de novo.'
+              : declined
+                // >>> NAO PROMETA "ou pague por Pix" AQUI. <<<
+                // Nao existe caminho para trocar o meio de pagamento de uma
+                // reserva ja criada: a linha guarda o meio escolhido (snapshot
+                // da venda) e nao ha tela que o altere. Um texto oferecendo Pix
+                // manda o cliente procurar um botao que nao existe — a mesma
+                // falha que fez a frase sobre antecipar o saldo sair do Termo v2
+                // (docs/DECISOES.md, 31/08). O que a tela pode oferecer de
+                // verdade e tentar de novo, e falar com o tenant (bloco de
+                // contato, logo abaixo).
+                ? 'O banco não autorizou a cobrança e nada foi cobrado. Você pode tentar de novo, com este ou com outro cartão.'
+                : status.paymentMethod === 'card'
+                  ? 'Sua vaga está guardada. Conclua o pagamento na página segura para confirmar a reserva.'
+                  : 'Sua vaga está guardada. Pague o Pix abaixo para confirmar a reserva.'}
         </p>
 
         {!overdue && remainingMs !== null && (
@@ -504,12 +556,14 @@ function PendingPayment({
           </p>
         )}
 
-        {qr && (
+        {/* Em analise nao se oferece caminho de pagamento nenhum: o cliente JA
+            pagou, e um botao ali e um convite a pagar duas vezes. */}
+        {!underReview && payment?.method === 'pix' && (
           <div className="mt-4">
             <div className="flex justify-center">
               {/* eslint-disable-next-line @next/next/no-img-element -- base64 do provedor, sem host externo para o next/image otimizar */}
               <img
-                src={`data:image/png;base64,${qr.qrCodeBase64}`}
+                src={`data:image/png;base64,${payment.qrCodeBase64}`}
                 alt="QR Code do Pix para pagar a reserva"
                 className="h-56 w-56 rounded-lg bg-white p-2"
               />
@@ -518,26 +572,47 @@ function PendingPayment({
               Abra o app do seu banco, escolha <strong className="text-stone-100">Pix</strong> e
               aponte para o código — ou copie o código abaixo.
             </p>
-            <CopyPasteBox copyPaste={qr.copyPaste} />
+            <CopyPasteBox copyPaste={payment.copyPaste} />
             <p className="mt-3 text-center text-sm font-medium text-stone-200">
-              Valor: {moneyLabel(qr.dueNowCents)}
+              Valor: {moneyLabel(payment.dueNowCents)}
             </p>
           </div>
         )}
 
-        {!qr && qrError === null && (
-          <p className="mt-4 text-sm text-stone-400">Gerando o código de pagamento…</p>
+        {/* CARTAO: um link para fora, nunca um formulario aqui (secao 4-B.8).
+            `rel="noopener"` porque a pagina de destino nao e nossa. Abre na
+            MESMA aba de proposito: aba nova em celular esconde esta tela, que e
+            a que avisa quando o pagamento cai. */}
+        {!underReview && payment?.method === 'card' && (
+          <div className="mt-4">
+            <a
+              href={payment.invoiceUrl}
+              rel="noopener"
+              className="block w-full rounded-xl bg-orange-500 px-4 py-3.5 text-center text-base font-semibold text-stone-950 transition hover:bg-orange-400"
+            >
+              {declined ? 'Tentar novamente' : 'Pagar com cartão'} · {moneyLabel(payment.dueNowCents)}
+            </a>
+            <p className="mt-3 text-center text-xs leading-relaxed text-stone-400">
+              Você vai para a página de pagamento do nosso processador para digitar os dados do
+              cartão. <strong className="text-stone-300">Nós não guardamos o número do seu
+              cartão.</strong> Depois de pagar, volte para esta tela.
+            </p>
+          </div>
         )}
 
-        {qrError && (
+        {!payment && paymentError === null && (
+          <p className="mt-4 text-sm text-stone-400">Preparando o pagamento…</p>
+        )}
+
+        {paymentError && (
           <div className="mt-4 rounded-xl border border-dashed border-amber-700/60 bg-amber-950/20 px-4 py-4 text-center">
             <p className="text-sm font-medium text-amber-200">
-              {qrError === 'sem_cobranca'
-                ? 'Não há um código de pagamento para esta reserva'
-                : 'Não conseguimos carregar o código de pagamento agora'}
+              {paymentError === 'sem_cobranca'
+                ? 'Não há uma cobrança para esta reserva'
+                : 'Não conseguimos carregar o pagamento agora'}
             </p>
             <p className="mt-1 text-xs text-amber-200/80">
-              {qrError === 'sem_cobranca'
+              {paymentError === 'sem_cobranca'
                 ? 'Fale com a gente pelo contato abaixo para concluir o pagamento.'
                 : 'Atualize a página em instantes. Se já pagou, esta tela avisa assim que o pagamento cair.'}
             </p>

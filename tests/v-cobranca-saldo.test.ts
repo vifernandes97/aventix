@@ -341,9 +341,11 @@ describe('V1 idempotencia — a propriedade que define a fase', () => {
     fake.findResult = {
       chargeId: 'pay_orfa_9999',
       state: 'pending',
+      stage: 'aguardando',
       amountCents: reserva.balanceCents,
       externalReference: `${reserva.id}:balance`,
       paidAt: null,
+      netCents: null,
     };
 
     const resultado = await chargeReservationBalance(reserva.id);

@@ -235,8 +235,12 @@ describe('K — QR sob demanda', () => {
       expect(text, `${rotulo} vazou no payload publico`).not.toContain(valor);
     }
 
+    // Lista EXAUSTIVA de proposito: campo novo aqui quebra o teste, e e essa a
+    // funcao dele. `method` entrou na Fase E — a resposta virou uniao (Pix
+    // devolve QR, cartao devolve a fatura) e a tela precisa do discriminante.
+    // Nao e dado pessoal e nao e referencia contra a conta do tenant.
     expect(Object.keys(body).sort()).toEqual(
-      ['copyPaste', 'dueNowCents', 'expiresAt', 'qrCodeBase64'].sort(),
+      ['copyPaste', 'dueNowCents', 'expiresAt', 'method', 'qrCodeBase64'].sort(),
     );
   });
 

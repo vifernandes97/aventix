@@ -55,9 +55,11 @@ function paga(amountCents: number, externalReference: string): ChargeSnapshot {
   return {
     chargeId: 'pay_fake',
     state: 'paid',
+    stage: 'pago',
     amountCents,
     externalReference,
     paidAt: new Date().toISOString(),
+    netCents: null,
   };
 }
 
@@ -223,9 +225,11 @@ describe('I — processamento do pagamento (secao 8.2)', () => {
     fakeCharge.current = {
       chargeId: 'pay_overdue',
       state: 'pending', // OVERDUE traduz para pending: vencido e devido
+      stage: 'aguardando',
       amountCents: reserva.amountCents,
       externalReference: reserva.externalReference,
       paidAt: null,
+      netCents: null,
     };
 
     const result = await processCharge('pay_overdue');

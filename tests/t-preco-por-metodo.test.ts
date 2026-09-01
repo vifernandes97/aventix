@@ -299,13 +299,16 @@ describe('T4 sem desconto configurado, o cliente paga o cheio', () => {
 // ============================================================================
 
 describe('T5 o catalogo publico entrega o cheio e o percentual', () => {
-  it('T5.1 priceCents continua sendo o CHEIO, com discountBasisPoints ao lado', async () => {
+  it('T5.1 priceCents continua sendo o CHEIO, com o desconto de cada metodo ao lado', async () => {
     const catalogo = await listPublicExperiences();
     const montanha = catalogo.find((e) => e.name === 'Trilha da Montanha')!;
 
     // O campo NAO mudou de significado: segue igual a coluna price_cents.
     expect(montanha.priceCents).toBe(MONTANHA_CHEIO);
-    expect(montanha.discountBasisPoints).toBe(700);
+    // Fase E: virou mapa por metodo. O cartao nao tem linha configurada, logo
+    // 0 bp — ele paga o cheio porque nao tem desconto, nunca por acrescimo.
+    expect(montanha.discountBasisPointsByMethod.pix).toBe(700);
+    expect(montanha.discountBasisPointsByMethod.card).toBe(0);
   });
 
   it('T5.2 a conta do wizard bate com a do servidor, inclusive em 2 recursos', async () => {
@@ -316,7 +319,7 @@ describe('T5 o catalogo publico entrega o cheio e o percentual', () => {
     // e que existe UMA conta: a tela e o servidor chamam a mesma funcao sobre os
     // mesmos insumos, em vez de duas contas que precisam concordar.
     const doWizard = (n: number) =>
-      applyDiscount(montanha.priceCents * n, montanha.discountBasisPoints).payableCents;
+      applyDiscount(montanha.priceCents * n, montanha.discountBasisPointsByMethod.pix).payableCents;
 
     for (const n of [1, 2]) {
       await wipeMovement();

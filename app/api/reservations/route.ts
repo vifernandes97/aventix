@@ -76,6 +76,15 @@ const bodySchema = z.object({
    * integral em silencio — rebaixar cobraria o dobro do que a tela mostrou.
    */
   paymentMethodMode: z.enum(['full', 'deposit']).default('full'),
+  /**
+   * COMO pagar (secao 4-B.2). Ausente = 'pix'.
+   *
+   * Cartao + sinal responde **422**, nunca vira integral em silencio: o sinal
+   * existe somente no Pix, e rebaixar cobraria agora o dobro do que a tela
+   * mostrou. A validacao mora em `createReservation`, nao aqui — o corpo esta
+   * bem formado, e o que ele viola e regra de negocio.
+   */
+  paymentMethod: z.enum(['pix', 'card']).default('pix'),
   channel: z.string().nullish(),
 });
 
@@ -182,7 +191,10 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error: 'falha ao gerar a cobranca',
-          detail: 'Nao foi possivel gerar o Pix agora. A reserva foi liberada; tente novamente.',
+          // Nao cita "Pix": desde a Fase E a cobranca pode ser de cartao, e uma
+          // mensagem que nomeia o meio errado faz o cliente procurar o problema
+          // no lugar errado.
+          detail: 'Nao foi possivel gerar a cobranca agora. A reserva foi liberada; tente novamente.',
         },
         { status: 502 },
       );

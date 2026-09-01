@@ -27,7 +27,7 @@ import {
   reservationStatus,
   resources,
 } from './db/schema';
-import { getDiscountBasisPoints } from './financial-config';
+import { type PaymentMethodName, getDiscountBasisPoints } from './financial-config';
 import { getBooleanSetting, getTenantId } from './tenant';
 import { ageOnDate, todayLocalDate, utcToLocalDate } from './time';
 
@@ -516,6 +516,20 @@ export type CreateReservationInput = {
    * servidor (secao 4.6). O cliente escolhe a MODALIDADE, jamais o numero.
    */
   paymentMethodMode?: 'full' | 'deposit';
+  /**
+   * COMO o cliente escolheu pagar (secao 4-B.2). Ausente = `'pix'`, que mantem
+   * compativel todo chamador anterior a Fase E.
+   *
+   * >>> ORTOGONAL a `paymentMethodMode`, e as duas dimensoes se cruzam em UMA
+   * combinacao proibida: cartao + sinal. <<< O sinal existe SOMENTE no Pix
+   * (secao 4-B.2), e a recusa e explicita — nunca rebaixe para integral em
+   * silencio, que cobraria o dobro do que a tela mostrou.
+   *
+   * Tambem NAO carrega valor: o desconto de cada meio e configuracao do tenant
+   * (`payment_method_discounts`), lida no servidor. O cliente escolhe o MEIO,
+   * jamais o preco.
+   */
+  paymentMethod?: PaymentMethodName;
   channel?: string | null;
   /** capturados na rota — sao a prova juridica do aceite (secao 10) */
   acceptance?: { ip?: string | null; userAgent?: string | null };
@@ -526,6 +540,8 @@ export type CreateReservationResult = {
   status: ReservationStatus;
   holdExpiresAt: string;
   paymentMode: PaymentMode;
+  /** meio efetivo desta venda — decide se a tela mostra QR ou link da fatura */
+  paymentMethod: PaymentMethodName;
   totalCents: number;
   /** o que o cliente paga AGORA: total no modo full, sinal no modo deposit */
   dueNowCents: number;
@@ -684,16 +700,33 @@ export async function createReservation(
 
   const channel = sanitizeChannel(input.channel);
 
-  // Desconto do metodo, lido FORA da transacao de proposito.
+  // ==========================================================================
+  // >>> SINAL SO EXISTE NO PIX (secao 4-B.2). <<<
+  // Recusado, nunca rebaixado. As duas correcoes silenciosas possiveis sao
+  // ruins e em direcoes opostas: virar Pix cobraria por um meio que o cliente
+  // nao escolheu, e virar integral no cartao cobraria AGORA o dobro do numero
+  // que a tela mostrou. A tela ja nao oferece a combinacao; isto e a barreira
+  // do servidor, para quem chega pela API.
+  // ==========================================================================
+  const paymentMethod: PaymentMethodName = input.paymentMethod ?? 'pix';
+  if (paymentMethod === 'card' && input.paymentMethodMode === 'deposit') {
+    throw new InvalidCompositionError('pagamento com sinal existe somente no Pix');
+  }
+
+  // Desconto do metodo ESCOLHIDO, lido FORA da transacao de proposito.
   //
   // E configuracao do tenant, nao estado disputado: nao participa da corrida que
   // o advisory lock e a exclusion constraint protegem. Ler aqui evita pedir uma
   // SEGUNDA conexao do pool enquanto a transacao ja segura a primeira — que sob
   // o pico de outubro dobraria o consumo de conexoes por reserva.
   //
-  // Metodo fixo em 'pix': e o unico que existe hoje. Cartao e Fase E, e e la que
-  // isto passa a ser escolha do cliente em vez de constante.
-  const discountBasisPoints = await getDiscountBasisPoints('pix');
+  // >>> O CARTAO PAGA O CHEIO PORQUE NAO TEM LINHA DE DESCONTO, NAO PORQUE
+  // SOMAMOS TAXA. <<< Sem linha configurada, getDiscountBasisPoints devolve 0 e
+  // o cliente paga `full_price_cents` — que e o preco anunciado. Nunca existe
+  // "cheio + taxa" neste codigo (secao 4-B.1): um acrescimo no cartao e lido
+  // como punicao, derruba conversao e esbarra na expectativa de que o preco
+  // anunciado e o preco a pagar.
+  const discountBasisPoints = await getDiscountBasisPoints(paymentMethod);
 
   const prepared = {
     startInstant,
@@ -701,6 +734,7 @@ export async function createReservation(
     channel,
     emergencyContactPhone,
     customerCpf,
+    paymentMethod,
     discountBasisPoints,
   };
   if (tx) return applyCreateReservation(tx, input, prepared);
@@ -714,7 +748,9 @@ type PreparedInput = {
   emergencyContactPhone: string;
   /** ja validado e reduzido a digitos — e o que vai para o banco */
   customerCpf: string;
-  /** desconto do metodo em basis points, lido antes da transacao */
+  /** meio escolhido, ja validado contra o modo (cartao nao aceita sinal) */
+  paymentMethod: PaymentMethodName;
+  /** desconto DESSE metodo em basis points, lido antes da transacao */
   discountBasisPoints: number;
 };
 
@@ -728,7 +764,7 @@ async function applyCreateReservation(
 ): Promise<CreateReservationResult> {
   const tenantId = getTenantId();
   const { startInstant, termoAcceptedAt, channel, emergencyContactPhone, customerCpf } = prepared;
-  const { discountBasisPoints } = prepared;
+  const { discountBasisPoints, paymentMethod } = prepared;
   const startIso = startInstant.toISOString();
 
   // -- 1. ADVISORY LOCK ------------------------------------------------------
@@ -1088,7 +1124,10 @@ async function applyCreateReservation(
   await tx.insert(reservationPayments).values(
     paymentRows.map((row) => ({
       ...row,
-      method: 'pix' as const,
+      // SNAPSHOT do meio escolhido. As duas linhas do modo `deposit` nascem
+      // 'pix' porque o cartao nao aceita sinal — quando esta linha e 'card', ha
+      // uma linha so, e ela e 'full'.
+      method: paymentMethod,
       state: 'pending' as const,
       // unico e deterministico (secao 4.6): reconcilia mesmo perdendo o id do Asaas
       externalReference: `${reservation.id}:${row.kind}`,
@@ -1102,6 +1141,7 @@ async function applyCreateReservation(
     // de pagamento faz new Date(holdExpiresAt) para o contador de 15 minutos.
     holdExpiresAt: new Date(reservation.holdExpiresAt!).toISOString(),
     paymentMode: effectivePaymentMode,
+    paymentMethod,
     totalCents,
     dueNowCents,
     balanceCents,

@@ -5,6 +5,7 @@
 
 import { applyDiscount } from '@/lib/basis-points';
 import type { PublicExperience } from '@/lib/experiences';
+import type { PaymentMethodName } from '@/lib/financial-config';
 import type { SettingKey } from '@/lib/tenant';
 
 // ============================================================================
@@ -79,9 +80,15 @@ export function durationLabel(minutes: number): string {
  *
  * O desconto incide sobre o TOTAL (secao 4-B.2), nunca sobre o unitario.
  */
-export const totalCents = (experience: PublicExperience, resourcesNeeded: number) =>
-  applyDiscount(experience.priceCents * resourcesNeeded, experience.discountBasisPoints)
-    .payableCents;
+export const totalCents = (
+  experience: PublicExperience,
+  resourcesNeeded: number,
+  method: PaymentMethodName = 'pix',
+) =>
+  applyDiscount(
+    experience.priceCents * resourcesNeeded,
+    experience.discountBasisPointsByMethod[method],
+  ).payableCents;
 
 /**
  * O que o cliente paga por UM recurso — o numero do cartao da experiencia.
@@ -89,8 +96,14 @@ export const totalCents = (experience: PublicExperience, resourcesNeeded: number
  * Passa pela mesma funcao, e nao por `totalCents(exp, 1)` reescrito a mao, pelo
  * motivo acima. Com um recurso so as duas contas coincidem por definicao; a
  * funcao existe para o rotulo nao virar o lugar onde alguem reintroduz `* 0.93`.
+ *
+ * >>> "A PARTIR DE": o cartao da experiencia mostra o MENOR preco. <<< Com o
+ * cartao de credito na Fase E existem dois precos possiveis, e o cartao da
+ * experiencia aparece ANTES de o cliente escolher como pagar. Mostrar o maior
+ * faria a lista parecer mais cara do que e; o Pix e o preco que o tenant quer
+ * anunciar, e e o que a comparacao do passo de pagamento depois detalha.
  */
-export const unitPayableCents = (experience: PublicExperience) => totalCents(experience, 1);
+export const unitPayableCents = (experience: PublicExperience) => totalCents(experience, 1, 'pix');
 
 // ============================================================================
 // Datas

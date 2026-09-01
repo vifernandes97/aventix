@@ -22,16 +22,30 @@ import { db } from '../db/client';
 import { customers, experiences, reservationPayments, reservations } from '../db/schema';
 import { setReservationStatus } from '../reservations';
 import { asaasProvider } from './asaas';
+import type { CreatePixChargeParams } from './provider';
 
-/** Bloco `payment` do 201 de POST /api/reservations (secao 7.1). */
-export type ReservationPaymentBlock = {
-  method: 'pix';
-  /** imagem do QR em base64, sem o prefixo `data:` */
-  qrCodeBase64: string;
-  copyPaste: string;
-  /** ISO 8601 ou null — validade do QR, nao do hold da reserva */
-  expiresAt: string | null;
-};
+/**
+ * Bloco `payment` do 201 de POST /api/reservations (secao 7.1).
+ *
+ * UNIAO DISCRIMINADA por `method`, e nao um objeto com tudo opcional. Os dois
+ * meios nao tem campo em comum nenhum — o Pix entrega um QR e um copia-e-cola, o
+ * cartao entrega um endereco — e um tipo frouxo faria a tela ter de adivinhar,
+ * em runtime, qual metade esta preenchida.
+ */
+export type ReservationPaymentBlock =
+  | {
+      method: 'pix';
+      /** imagem do QR em base64, sem o prefixo `data:` */
+      qrCodeBase64: string;
+      copyPaste: string;
+      /** ISO 8601 ou null — validade do QR, nao do hold da reserva */
+      expiresAt: string | null;
+    }
+  | {
+      method: 'card';
+      /** fatura do provedor: e para la que a tela manda o cliente (secao 4-B.8) */
+      invoiceUrl: string;
+    };
 
 /** Nao ha linha de cobranca "a pagar agora" para a reserva — reserva corrompida. */
 export class ChargeableNotFoundError extends Error {
@@ -46,9 +60,11 @@ export class ChargeableNotFoundError extends Error {
  *
  * "Devida agora" = a linha `full` (modo full) ou `deposit` (modo deposit) —
  * `ne(kind, 'balance')`. A linha de `balance` NAO e cobrada aqui: ela vence no
- * dia do passeio e tem caminho proprio (secao 7.2, `GET .../balance`), fora
- * deste MVP. Como o CRUD de experiencias so aceita `payment_mode='full'`, hoje
- * nao existe reserva com linha de balance.
+ * dia do passeio e tem caminho proprio, o botao "Cobrar saldo" do painel
+ * (secao 7.2 e 8-D, `lib/payments/balance-charge.ts`).
+ *
+ * O MEIO sai de `reservation_payments.method`, que a criacao gravou a partir da
+ * escolha do cliente: Pix devolve QR, cartao devolve a fatura do provedor.
  *
  * @throws {ChargeableNotFoundError} reserva sem linha cobravel.
  * @throws {PaymentProviderConfigError|PaymentProviderAuthError|PaymentProviderNetworkError|PaymentProviderApiError}
@@ -61,6 +77,10 @@ export async function createChargeForReservation(
     .select({
       paymentId: reservationPayments.id,
       amountCents: reservationPayments.amountCents,
+      // O meio de pagamento e ESCOLHA DO CLIENTE, gravada na linha por
+      // createReservation (secao 4-B.4). Lido daqui e nao da experiencia: a
+      // experiencia diz o que e OFERECIDO, a linha diz o que foi COBRADO.
+      method: reservationPayments.method,
       dueDate: reservationPayments.dueDate,
       externalReference: reservationPayments.externalReference,
       customerId: customers.id,
@@ -85,7 +105,7 @@ export async function createChargeForReservation(
   if (!row) throw new ChargeableNotFoundError(reservationId);
 
   try {
-    const charge = await asaasProvider.createPixCharge({
+    const params: CreatePixChargeParams = {
       payer: {
         providerCustomerId: row.providerCustomerId,
         name: row.customerName,
@@ -114,7 +134,25 @@ export async function createChargeForReservation(
       dueDate: row.dueDate,
       externalReference: row.externalReference,
       description: `${row.experienceName} — reserva ${reservationId.slice(0, 8)}`,
-    });
+    };
+
+    // >>> UM `if`, DOIS CAMINHOS, E O RESTO IDENTICO. <<<
+    // O que muda entre Pix e cartao e so o metodo do provedor e o que volta dele.
+    // Cliente, valor, vencimento, referencia externa e descricao sao os mesmos —
+    // e precisam ser, porque e a `external_reference` que reconcilia a cobranca
+    // quando o id se perde (secao 4.6), independentemente do meio.
+    if (row.method === 'card') {
+      const charge = await asaasProvider.createCardCharge(params);
+
+      await db
+        .update(reservationPayments)
+        .set({ asaasPaymentId: charge.chargeId, asaasInvoiceUrl: charge.invoiceUrl })
+        .where(eq(reservationPayments.id, row.paymentId));
+
+      return { method: 'card', invoiceUrl: charge.invoiceUrl };
+    }
+
+    const charge = await asaasProvider.createPixCharge(params);
 
     await db
       .update(reservationPayments)

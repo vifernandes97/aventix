@@ -227,6 +227,27 @@ export function ReservationPanel({
     detail.payment.balanceCents > 0 &&
     detail.payment.rows.some((row) => row.kind === 'balance' && row.state === 'pending');
 
+  /**
+   * ==========================================================================
+   * >>> DINHEIRO REVERTIDO: A UNICA COISA QUE TORNA UM CHARGEBACK VISIVEL. <<<
+   *
+   * A reserva NAO e cancelada quando um pagamento e revertido (secao 4-B.9): o
+   * passeio pode ter acontecido, e cancelar apagaria o registro de que o recurso
+   * esteve ocupado. Consequencia: no calendario ela continua sendo uma reserva
+   * confirmada como qualquer outra.
+   *
+   * Sem este aviso, o unico rastro seria a palavra "estornado" em cinza, no fim
+   * da lista de pagamentos — que ninguem le se nao estiver procurando. E ninguem
+   * procura, porque nada indicou que houvesse o que procurar.
+   *
+   * O bloco tambem diz EM VOZ ALTA que a reserva nao foi cancelada. E a primeira
+   * pergunta de quem le "pagamento revertido", e a resposta errada (assumir que
+   * o sistema cancelou) faria o dono nao ligar para o cliente.
+   * ==========================================================================
+   */
+  const pagamentosRevertidos =
+    detail?.payment.rows.filter((row) => row.state === 'refunded') ?? [];
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       {/* Clique FORA fecha. Elemento proprio, irmao do painel — um onClick no
@@ -404,6 +425,22 @@ export function ReservationPanel({
 
             {/* -- pagamento -------------------------------------------------- */}
             <Section title="Pagamento">
+              {pagamentosRevertidos.length > 0 && (
+                <p
+                  role="alert"
+                  className="mb-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-xs leading-relaxed text-red-900 dark:border-red-900 dark:bg-red-950/60 dark:text-red-100"
+                >
+                  <strong className="block font-semibold">
+                    Pagamento revertido (estorno ou contestação)
+                  </strong>
+                  {moneyLabel(
+                    pagamentosRevertidos.reduce((total, row) => total + row.amountCents, 0),
+                  )}{' '}
+                  saiu da conta. <strong>A reserva NÃO foi cancelada</strong> e o passeio pode já ter
+                  acontecido — confira a disputa no painel do Asaas e fale com o cliente.
+                </p>
+              )}
+
               <Field label="Total">{moneyLabel(detail.totalPriceCents)}</Field>
               <Field label="Pago">{moneyLabel(detail.payment.amountPaidCents)}</Field>
               <Field label="Em aberto">{moneyLabel(detail.payment.balanceCents)}</Field>
@@ -416,7 +453,21 @@ export function ReservationPanel({
                   >
                     <span>
                       {PAYMENT_KIND_LABEL[row.kind]}
+                      {row.method === 'card' && ' · cartão'}
                       {row.receivedInCash && ' (recebido por fora)'}
+                      {/*
+                        LIQUIDO DO PROVEDOR (secao 4-B.7): lido do `netValue`, e
+                        nao calculado. A modalidade nula e o que o distingue do
+                        registro da maquininha logo abaixo — sao a mesma coluna
+                        com procedencias diferentes, e misturar as duas leituras
+                        faria a conferencia com o extrato conferir o numero
+                        errado.
+                      */}
+                      {row.netCents !== null && row.cardMachineModality === null && (
+                        <span className="mt-0.5 block text-[11px] text-neutral-500">
+                          líquido {moneyLabel(row.netCents)} (informado pelo Asaas)
+                        </span>
+                      )}
                       {/*
                         O REGISTRO CONGELADO (secao 4-B.7). Estes numeros sao
                         LIDOS da linha, nunca recalculados: a taxa vigente hoje

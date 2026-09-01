@@ -28,6 +28,7 @@ import {
 } from './shared';
 import {
   type EmergencyContactForm,
+  type PaymentChoice,
   type PeopleValidation,
   type PersonForm,
   type WizardState,
@@ -655,19 +656,26 @@ function renderTermText(name: string): string {
 }
 
 /**
- * PASSO DE PAGAMENTO — so existe quando a experiencia OFERECE sinal (secao 4-B.4).
+ * PASSO DE PAGAMENTO — as tres formas da secao 4-B.2.
  *
  * ============================================================================
- * >>> AS DUAS OPCOES LADO A LADO, NA MESMA TELA <<<
- * Nao e "escolha Pix" e depois "quer pagar tudo ou metade?". A comparacao E a
+ * >>> AS OPCOES LADO A LADO, NA MESMA TELA <<<
+ * Nao e "escolha o meio" e depois "quer pagar tudo ou metade?". A comparacao E a
  * decisao: o cliente quer ver R$ 325,49 agora contra R$ 162,75 agora + R$ 162,74
- * no dia, junto, para escolher. Quebrar em dois passos esconde exatamente o que
- * ele precisa comparar.
+ * no dia contra R$ 349,99 no cartao, junto, para escolher. Quebrar em dois
+ * passos esconde exatamente o que ele precisa comparar.
  *
  * >>> E O SALDO PRECISA APARECER AQUI, NAO SO NO FIM <<<
  * "Sinal de 50%" sem o segundo numero soa como desconto. O que a opcao entrega e
  * pagar menos AGORA, nao pagar menos — e quem descobre isso depois do passeio
  * ja marcado tem razao em reclamar.
+ *
+ * >>> O CARTAO E MAIS CARO PORQUE O PIX TEM DESCONTO, NAO PORQUE SOMAMOS TAXA. <<<
+ * (secao 4-B.1) A diferenca em reais e a mesma nas duas leituras, a percepcao
+ * nao: acrescimo no cartao e lido como punicao e derruba conversao. Por isso o
+ * texto abaixo enquadra a economia do Pix, e NUNCA ha um "+ taxa" na tela. O
+ * cartao nao aceita sinal — a opcao simplesmente nao existe, em vez de aparecer
+ * desabilitada, porque opcao desabilitada convida a perguntar por que.
  * ============================================================================
  *
  * Os valores vem calculados de fora (booking-wizard), pela MESMA aritmetica que o
@@ -678,6 +686,8 @@ export function StepPayment({
   integralCents,
   depositCents,
   balanceCents,
+  cardCents,
+  offersDeposit,
   selected,
   onSelect,
 }: {
@@ -685,29 +695,51 @@ export function StepPayment({
   integralCents: number;
   depositCents: number;
   balanceCents: number;
-  selected: 'full' | 'deposit';
-  onSelect: (mode: 'full' | 'deposit') => void;
+  cardCents: number;
+  offersDeposit: boolean;
+  selected: PaymentChoice;
+  onSelect: (choice: PaymentChoice) => void;
 }) {
   const options = [
     {
-      mode: 'full' as const,
+      mode: 'pix_full' as const,
       title: 'Pix integral',
       now: integralCents,
+      total: integralCents,
       detail: 'Você paga tudo agora e não fica nada pendente.',
     },
+    // Sinal SO no Pix e so quando a experiencia o oferece (secao 4-B.2 e 4-B.4).
+    ...(offersDeposit
+      ? [
+          {
+            mode: 'pix_deposit' as const,
+            title: 'Pix com sinal de 50%',
+            now: depositCents,
+            total: integralCents,
+            detail: `Você paga ${moneyLabel(balanceCents)} no dia do passeio, direto com o guia, antes da saída.`,
+          },
+        ]
+      : []),
     {
-      mode: 'deposit' as const,
-      title: 'Pix com sinal de 50%',
-      now: depositCents,
-      detail: `Você paga ${moneyLabel(balanceCents)} no dia do passeio, direto com o guia, antes da saída.`,
+      mode: 'card' as const,
+      title: 'Cartão de crédito',
+      now: cardCents,
+      total: cardCents,
+      detail: 'Você é levado para a página segura de pagamento para digitar os dados do cartão.',
     },
   ];
+
+  // Quanto o Pix economiza. Nasce do desconto ja aplicado nos dois numeros —
+  // nao ha percentual escrito a mao aqui, que envelheceria no dia em que o dono
+  // mudasse o desconto (a licao da faixa do /admin/financeiro, 31/08).
+  const pixSavesCents = cardCents - integralCents;
 
   return (
     <section>
       <h1 className="text-xl font-semibold text-stone-100">Como você prefere pagar?</h1>
       <p className="mt-2 text-sm text-stone-400">
-        As duas opções garantem sua vaga na hora. O valor total é o mesmo.
+        Todas as opções garantem sua vaga na hora.
+        {pixSavesCents > 0 ? ` No Pix você economiza ${moneyLabel(pixSavesCents)}.` : ''}
       </p>
 
       <ul className="mt-4 flex flex-col gap-3">
@@ -735,7 +767,7 @@ export function StepPayment({
                 {/* O total sai explicito nas DUAS, para nenhuma parecer mais
                     barata que a outra. */}
                 <p className="mt-1 text-xs uppercase tracking-wide text-stone-500">
-                  Total {moneyLabel(integralCents)}
+                  Total {moneyLabel(option.total)}
                 </p>
               </button>
             </li>
@@ -743,10 +775,12 @@ export function StepPayment({
         })}
       </ul>
 
-      <p className="mt-4 text-xs leading-relaxed text-stone-500">
-        O sinal confirma a reserva e não é devolvido em caso de cancelamento. Para remarcar, fale
-        com {labels.business_name || 'a gente'} pelo WhatsApp.
-      </p>
+      {offersDeposit && (
+        <p className="mt-4 text-xs leading-relaxed text-stone-500">
+          O sinal confirma a reserva e não é devolvido em caso de cancelamento. Para remarcar, fale
+          com {labels.business_name || 'a gente'} pelo WhatsApp.
+        </p>
+      )}
     </section>
   );
 }

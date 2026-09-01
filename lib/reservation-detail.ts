@@ -47,7 +47,15 @@ export type DetailParticipant = {
 export type DetailPayment = {
   id: string;
   kind: 'full' | 'deposit' | 'balance';
+  /**
+   * `refunded` significa que o dinheiro SAIU: estorno ou chargeback (secao
+   * 4-B.9). A reserva NAO e cancelada por isso — ver o bloco de reversao em
+   * lib/payments/process.ts —, entao esta linha e o unico lugar onde o fato
+   * aparece.
+   */
   state: 'pending' | 'paid' | 'cancelled' | 'refunded';
+  /** Pix ou cartao (secao 4-B.2). Snapshot da venda: nao muda depois. */
+  method: 'pix' | 'card';
   amountCents: number;
   /** 'YYYY-MM-DD' */
   dueDate: string;
@@ -63,6 +71,12 @@ export type DetailPayment = {
    * Todos `null` em pagamento que nao passou pela maquininha. E
    * `netCents: null` COM `cardMachineModality` preenchida significa "a taxa
    * nao estava configurada no registro" — nao significa zero (secao 4-B.6).
+   *
+   * >>> `netCents` TEM DUAS PROCEDENCIAS DESDE A FASE E, e a modalidade e que
+   * as separa. <<< Com `cardMachineModality` preenchida, e maquininha e o
+   * liquido foi CALCULADO por nos. Com ela nula, o liquido foi LIDO do provedor
+   * (`netValue`), que e a regra da secao 4-B.7 para tudo que passa por ele.
+   * Nos dois casos esta CONGELADO e ninguem recalcula.
    */
   cardMachineModality: 'debit' | 'credit' | 'credit_installment' | null;
   rateBasisPointsApplied: number | null;
@@ -272,6 +286,7 @@ export async function getReservationDetail(reservationId: string): Promise<Reser
               'id', rp.id::text,
               'kind', rp.kind::text,
               'state', rp.state::text,
+              'method', rp.method::text,
               'amountCents', rp.amount_cents,
               'dueDate', rp.due_date::text,
               'paidAt', rp.paid_at,

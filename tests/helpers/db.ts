@@ -484,6 +484,14 @@ export function reservationInput(params: {
    * ter que declarar explicitamente.
    */
   paymentMethodMode?: 'full' | 'deposit';
+  /**
+   * COMO pagar (secao 4-B.2). Default 'pix'.
+   *
+   * `'card'` combinado com `paymentMethodMode: 'deposit'` e a combinacao
+   * PROIBIDA — o sinal existe somente no Pix — e serve justamente para
+   * exercitar a recusa (grupo Y).
+   */
+  paymentMethod?: 'pix' | 'card';
 }) {
   const {
     experienceId,
@@ -497,6 +505,7 @@ export function reservationInput(params: {
     passengerBirthdate = ADULT_BIRTHDATE,
     cpf = VALID_CPF,
     paymentMethodMode = 'full',
+    paymentMethod = 'pix',
   } = params;
 
   return {
@@ -520,6 +529,7 @@ export function reservationInput(params: {
     termo: { version: 'v1', acceptedAt: new Date().toISOString() },
     emergencyContact: { name: 'Contato Emergência', phone: '(19) 98888-7777' },
     paymentMethodMode,
+    paymentMethod,
   };
 }
 

@@ -47,17 +47,30 @@ export type EmergencyContactForm = {
   phone: string;
 };
 
+/** As tres formas de pagar da secao 4-B.2. `pix_deposit` so quando a experiencia oferece sinal. */
+export type PaymentChoice = 'pix_full' | 'pix_deposit' | 'card';
+
 export type WizardState = {
   experience: PublicExperience | null;
   resourcesNeeded: number;
   /**
-   * O que o cliente escolheu pagar agora (secao 4-B.4).
+   * COMO o cliente escolheu pagar — as tres formas da secao 4-B.2, num valor so.
    *
-   * Nasce 'full' e so muda no passo de pagamento, que por sua vez so existe
-   * quando a experiencia OFERECE sinal. Numa experiencia 'full' o valor nunca
-   * sai do default, e o servidor recusaria 'deposit' de qualquer forma.
+   * ==========================================================================
+   * >>> UM CAMPO, NAO DOIS, PARA A COMBINACAO PROIBIDA NAO EXISTIR. <<<
+   * O servidor recebe duas dimensoes (`paymentMethod` e `paymentMethodMode`), e
+   * uma das quatro combinacoes e invalida: cartao com sinal (o sinal existe
+   * somente no Pix). Guardar as duas separadas aqui criaria um estado
+   * REPRESENTAVEL e proibido, que so seria pego no 422 do servidor — depois de o
+   * cliente preencher os passos seguintes.
+   *
+   * Com um valor unico a combinacao invalida nao tem como ser escrita, e a
+   * traducao para os dois campos do corpo acontece num ponto so, no submit.
+   * ==========================================================================
+   *
+   * Nasce 'pix_full', que e o caminho que sempre existe.
    */
-  paymentMethodMode: 'full' | 'deposit';
+  paymentChoice: PaymentChoice;
   date: string | null;
   /** Instante ISO do slot escolhido — vai cru para o POST. */
   startAt: string | null;

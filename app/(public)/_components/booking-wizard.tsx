@@ -43,7 +43,10 @@ import {
   StepTerms,
 } from './steps';
 import { type PublicLabels, moneyLabel, durationLabel, totalCents } from './shared';
+import type { PaymentMethodName } from '@/lib/financial-config';
+import type { ReservationPaymentBlock } from '@/lib/payments/charge';
 import {
+  type PaymentChoice,
   type WizardState,
   emptyEmergencyContact,
   emptyPerson,
@@ -59,13 +62,17 @@ export type CreatedReservation = {
   dueNowCents: number;
   balanceCents: number;
   paymentMode: string;
-  /** bloco `payment` do 201 (secao 7.1). Ausente so em resposta antiga/inesperada. */
-  payment?: {
-    method: string;
-    qrCodeBase64: string;
-    copyPaste: string;
-    expiresAt: string | null;
-  } | null;
+  paymentMethod: 'pix' | 'card';
+  /**
+   * Bloco `payment` do 201 (secao 7.1). Ausente so em resposta inesperada.
+   *
+   * O wizard NAO o renderiza: `StepDone` redireciona para /reserva/{id}, que
+   * busca o pagamento por conta propria — duas telas desenhando o mesmo
+   * pagamento divergiriam no dia em que uma mudasse. O campo fica tipado
+   * corretamente mesmo assim: um tipo frouxo aqui e o convite para alguem
+   * comecar a desenhar QR nesta tela.
+   */
+  payment?: ReservationPaymentBlock | null;
 };
 
 type StepId = 'experience' | 'resources' | 'schedule' | 'payment' | 'people' | 'terms' | 'done';
@@ -93,7 +100,7 @@ export function BookingWizard({
   const [state, setState] = useState<WizardState>({
     experience: null,
     resourcesNeeded: 1,
-    paymentMethodMode: 'full' as 'full' | 'deposit',
+    paymentChoice: 'pix_full' as PaymentChoice,
     date: null,
     startAt: null,
     responsible: { ...emptyPerson('responsavel', 'operator'), phone: '', email: '', cpf: '' },
@@ -115,11 +122,19 @@ export function BookingWizard({
   // "quantos?" com uma opcao unica e trabalho sem escolha (secao 11-B — o
   // formulario DERIVA da configuracao). A numeracao acompanha: some o passo,
   // some do "PASSO N DE M".
-  // O passo de pagamento so existe quando a experiencia OFERECE sinal — mesma
-  // regra do passo de recursos: formulario DERIVA da configuracao (secao 11-B).
-  // Numa experiencia 'full' nao ha escolha a fazer, e um passo com uma opcao so
-  // e trabalho sem decisao. A numeracao do "PASSO N DE M" acompanha sozinha.
+  //
+  // >>> O PASSO DE PAGAMENTO PASSOU A EXISTIR SEMPRE, NA FASE E. <<<
+  // Antes ele so aparecia quando a experiencia oferecia sinal, porque sem sinal
+  // havia uma opcao unica (Pix) e um passo com uma opcao so e trabalho sem
+  // decisao. Com o cartao ha SEMPRE ao menos duas formas (secao 4-B.2), entao a
+  // escolha existe em toda experiencia. O que continua derivando da configuracao
+  // e a opcao de SINAL dentro do passo.
   const offersDeposit = state.experience?.paymentMode === 'deposit';
+
+  // Meio escolhido, derivado da escolha unica. E o que decide qual desconto a
+  // tela aplica: 'card' nao tem linha configurada, logo 0 bp, logo o preco
+  // cheio — nunca "cheio + taxa" (secao 4-B.1).
+  const chosenMethod: PaymentMethodName = state.paymentChoice === 'card' ? 'card' : 'pix';
 
   /**
    * Entrada e saldo do sinal, para a tela de escolha.
@@ -131,11 +146,14 @@ export function BookingWizard({
    * Espelha exatamente o que createReservation faz. O servidor continua sendo
    * quem decide o valor cobrado; isto e so exibicao.
    */
+  // Sempre sobre o total do PIX, jamais sobre o do metodo escolhido: o sinal so
+  // existe no Pix (secao 4-B.2), entao dividir o total do cartao produziria os
+  // numeros de uma opcao que nao esta a venda.
   const depositSplit = useMemo(
     () =>
       state.experience
         ? splitByBasisPoints(
-            totalCents(state.experience, state.resourcesNeeded),
+            totalCents(state.experience, state.resourcesNeeded, 'pix'),
             DEPOSIT_PERCENT_BASIS_POINTS,
           )
         : { part: 0, rest: 0 },
@@ -146,11 +164,8 @@ export function BookingWizard({
     () =>
       (
         ['experience', 'resources', 'schedule', 'payment', 'people', 'terms', 'done'] as StepId[]
-      ).filter(
-        (id) =>
-          (id !== 'resources' || activeResourceCount > 1) && (id !== 'payment' || offersDeposit),
-      ),
-    [activeResourceCount, offersDeposit],
+      ).filter((id) => id !== 'resources' || activeResourceCount > 1),
+    [activeResourceCount],
   );
 
   const stepIndex = steps.indexOf(stepId);
@@ -217,7 +232,12 @@ export function BookingWizard({
           startAt: state.startAt,
           resourcesNeeded: state.resourcesNeeded,
           // A ESCOLHA, nunca um valor: quanto e a entrada e conta do servidor.
-          paymentMethodMode: state.paymentMethodMode,
+          //
+          // Ponto UNICO onde a escolha unica vira as duas dimensoes do contrato.
+          // Como `paymentChoice` nao consegue representar cartao-com-sinal, o par
+          // que sai daqui e sempre valido por construcao.
+          paymentMethod: chosenMethod,
+          paymentMethodMode: state.paymentChoice === 'pix_deposit' ? 'deposit' : 'full',
           // O preco NAO vai no corpo: quem calcula e o servidor (secao 4.6).
           customer: {
             name: state.responsible.name.trim(),
@@ -291,7 +311,10 @@ export function BookingWizard({
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, state, people.everyone, channel]);
+    // `chosenMethod` deriva de `state.paymentChoice` e ja estaria coberto por
+    // `state`; fica explicito para o corpo do POST nao depender de uma leitura
+    // que o linter nao enxerga.
+  }, [submitting, state, chosenMethod, people.everyone, channel]);
 
   // -- barra de total --------------------------------------------------------
   //
@@ -380,16 +403,18 @@ export function BookingWizard({
           {stepId === 'payment' && state.experience && (
             <StepPayment
               labels={labels}
-              // Os tres valores saem da MESMA aritmetica que o servidor usa
+              // Os quatro valores saem da MESMA aritmetica que o servidor usa
               // (lib/basis-points.ts). A tela nunca faz conta propria: um segundo
               // algoritmo aqui divergiria por um centavo em alguns precos, e o
               // cliente veria um valor na escolha e outro na cobranca.
-              integralCents={totalCents(state.experience, state.resourcesNeeded)}
+              integralCents={totalCents(state.experience, state.resourcesNeeded, 'pix')}
               depositCents={depositSplit.part}
               balanceCents={depositSplit.rest}
-              selected={state.paymentMethodMode}
-              onSelect={(paymentMethodMode) => {
-                setState((s) => ({ ...s, paymentMethodMode }));
+              cardCents={totalCents(state.experience, state.resourcesNeeded, 'card')}
+              offersDeposit={offersDeposit}
+              selected={state.paymentChoice}
+              onSelect={(paymentChoice) => {
+                setState((s) => ({ ...s, paymentChoice }));
                 forward();
               }}
             />
@@ -439,7 +464,7 @@ export function BookingWizard({
                   · {durationLabel(state.experience.durationMinutes)}
                 </span>
                 <strong className="shrink-0 text-base text-orange-200">
-                  {moneyLabel(totalCents(state.experience, state.resourcesNeeded))}
+                  {moneyLabel(totalCents(state.experience, state.resourcesNeeded, chosenMethod))}
                 </strong>
               </div>
             )}

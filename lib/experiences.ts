@@ -26,7 +26,7 @@ import 'server-only';
 import { and, asc, desc, eq } from 'drizzle-orm';
 
 import { db } from './db/client';
-import { getDiscountBasisPoints } from './financial-config';
+import { type PaymentMethodName, getDiscountBasisPoints } from './financial-config';
 import { experiences } from './db/schema';
 import { getTenantId } from './tenant';
 
@@ -151,7 +151,7 @@ export type PublicExperience = {
    */
   priceCents: number;
   /**
-   * Desconto do metodo que o cliente pode usar hoje (Pix), em basis points.
+   * Desconto de CADA metodo, em basis points. Fase E: virou mapa.
    *
    * >>> POR QUE O PERCENTUAL SAI DAQUI, E NAO O PRECO JA CALCULADO <<<
    * O desconto incide sobre o TOTAL (secao 4-B.2), e o total so e conhecido
@@ -165,14 +165,17 @@ export type PublicExperience = {
    * conta so, nao duas que precisam concordar.
    *
    * `0` quando nao ha desconto configurado — o cliente paga o cheio (secao
-   * 4-B.6, default fail-safe).
+   * 4-B.6, default fail-safe). E o caso NORMAL do cartao: ele paga o valor
+   * anunciado porque nao tem desconto, JAMAIS porque somamos taxa (secao
+   * 4-B.1).
    *
-   * FASE E: quando houver cartao, isto vira um mapa por metodo e a tela passa a
-   * mostrar as duas opcoes lado a lado (secao 4-B.2). Hoje NAO existe "de/por":
-   * so o Pix e comprável, e anunciar economia contra um preco que ninguem pode
-   * escolher e propaganda de um desconto que nao e opcao.
+   * >>> O NOME MUDOU JUNTO COM O TIPO, DE PROPOSITO. <<< Era
+   * `discountBasisPoints: number` e significava "o desconto do Pix". Trocar o
+   * tipo mantendo o nome deixaria todo consumidor antigo compilando com um
+   * significado novo — a classe de bug que o comentario de `priceCents` logo
+   * acima descreve. Renomear obriga a revisitar cada um.
    */
-  discountBasisPoints: number;
+  discountBasisPointsByMethod: Record<PaymentMethodName, number>;
   paymentMode: 'full' | 'deposit';
   /**
    * Idade minima do garupa. SAI no catalogo publico de proposito: sem ela o
@@ -190,17 +193,17 @@ export type PublicExperience = {
  * `start + duracao` (secao 4.6). Expo-lo faria a tela mostrar um passeio mais
  * longo do que o vendido.
  *
- * SINAL (secao 7.1): quando `paymentMode` for 'deposit', o contrato preve
- * `depositCents` e `balanceCents` JA CALCULADOS aqui — o valor do sinal nunca se
- * calcula no cliente (secao 4.6). Nao existem hoje porque o modo depende do
- * total (preco x resourcesNeeded), que so e conhecido depois do passo 2, e
- * porque nenhuma experiencia pode ser 'deposit' no MVP. Entram na Fase 2, junto
- * com a decisao de negocio sobre o sinal.
+ * SINAL: o contrato da secao 7.1 previa `depositCents`/`balanceCents` prontos
+ * aqui. Nao existem e nao vao existir neste payload — eles dependem do TOTAL
+ * (preco x recursos), que so e conhecido depois do passo 2. O wizard os obtem
+ * rodando a MESMA `splitByBasisPoints` do servidor sobre o total ja com
+ * desconto (secao 4-B.5), que e uma funcao pura e compartilhada; nao e conta
+ * paralela no cliente.
  */
 export async function listPublicExperiences(): Promise<PublicExperience[]> {
   // Uma leitura do desconto para o catalogo inteiro: e configuracao do TENANT,
   // nao da experiencia, entao consultar por linha seria N vezes a mesma resposta.
-  const [rows, discountBasisPoints] = await Promise.all([
+  const [rows, pix, card] = await Promise.all([
     db
       .select({
         id: experiences.id,
@@ -214,9 +217,10 @@ export async function listPublicExperiences(): Promise<PublicExperience[]> {
       .where(and(eq(experiences.tenantId, getTenantId()), eq(experiences.active, true)))
       .orderBy(asc(experiences.durationMinutes), asc(experiences.id)),
     getDiscountBasisPoints('pix'),
+    getDiscountBasisPoints('card'),
   ]);
 
-  return rows.map((row) => ({ ...row, discountBasisPoints }));
+  return rows.map((row) => ({ ...row, discountBasisPointsByMethod: { pix, card } }));
 }
 
 // ============================================================================
