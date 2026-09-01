@@ -157,42 +157,40 @@ export const quadricicloTemplate: SegmentTemplate = {
   // lib/basis-points.ts, sobre o TOTAL (preco x recursos). O wizard chama a
   // MESMA funcao para exibir. NAO desconte nada aqui.
   //
-  // >>> ARMADILHA AO MEXER NESTES NUMEROS <<<
-  // seedTenant() reconcilia preco POR NOME e faz UPDATE na divergencia. Trocar
-  // um valor aqui muda o preco em producao no proximo seed — e se a troca
-  // subisse SEM o codigo que aplica o desconto, o sistema cobraria o cheio no
-  // Pix, 7% a mais, em toda venda, sem erro e sem log. Template e calculo andam
-  // no MESMO commit e no MESMO deploy, sempre.
+  // >>> ARMADILHA AO MEXER NESTES NUMEROS — MUDOU EM 01/09 <<<
+  // O seed NAO reconcilia mais experiencias: o bloco virou insert-only, porque
+  // o dono edita preco, sinal e idade no /admin/experiencias e o seed desfazia.
+  // Entao trocar um valor aqui NAO muda mais o preco de um tenant existente —
+  // ele so vale para tenant NOVO, e para o tenant vivo o seed apenas RELATA a
+  // divergencia.
+  //
+  // O que continua valendo: template e calculo andam no MESMO commit e no MESMO
+  // deploy. Se o preco cheio subisse sem o codigo que aplica o desconto, um
+  // tenant novo nasceria cobrando 7% a mais no Pix, sem erro e sem log.
   //
   // E lembre da secao 19: o seed NAO RODA em producao. Mudar isto aqui nao muda
-  // o banco de la sozinho — exige UPDATE manual, conferido por SELECT.
+  // o banco de la sozinho — e agora nem rodando o seed mudaria.
   //
   // ==========================================================================
-  // >>> ESTES CAMPOS SAO RECONCILIADOS, NAO SEMEADOS. <<<
+  // >>> ESTES CAMPOS SO VALEM PARA TENANT NOVO. O SEED NAO OS RECONCILIA. <<<
   //
-  // Editar qualquer valor abaixo NAO e "configurar um tenant novo": e editar
-  // PRODUCAO no proximo seed. `seedTenant()` casa a experiencia POR NOME e faz
-  // UPDATE quando qualquer um destes nove campos diverge —
+  // O conserto que o remendo do dia anterior anunciava foi feito no mesmo dia: o
+  // bloco de experiences em lib/seed.ts virou INSERT-ONLY (01/09). Editar um
+  // valor abaixo agora significa "assim nasce o proximo tenant deste segmento",
+  // e nada mais — num tenant que ja existe, o seed apenas RELATA que o banco
+  // diverge, em `DIVERGEM DO TEMPLATE`.
   //
-  //     durationMinutes, bufferMinutes, priceMode, priceCents, paymentMode,
-  //     depositPercent, depositFixedCents, minPassengerAge, active
+  // Ate 28/08 nao era assim, e a divergencia que sobrou daquela epoca era
+  // perigosa: os dois `paymentMode` diziam 'full' enquanto producao estava em
+  // 'deposit', e rodar o seed teria desligado o sinal de 50% das duas trilhas,
+  // sem erro e sem log. Os valores abaixo espelham producao desde entao, e vale
+  // mante-los assim — nao mais como defesa, e sim para que este arquivo continue
+  // sendo documentacao honesta do que o segmento vende.
   //
-  // — inclusive quando quem divergiu foi o DONO, pelo /admin/experiencias. A
-  // tela existe, funciona, e o seed a desfaz.
-  //
-  // >>> ISTO E REMENDO, NAO CONSERTO. <<<
-  // O conserto e parar o seed de sobrescrever o que o dono edita — semear o
-  // valor inicial e nunca reconciliar, como `payment_method_discounts` ja faz
-  // (ver o comentario de SEED_PIX_DISCOUNT_BASIS_POINTS em lib/seed.ts). Isso
-  // troca a casa definitiva do template para o BANCO, e e decisao de
-  // arquitetura propria, nao ajuste de valor. Enquanto nao for tomada, a unica
-  // defesa e este arquivo espelhar producao — e alguem lembrar de atualiza-lo
-  // junto de todo UPDATE manual.
-  //
-  // Ate 01/09 ele NAO espelhava: os dois `paymentMode` diziam 'full' enquanto
-  // producao estava em 'deposit' desde 28/08, quando o UPDATE foi feito a mao e
-  // o template nao acompanhou. Rodar o seed teria desligado o sinal de 50% das
-  // duas trilhas, sem erro e sem log.
+  // `settings` e `resources`, no MESMO arquivo, CONTINUAM sendo reconciliados:
+  // eles nao tem tela, e tirar a reconciliacao sem tela deixaria o valor sem
+  // caminho de conserto que nao seja psql em producao (secao 19). O destino
+  // deles tambem e insert-only — junto com a tela, nunca antes.
   // ==========================================================================
   //
   // PAGAMENTO: as duas aceitam SINAL. O cliente escolhe no wizard entre Pix

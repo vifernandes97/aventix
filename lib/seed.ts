@@ -95,16 +95,42 @@ export type SeedReport = {
   /** Configuracao financeira (secao 4-B.6). `updated` e sempre 0: e insert-only. */
   paymentDiscounts: Tally;
   resources: Tally;
+  /** Insert-only desde 01/09: `updated` e sempre 0. Ver o bloco de experiences. */
   experiences: Tally;
   operatingHours: Tally;
   resourceIds: { id: number; name: string }[];
   experienceIds: { id: number; name: string; priceCents: number }[];
   orphans: string[];
+  /**
+   * O banco diverge do template, e o seed NAO corrigiu — porque aquele bloco e
+   * insert-only.
+   *
+   * ==========================================================================
+   * >>> RELATO NEUTRO, NAO ALARME. NAO TRANSFORME ISTO EM console.error. <<<
+   *
+   * Depois da primeira edicao do dono, divergencia e o estado NORMAL e
+   * PERMANENTE — e o que a autonomia significa. Um aviso que dispara sempre nao
+   * e aviso, e fundo: a regra e da secao 8-B, e nasceu do reconciliador que
+   * gritava a cada 10 minutos sobre estado esperado ate ninguem mais ler o log.
+   *
+   * O valor disto nao e vigiar o dono. E ser o DIFF que o dev precisa quando for
+   * investigar "por que producao nao e o template" — e o que mantem o template
+   * util como documentacao em vez de ficcao.
+   * ==========================================================================
+   */
+  divergences: string[];
   tenantCreated: boolean;
 };
 
 /** 'HH:MM:SS' e 'HH:MM' viram 'HH:MM' — o Postgres devolve `time` com segundos. */
 const hhmm = (t: string) => t.slice(0, 5);
+
+/**
+ * Valor para a linha de divergencia. `null` sai como `(vazio)` e nao como a
+ * string "null": este relato e lido por gente, e "null" ao lado de um numero se
+ * confunde com o texto literal.
+ */
+const fmt = (v: unknown) => (v === null || v === undefined ? '(vazio)' : String(v));
 
 /**
  * Aplica o template ao tenant e devolve o relatorio do que mudou.
@@ -124,6 +150,7 @@ export async function seedTenant(
       resourceIds: [],
       experienceIds: [],
       orphans: [],
+      divergences: [],
       tenantCreated: false,
     };
 
@@ -222,6 +249,32 @@ export async function seedTenant(
     // testes procuravam as experiencias por id fixo (1 e 2) e passaram a contar
     // zero. O seed fez o certo; quem estava errado era a suite, que agora
     // resolve as experiencias a partir DESTE MESMO template (tests/helpers/db.ts).
+    //
+    // ========================================================================
+    // >>> INSERT-ONLY DESDE 01/09. NAO ACRESCENTE UM `update` AQUI. <<<
+    //
+    // Ate essa data este bloco RECONCILIAVA os nove campos, e o dono editava
+    // preco, sinal ou idade no /admin/experiencias e via o valor voltar sozinho
+    // no proximo seed — sem erro e sem log. A tela existia, funcionava, e o
+    // seed a desfazia.
+    //
+    // >>> A MUDANCA FOI DE PREMISSA, NAO DE OPINIAO SOBRE SEGURANCA. <<<
+    // O Aventix e vendido para OUTRAS EMPRESAS. Se cada configuracao depender
+    // do dev, o produto nao escala — "proteger o cliente de si mesmo" na
+    // pratica significa o dev virar gargalo permanente de cada venda. A
+    // responsabilidade por baixar uma idade minima e do DONO, que e quem
+    // publica a regra e quem responde por ela. Ver docs/DECISOES.md (01/09).
+    //
+    // >>> A LINHA E "TEM TELA", E ELA VAI ANDAR. <<<
+    // `settings` e `resources` continuam reconciliando HOJE por NAO TEREM TELA,
+    // nao por decisao de que devam. Sem tela, tirar a reconciliacao troca um
+    // caminho ruim (editar template + deploy, que ao menos passa por revisao e
+    // fica no git) por um pior (psql em producao — secao 19).
+    //
+    // O DESTINO de todos eles e insert-only. A ordem e inviolavel:
+    // **TELA PRIMEIRO, insert-only JUNTO com ela, item a item.** Nunca antes,
+    // senao o valor fica sem caminho de conserto.
+    // ========================================================================
     const existingExperiences = await tx
       .select()
       .from(experiences)
@@ -237,10 +290,12 @@ export async function seedTenant(
         paymentMode: item.paymentMode,
         depositPercent: item.depositPercent ?? null,
         depositFixedCents: item.depositFixedCents ?? null,
-        // Entra na reconciliacao (e nao so no INSERT) de proposito: a idade
-        // minima e regra de SEGURANCA publicada pelo cliente, entao o template e
-        // a casa definitiva. Valor divergente no banco volta para o do template
-        // no proximo seed, como ja acontece com preco e duracao.
+        // >>> ENTRAVA na reconciliacao ate 01/09, com o argumento de que idade
+        // minima e regra de SEGURANCA e por isso o template seria a casa
+        // definitiva. REVERTIDO — ver docs/DECISOES.md (01/09). Em resumo: o
+        // CRUD ja expunha este campo, entao reconciliar fazia a tela mentir
+        // sobre uma regra de seguranca; e a responsabilidade por baixa-la e do
+        // DONO, nao do sistema.
         minPassengerAge: item.minPassengerAge,
         active: item.active,
       };
@@ -261,22 +316,32 @@ export async function seedTenant(
         continue;
       }
 
+      // >>> O PRECO DO BANCO, NAO O DO TEMPLATE. <<<
+      // Enquanto este bloco reconciliava, os dois eram o mesmo numero depois do
+      // seed e ler do template era inofensivo. Com insert-only deixaram de ser:
+      // imprimir `item.priceCents` faria o relatorio anunciar R$ 349,99 numa
+      // experiencia que o dono pos em R$ 379,00 — o seed relatando o preco que
+      // ele NAO gravou, logo acima do bloco que diz que os dois divergem.
       report.experienceIds.push({
         id: current.id,
         name: current.name,
-        priceCents: item.priceCents,
+        priceCents: current.priceCents,
       });
 
-      const differs = (Object.keys(desired) as (keyof typeof desired)[]).some(
+      const changed = (Object.keys(desired) as (keyof typeof desired)[]).filter(
         (k) => current[k] !== desired[k],
       );
 
-      if (differs) {
-        await tx.update(experiences).set(desired).where(eq(experiences.id, current.id));
-        report.experiences.updated += 1;
-      } else {
-        report.experiences.unchanged += 1;
+      if (changed.length > 0) {
+        for (const k of changed) {
+          report.divergences.push(
+            `experience "${item.name}".${k}: banco=${fmt(current[k])} template=${fmt(desired[k])}`,
+          );
+        }
       }
+      // INSERT-ONLY: nao ha `update` aqui, e a ausencia e o ponto. `unchanged`
+      // passa a significar "o seed nao tocou", como ja significa no desconto.
+      report.experiences.unchanged += 1;
     }
 
     const templateExperienceNames = new Set(template.experiences.map((e) => e.name));
@@ -342,7 +407,10 @@ export async function seedTenant(
     // cliente, e taxa chutada vira numero errado com aparencia de certo. Tabela
     // vazia significa "nao configurado", que e o estado honesto hoje.
     const [existingDiscount] = await tx
-      .select({ method: paymentMethodDiscounts.method })
+      .select({
+        method: paymentMethodDiscounts.method,
+        discountBasisPoints: paymentMethodDiscounts.discountBasisPoints,
+      })
       .from(paymentMethodDiscounts)
       .where(
         and(
@@ -359,6 +427,17 @@ export async function seedTenant(
       });
       report.paymentDiscounts.created += 1;
     } else {
+      // Este bloco e insert-only desde a Fase 0 e ate 01/09 divergia EM
+      // SILENCIO: o dono baixava o desconto para 5%, o seed nao mexia (certo) e
+      // nao dizia nada (a metade que faltava). Agora o relato existe para os
+      // dois blocos insert-only, pelo mesmo motivo e no mesmo tom.
+      if (existingDiscount.discountBasisPoints !== SEED_PIX_DISCOUNT_BASIS_POINTS) {
+        report.divergences.push(
+          `payment_method_discounts "pix".discountBasisPoints: ` +
+            `banco=${fmt(existingDiscount.discountBasisPoints)} ` +
+            `template=${fmt(SEED_PIX_DISCOUNT_BASIS_POINTS)}`,
+        );
+      }
       report.paymentDiscounts.unchanged += 1;
     }
 

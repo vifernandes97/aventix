@@ -106,6 +106,24 @@ async function primeiroSlot(experienceId = EXP.longa, resourcesNeeded = 1): Prom
 
 /** Liga o sinal na experiencia so durante `fn` (o catalogo real e 'full'). */
 async function comSinal<T>(experienceId: number, fn: () => Promise<T>): Promise<T> {
+  // >>> RESTAURA O QUE ENCONTROU, NUNCA 'full' FIXO. <<<
+  // Ate 01/09 o `finally` gravava 'full' literal. Aquilo casava com o template
+  // por coincidencia, e parou de casar quando o template passou a declarar
+  // 'deposit' — a divergencia so nao aparecia porque o seed do grupo T
+  // reconciliava o catalogo de volta. Com experiences insert-only essa muleta
+  // nao existe mais, e um helper que "restaura" para um valor inventado deixa o
+  // catalogo sujo para o proximo arquivo da suite.
+  const [antes] = (
+    await db.execute<{
+      payment_mode: 'full' | 'deposit';
+      deposit_percent: number | null;
+      deposit_fixed_cents: number | null;
+    }>(sql`
+      SELECT payment_mode::text, deposit_percent, deposit_fixed_cents
+      FROM experiences WHERE id = ${experienceId}
+    `)
+  ).rows;
+
   await db.execute(sql`
     UPDATE experiences SET payment_mode = 'deposit', deposit_percent = 50, deposit_fixed_cents = NULL
     WHERE id = ${experienceId}
@@ -114,7 +132,10 @@ async function comSinal<T>(experienceId: number, fn: () => Promise<T>): Promise<
     return await fn();
   } finally {
     await db.execute(sql`
-      UPDATE experiences SET payment_mode = 'full', deposit_percent = NULL, deposit_fixed_cents = NULL
+      UPDATE experiences
+      SET payment_mode = ${antes.payment_mode},
+          deposit_percent = ${antes.deposit_percent},
+          deposit_fixed_cents = ${antes.deposit_fixed_cents}
       WHERE id = ${experienceId}
     `);
   }

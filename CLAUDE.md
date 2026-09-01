@@ -1796,19 +1796,62 @@ continua no ar vendendo**. Do ponto de vista do cliente não há erro nenhum: el
 preenche, paga, e a cobrança não é criada. A falha só aparece quando alguém tenta
 entrar no admin, ou quando o dinheiro não chega.
 
-**Settings têm duas casas, e a definitiva é o template (descoberto em 21/08/2026).**
+**Settings e recursos têm duas casas, e a definitiva é o template (descoberto em 21/08/2026).**
+
+> **>>> ISTO VALE PARA `settings` E `resources`. NÃO VALE MAIS PARA
+> `experiences`. <<<** Desde 01/09 o bloco de experiências é **insert-only** —
+> ver o quadro logo abaixo.
 
 `seedTenant()` **sobrescreve** toda linha de `settings` cujo valor divirja de
-`lib/templates/quadriciclo.ts` (`lib/seed.ts`: se existe e difere, faz UPDATE).
-Um valor digitado direto no Postgres de produção sobrevive aos deploys — o boot
-só roda `migrate`, não semeia —, mas **some no dia em que alguém rodar o seed**,
-inclusive pela futura rota `POST /api/admin/seed`. Sem erro, sem log, e ninguém
-vai associar o sumiço ao seed que rodou por outro motivo.
+`lib/templates/quadriciclo.ts` (`lib/seed.ts`: se existe e difere, faz UPDATE), e
+faz o mesmo com `capacity` e `active` de `resources`. Um valor digitado direto no
+Postgres de produção sobrevive aos deploys — o boot só roda `migrate`, não
+semeia —, mas **some no dia em que alguém rodar o seed**, inclusive pela futura
+rota `POST /api/admin/seed`. Sem erro, sem log, e ninguém vai associar o sumiço
+ao seed que rodou por outro motivo.
 
 **Regra:** ao semear uma setting à mão em produção, escreva **também** no
 template. O banco é onde o valor passa a valer agora; o template é onde ele
 sobrevive. Descoberto ao adicionar `support_whatsapp`, que nasceu vazia
 justamente porque o número ainda não existe.
+
+#### O que o seed reconcilia e o que ele NÃO toca
+
+| Bloco | Comportamento | Por quê |
+|---|---|---|
+| `tenants` (nome, **slug**) | **insert-only** | slug é endereço público; renomear é migration |
+| `settings` (15 chaves) | **reconcilia** | **não tem tela** — ver a regra de ordem abaixo |
+| `resources` (capacity, active) | **reconcilia** | **não tem tela** |
+| `experiences` (9 campos) | **insert-only** desde 01/09 | tem tela (`/admin/experiencias`) |
+| `operating_hours` | insert-only de fato | a faixa inteira é a identidade |
+| `payment_method_discounts` | insert-only | tem tela (`/admin/financeiro`) |
+| `card_machine_rates` | não semeia | taxa chutada é número errado com cara de certo |
+| órfãos | só relata | pode ter reserva apontando |
+
+**>>> `settings` e `resources` reconciliam HOJE POR FALTA DE TELA, e não por
+decisão de que devam. <<<** O **destino de todos eles é insert-only**. A regra de
+ordem é inviolável:
+
+> **TELA PRIMEIRO, insert-only JUNTO com ela, item a item. Nunca antes.**
+
+Tirar a reconciliação de um campo **sem tela** piora a situação em vez de
+melhorar: hoje um valor errado se conserta editando o template e rodando o seed,
+o que ao menos passa por revisão e fica no git. Sem reconciliação e sem tela, o
+único caminho vira **psql em produção** — que esta mesma seção documenta como
+armadilha, com o console do Easypanel mentindo sobre `COMMIT`.
+
+**O seed RELATA o que não corrige.** Todo bloco insert-only compara com o
+template e, na divergência, imprime uma linha em `DIVERGEM DO TEMPLATE`. É
+**relato neutro, não alarme** — depois da primeira edição do dono, divergência é
+o estado normal e permanente, e aviso que dispara sempre vira fundo (a regra da
+seção 8-B). O valor dele é ser o **diff** de quem for investigar por que produção
+não é o template.
+
+**Consequência para a futura `POST /api/admin/seed`:** ela deixa de ser
+ferramenta de **reparo** e passa a ser de **criação**. "Rodar o seed para
+consertar" só funciona no que ainda reconcilia; em experiências e no desconto,
+o seed cria o que falta e relata o resto. Isto precisa estar claro **antes** de
+alguém contar com aquela rota para desfazer um erro.
 
 **Domínio novo no mesmo serviço herda `https://` no destino interno, quebra com 500.**
 Ao adicionar um host extra na aba Domains de um serviço já existente, o campo de

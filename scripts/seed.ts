@@ -29,8 +29,9 @@ function report(r: SeedReport) {
   line('resources', r.resources);
   line('experiences', r.experiences);
   line('operating_hours', r.operatingHours);
-  // Insert-only (secao 4-B.6): 'sem mudanca' aqui significa "o dono ja configurou,
-  // e o seed NAO tocou", nunca "o valor conferia com o codigo".
+  // Insert-only: 'sem mudanca' nestas duas linhas significa "o seed NAO tocou",
+  // nunca "o valor conferia com o codigo" — e por isso que `atualizados` e
+  // sempre 0 nelas. O que o banco tem de diferente sai no bloco de DIVERGENCIAS.
   line('desconto pix', r.paymentDiscounts);
 
   console.log('\n  RECURSOS');
@@ -44,6 +45,15 @@ function report(r: SeedReport) {
   if (r.orphans.length > 0) {
     console.log('\n  NAO ESTAO NO TEMPLATE (deixados intactos, nada foi apagado):');
     for (const orphan of r.orphans) console.log(`    ${orphan}`);
+  }
+
+  // >>> RELATO, NAO ALARME. <<< Depois da primeira edicao do dono, divergencia e
+  // o estado normal e permanente — e o que a autonomia significa. O texto abaixo
+  // e deliberadamente seco: nada de "ATENCAO", nada de vermelho. Ver o
+  // comentario de SeedReport.divergences em lib/seed.ts.
+  if (r.divergences.length > 0) {
+    console.log('\n  DIVERGEM DO TEMPLATE (insert-only: o seed nao corrigiu, e nao vai):');
+    for (const d of r.divergences) console.log(`    ${d}`);
   }
 }
 

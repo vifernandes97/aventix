@@ -137,8 +137,66 @@ const FAZENDA_PIX = 23_249;
 const FAZENDA_ENTRADA = 11_625;
 const FAZENDA_SALDO = 11_624;
 
+/**
+ * Garante que a experiencia NAO oferece sinal, restaurando depois.
+ *
+ * >>> DECLARA A PRECONDICAO EM VEZ DE ASSUMI-LA. <<<
+ * U3.2 dependia do catalogo estar em 'full' e passava por ACIDENTE DE ORDEM: o
+ * `comSinal` de um caso anterior gravava 'full' literal no `finally` e deixava a
+ * experiencia assim para o caso seguinte. Quando o `comSinal` passou a restaurar
+ * o valor que leu (01/09) e o template passou a declarar 'deposit', o acidente
+ * sumiu e o teste caiu — corretamente, porque ele nunca tinha estabelecido o
+ * estado que afirmava testar.
+ */
+async function semSinal<T>(experienceId: number, fn: () => Promise<T>): Promise<T> {
+  const [antes] = (
+    await db.execute<{
+      payment_mode: 'full' | 'deposit';
+      deposit_percent: number | null;
+      deposit_fixed_cents: number | null;
+    }>(sql`
+      SELECT payment_mode::text, deposit_percent, deposit_fixed_cents
+      FROM experiences WHERE id = ${experienceId}
+    `)
+  ).rows;
+
+  await db.execute(sql`
+    UPDATE experiences SET payment_mode = 'full', deposit_percent = NULL, deposit_fixed_cents = NULL
+    WHERE id = ${experienceId}
+  `);
+  try {
+    return await fn();
+  } finally {
+    await db.execute(sql`
+      UPDATE experiences
+      SET payment_mode = ${antes.payment_mode},
+          deposit_percent = ${antes.deposit_percent},
+          deposit_fixed_cents = ${antes.deposit_fixed_cents}
+      WHERE id = ${experienceId}
+    `);
+  }
+}
+
 /** Liga/desliga o sinal numa experiencia do catalogo, restaurando depois. */
 async function comSinal<T>(experienceId: number, fn: () => Promise<T>): Promise<T> {
+  // >>> RESTAURA O QUE ENCONTROU, NUNCA 'full' FIXO. <<<
+  // Ate 01/09 o `finally` gravava 'full' literal. Aquilo casava com o template
+  // por coincidencia, e parou de casar quando o template passou a declarar
+  // 'deposit' — a divergencia so nao aparecia porque o seed do grupo T
+  // reconciliava o catalogo de volta. Com experiences insert-only essa muleta
+  // nao existe mais, e um helper que "restaura" para um valor inventado deixa o
+  // catalogo sujo para o proximo arquivo da suite.
+  const [antes] = (
+    await db.execute<{
+      payment_mode: 'full' | 'deposit';
+      deposit_percent: number | null;
+      deposit_fixed_cents: number | null;
+    }>(sql`
+      SELECT payment_mode::text, deposit_percent, deposit_fixed_cents
+      FROM experiences WHERE id = ${experienceId}
+    `)
+  ).rows;
+
   await db.execute(sql`
     UPDATE experiences SET payment_mode = 'deposit', deposit_percent = 50, deposit_fixed_cents = NULL
     WHERE id = ${experienceId}
@@ -147,7 +205,10 @@ async function comSinal<T>(experienceId: number, fn: () => Promise<T>): Promise<
     return await fn();
   } finally {
     await db.execute(sql`
-      UPDATE experiences SET payment_mode = 'full', deposit_percent = NULL, deposit_fixed_cents = NULL
+      UPDATE experiences
+      SET payment_mode = ${antes.payment_mode},
+          deposit_percent = ${antes.deposit_percent},
+          deposit_fixed_cents = ${antes.deposit_fixed_cents}
       WHERE id = ${experienceId}
     `);
   }
@@ -307,17 +368,23 @@ describe('U3 a experiencia OFERECE, o cliente ESCOLHE', () => {
 
   it('U3.2 experiencia SEM sinal, cliente pedindo sinal: RECUSA, nunca rebaixa', async () => {
     // Rebaixar em silencio para integral cobraria o DOBRO do que a tela mostrou.
-    await expect(
-      createReservation(
-        reservationInput({
-          experienceId: EXP.longa, // segue em 'full'
-          startAt: await primeiroSlot(EXP.longa, 1),
-          resourcesNeeded: 1,
-          phone: '11944440021',
-          paymentMethodMode: 'deposit',
-        }),
-      ),
-    ).rejects.toBeInstanceOf(InvalidCompositionError);
+    //
+    // O `semSinal` e obrigatorio: o catalogo real oferece sinal nas duas trilhas
+    // (o template declara 'deposit' desde 01/09), entao a experiencia SEM sinal
+    // que este caso precisa nao existe por padrao e tem de ser estabelecida.
+    await semSinal(EXP.longa, async () => {
+      await expect(
+        createReservation(
+          reservationInput({
+            experienceId: EXP.longa,
+            startAt: await primeiroSlot(EXP.longa, 1),
+            resourcesNeeded: 1,
+            phone: '11944440021',
+            paymentMethodMode: 'deposit',
+          }),
+        ),
+      ).rejects.toBeInstanceOf(InvalidCompositionError);
+    });
   });
 
   it('U3.3 reserva em modo integral segue intacta — nada disto a afeta', async () => {
