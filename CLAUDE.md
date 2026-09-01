@@ -1397,6 +1397,20 @@ Um único login (o dono). Sem provider externo.
 
 ## 14. Estrutura de pastas
 
+> **>>> `[NAO CONSTRUIDO]` MARCA O QUE ESTA PREVISTO E NAO EXISTE. <<<**
+>
+> Esta seção é lida como **inventário** — por mim e por quem escrever qualquer
+> coisa a partir dela. Descrever software que não existe produz especificação
+> sobre software imaginário, e isso já custou tempo real três vezes em cinco
+> dias: a frase do Termo v2 prometendo antecipar o saldo, o levantamento da
+> `deposit_policy_text` supondo que faltava só a string, e a tela de cartão
+> recusado oferecendo um Pix que não existe.
+>
+> **A intenção do desenho fica** — ela vale, e apagá-la perderia o porquê. O que
+> muda é que "existe" e "está previsto" deixam de ser indistinguíveis.
+>
+> Auditado item a item contra o repositório em 01/09/2026.
+
 ```
 /app
   /(public)
@@ -1404,38 +1418,57 @@ Um único login (o dono). Sem provider externo.
     /agendamento/[slug]/page.tsx      # LP do tenant: experiencia → nº recursos → horario → participantes+doc → TERMO → pagamento
     /reserva/[id]/page.tsx            # QR + polling. FICA NA RAIZ, fora do slug (secao 2-B)
     /_components/meeting-point-map.tsx # iframe do mapa + link de fallback; some se a setting estiver vazia
-    /agenda/[token]/page.tsx          # agenda compartilhada (sem dados pessoais nem financeiros)
+    /agenda/[token]/page.tsx          # [NAO CONSTRUIDO] agenda compartilhada (secao 11.2).
+                                      # A TABELA shared_calendar_links existe no schema e NAO
+                                      # TEM UM UNICO CONSUMIDOR: ninguem a le, ninguem a
+                                      # escreve. A feature inteira esta por fazer
   /(admin)
     /admin/login/page.tsx
     /admin/page.tsx                   # CALENDARIO NATIVO (+ marcador de saldo em aberto). Abre o painel por ?reserva=id (aditivo ao clique)
     /admin/agendamentos/page.tsx      # lista consultavel de reservas: busca nome/telefone (ILIKE), filtros status/periodo; SOMENTE LEITURA; NAO exibe CPF/documento/contato
     /admin/_components/               # grade do calendario (dia/semana/mes) + painel de detalhe/cancelamento + balance-charge (botao Cobrar saldo) + admin-nav; `_` = pasta privada, nao vira rota
-    /admin/reservas/[id]/page.tsx     # detalhe como PAGINA, para link direto. O painel sobreposto (11.1) ja cobre o uso do dia a dia
-    /admin/clientes/page.tsx
+    /admin/reservas/[id]/page.tsx     # [NAO CONSTRUIDO] detalhe como PAGINA, para link direto.
+                                      # O painel sobreposto (11.1) cobre o uso do dia a dia, e e
+                                      # por isso que a ausencia nunca doeu
+    /admin/clientes/page.tsx          # [NAO CONSTRUIDO] o dono NAO TEM lista de clientes nem
+                                      # historico. GET /api/admin/customers tambem nao existe
     /admin/experiencias/page.tsx      # incl. modo de pagamento e sinal
-    /admin/recursos/page.tsx
+    /admin/recursos/page.tsx          # [NAO CONSTRUIDO] ultima entidade do catalogo sem CRUD.
+                                      # lib/resources.ts so tem listActiveResources(); o dono
+                                      # nao consegue somar um quadriciclo nem tirar um de
+                                      # circulacao
     /admin/excecoes/page.tsx          # excecoes de agenda; mostra o contraste "hoje x com a excecao"
     /admin/horarios/page.tsx          # grade semanal; avisa que apagar faixa NAO cancela reserva
     /admin/bloqueios/page.tsx
     /admin/financeiro/page.tsx        # desconto por metodo + taxas da maquininha (secao 4-B.6)
-    /admin/configuracoes/page.tsx
-    /admin/compartilhar/page.tsx
-    /admin/integracao/page.tsx        # saude do webhook / reconciliacao
+    /admin/configuracoes/page.tsx     # [NAO CONSTRUIDO] e com ela nenhuma das 15 chaves de
+                                      # `settings` e editavel pelo dono: mudar qualquer uma
+                                      # exige psql em producao (que o seed desfaz) ou deploy
+                                      # do template
+    /admin/compartilhar/page.tsx      # [NAO CONSTRUIDO] ver /agenda/[token] acima
+    /admin/integracao/page.tsx        # [NAO CONSTRUIDO] saude do webhook / reconciliacao
+                                      # (secao 8-B). Sem ela, fila de webhook parada so aparece
+                                      # pela reclamacao do cliente
   /api
     /availability/route.ts
     /experiences/route.ts             # catalogo PUBLICO: so ativas, sem `active` nem buffer_minutes
     /reservations/route.ts
     /reservations/[id]/status/route.ts # PUBLICA; so banco, no-store, sem dado pessoal (secao 7.1)
     /reservations/[id]/payment/route.ts # PUBLICA; QR atual do provedor, nunca cacheado
+    /health/route.ts                  # ping do banco; e o que o Easypanel consulta (secao 19)
     /webhooks/asaas/route.ts          # SEM redirect; responde 200 rapido (401 por token e a UNICA excecao)
-    /shared/[token]/agenda/route.ts
+    /shared/[token]/agenda/route.ts   # [NAO CONSTRUIDO] ver /agenda/[token] acima
     /admin/schedule-exceptions/       # + [id] (PUT/DELETE) e validation.ts de borda
     /admin/operating-hours/           # idem; recusa faixas sobrepostas (409)
     /admin/blackouts/                 # idem; horario LOCAL do tenant, sem fuso
     /admin/financial-config/          # + discounts/[method] e card-machine-rates(/[id])
     /admin/reservations/[id]/balance/  # GET so LE (nunca cria) + charge/ (POST, o botao)
                                       # + receive-in-cash/ (POST, maquininha — Fase D)
-    /admin/...                        # + balance/receive-in-cash (Fase D), integration/health
+    /admin/calendar/route.ts          # calendario nativo (secao 11.1)
+    /admin/experiences/                # + [id] (PATCH). NAO tem DELETE (secao 7.2)
+    /admin/reservations/[id]/          # detalhe + cancel/
+    /admin/login|logout/route.ts
+    /admin/integration/health          # [NAO CONSTRUIDO] par da tela /admin/integracao
 /lib
   /db/schema.ts
   /db/client.ts
@@ -1448,7 +1481,9 @@ Um único login (o dono). Sem provider externo.
   /reservation-status.ts              # estado PUBLICO da reserva (secao 7.1) — SERVER-ONLY; query estreita, NAO reusa reservation-detail
   /reservation-list.ts                # busca/listagem de reservas p/ /admin/agendamentos (SERVER-ONLY); query NAO busca CPF/documento/contato; tambem resolve o ?reserva= do calendario
   /experiences.ts                     # CRUD de experiencias + catalogo publico (secoes 7.1 e 7.2) — SERVER-ONLY
-  /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY; lar do CRUD de recursos
+  /resources.ts                       # leitura de recursos com capacity (secao 4.3) — SERVER-ONLY.
+                                      # SO listActiveResources(): o [NAO CONSTRUIDO] CRUD de
+                                      # recursos e para morar aqui quando existir
   /schedule-exceptions.ts             # CRUD de excecoes (secao 6) — SERVER-ONLY; TEM delete
   /operating-hours.ts                 # CRUD da grade semanal (secao 6) — SERVER-ONLY; recusa sobreposicao
   /blackouts.ts                       # CRUD de bloqueios (secao 6) — SERVER-ONLY; horario local -> UTC na borda
@@ -1479,7 +1514,9 @@ Um único login (o dono). Sem provider externo.
   /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao.
                                       # O ramo de REVERSAO (estorno/chargeback) vem ANTES da
                                       # idempotencia, de proposito — secao 4-B.9
-  /notifications.ts                   # Resend (assincrono) — Fase 4, ainda nao existe
+  /notifications.ts                   # [NAO CONSTRUIDO] Resend (assincrono). Cortado do
+                                      # go-live em 21/08; a tela `confirmed` de /reserva/[id] e
+                                      # a UNICA confirmacao que o cliente recebe (secao 9)
   /auth.ts
   /time.ts
 /scripts

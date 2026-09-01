@@ -704,6 +704,30 @@ export const reservationPayments = pgTable(
 );
 
 // -- agenda compartilhada (parceiros — secao 11.2) --------------------------
+//
+// ============================================================================
+// >>> TABELA SEM UM UNICO CONSUMIDOR. A FEATURE NAO FOI CONSTRUIDA. <<<
+//
+// Nada le e nada escreve nesta tabela: `grep sharedCalendarLinks` nao acha
+// ocorrencia fora deste arquivo. Faltam as tres pecas —
+// `app/(public)/agenda/[token]`, `app/api/shared/[token]/agenda` e a tela
+// `/admin/compartilhar` que emitiria o token —, todas marcadas [NAO CONSTRUIDO]
+// na secao 14 do CLAUDE.md.
+//
+// A tabela FICA. Ela e barata (nao referencia nem e referenciada por nada, e
+// nao entra em query nenhuma), e apaga-la custaria migration com perda do
+// desenho, para economizar sete colunas que ninguem paga.
+//
+// >>> ISTO ESTA ESCRITO AQUI PORQUE O SCHEMA E LIDO COMO INVENTARIO. <<<
+// Uma tabela definida com cuidado, comentada e com indice unico no token passa a
+// impressao de feature pronta — e quem for construir a agenda compartilhada
+// precisa saber que esta comecando do zero, nao ligando fios soltos. E o mesmo
+// motivo da marcacao na secao 14.
+//
+// Ao construir: token opaco (nanoid >= 32), `noindex`, rate-limit, revogavel, e
+// a pagina NUNCA exibe nome, telefone, documento, e-mail nem informacao
+// financeira — so ocupado/livre por recurso e horario (secao 11.2).
+// ============================================================================
 
 export const sharedCalendarLinks = pgTable('shared_calendar_links', {
   id: uuid('id').primaryKey().defaultRandom(),
