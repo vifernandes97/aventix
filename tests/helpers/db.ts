@@ -113,11 +113,17 @@ export const EXP_DEPOSIT_FIXED = 901;
  * esperado do sinal e do saldo.
  *
  * Estes numeros NAO sao o catalogo do Quadri Club — sao fixture da suite, e e
- * por isso que nao saem do template. O catalogo real tem as duas experiencias
- * em payment_mode 'full', entao o modo 'deposit' nao teria como ser exercitado
- * contra ele. Nomear os dois 17450 separadamente importa: um e o preco de uma
- * experiencia, o outro e metade do preco da outra, e a coincidencia numerica
- * escondia isso.
+ * por isso que nao saem do template.
+ *
+ * A razao original era que o catalogo real estava em `payment_mode: 'full'` e
+ * nao permitia exercitar o modo 'deposit'. Isso MUDOU em 01/09, quando o
+ * template passou a espelhar producao ('deposit' nas duas trilhas). A fixture
+ * continua existindo por outra razao, que sempre foi a mais forte: ela cobre o
+ * sinal por VALOR FIXO (`deposit_fixed_cents`), que o catalogo real nao usa e o
+ * CRUD nem expoe — sem ela aquele ramo do calculo ficaria sem teste.
+ *
+ * Nomear os dois 17450 separadamente importa: um e o preco de uma experiencia,
+ * o outro e metade do preco da outra, e a coincidencia numerica escondia isso.
  */
 export const DEPOSIT_PCT_FIXTURE = { priceCents: 34900, depositPercent: 50 };
 export const DEPOSIT_FIXED_FIXTURE = { priceCents: 17450, depositFixedCents: 99900 };

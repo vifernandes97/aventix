@@ -167,18 +167,47 @@ export const quadricicloTemplate: SegmentTemplate = {
   // E lembre da secao 19: o seed NAO RODA em producao. Mudar isto aqui nao muda
   // o banco de la sozinho — exige UPDATE manual, conferido por SELECT.
   //
-  // PAGAMENTO: as duas nascem em 'full' (cliente paga 100% no ato). O modo
-  // 'deposit' esta implementado ponta a ponta, mas ainda NAO foi confirmado se o
-  // Quadri Club vai usa-lo no lancamento.
+  // ==========================================================================
+  // >>> ESTES CAMPOS SAO RECONCILIADOS, NAO SEMEADOS. <<<
   //
-  // Para trocar uma experiencia para sinal, mude `paymentMode` para 'deposit' e
-  // preencha EXATAMENTE UM entre `depositPercent` e `depositFixedCents` — o
-  // CHECK do schema recusa zero ou os dois:
+  // Editar qualquer valor abaixo NAO e "configurar um tenant novo": e editar
+  // PRODUCAO no proximo seed. `seedTenant()` casa a experiencia POR NOME e faz
+  // UPDATE quando qualquer um destes nove campos diverge —
   //
-  //     paymentMode: 'deposit',
-  //     depositPercent: 50,          // 50% do total
-  //     // OU, em vez do percentual:
-  //     depositFixedCents: 5000,     // R$ 50,00 fixos
+  //     durationMinutes, bufferMinutes, priceMode, priceCents, paymentMode,
+  //     depositPercent, depositFixedCents, minPassengerAge, active
+  //
+  // — inclusive quando quem divergiu foi o DONO, pelo /admin/experiencias. A
+  // tela existe, funciona, e o seed a desfaz.
+  //
+  // >>> ISTO E REMENDO, NAO CONSERTO. <<<
+  // O conserto e parar o seed de sobrescrever o que o dono edita — semear o
+  // valor inicial e nunca reconciliar, como `payment_method_discounts` ja faz
+  // (ver o comentario de SEED_PIX_DISCOUNT_BASIS_POINTS em lib/seed.ts). Isso
+  // troca a casa definitiva do template para o BANCO, e e decisao de
+  // arquitetura propria, nao ajuste de valor. Enquanto nao for tomada, a unica
+  // defesa e este arquivo espelhar producao — e alguem lembrar de atualiza-lo
+  // junto de todo UPDATE manual.
+  //
+  // Ate 01/09 ele NAO espelhava: os dois `paymentMode` diziam 'full' enquanto
+  // producao estava em 'deposit' desde 28/08, quando o UPDATE foi feito a mao e
+  // o template nao acompanhou. Rodar o seed teria desligado o sinal de 50% das
+  // duas trilhas, sem erro e sem log.
+  // ==========================================================================
+  //
+  // PAGAMENTO: as duas aceitam SINAL. O cliente escolhe no wizard entre Pix
+  // integral, Pix com sinal de 50% e cartao (secao 4-B.2); o sinal so existe no
+  // Pix. `depositPercent: 50` NAO E OPCIONAL aqui: com `paymentMode: 'deposit'`
+  // e os dois campos de sinal nulos, o INSERT viola
+  // `experiences_deposit_mode_check` e o seed inteiro estoura.
+  //
+  // O percentual e travado em 50 para o produto (secao 4-B.2) e o CRUD nem o
+  // expoe — `depositColumns()` em lib/experiences.ts grava 50 fixo. Este 50 e o
+  // MESMO numero, por outra porta; se o sinal voltar a ser por experiencia, os
+  // dois lugares mudam juntos.
+  //
+  // Para tirar o sinal de uma experiencia: `paymentMode: 'full'` e os dois
+  // campos de sinal AUSENTES — o CHECK recusa 'full' com sinal preenchido.
   //
   // O saldo (total menos sinal) e cobrado no dia, presencialmente (secao 1).
   experiences: [
@@ -191,7 +220,9 @@ export const quadricicloTemplate: SegmentTemplate = {
       // No Pix (-7%) o cliente paga R$ 325,49 — o mesmo valor de sempre, agora
       // derivado em vez de digitado.
       priceCents: 34999,
-      paymentMode: 'full', // PROVISORIO — confirmar com o cliente
+      // Espelha producao desde 28/08 (o template so alinhou em 01/09).
+      paymentMode: 'deposit',
+      depositPercent: 50,
       // Publicado por escrito pelo cliente em 24/08/2026. Contado na DATA DO
       // PASSEIO, nao na da reserva (ver createReservation).
       minPassengerAge: 12,
@@ -205,7 +236,9 @@ export const quadricicloTemplate: SegmentTemplate = {
       // CHEIO R$ 249,99 por quadriciclo, confirmado pelo cliente em 28/08 —
       // encerra o "a confirmar" da rev 7. No Pix (-7%): R$ 232,49.
       priceCents: 24999,
-      paymentMode: 'full', // PROVISORIO — confirmar com o cliente
+      // Espelha producao desde 28/08 (o template so alinhou em 01/09).
+      paymentMode: 'deposit',
+      depositPercent: 50,
       // Publicado por escrito pelo cliente em 24/08/2026 (ver Trilha da Montanha).
       minPassengerAge: 6,
       active: true,

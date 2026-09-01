@@ -231,6 +231,13 @@ Container `aventix-db-dev` no ar. **10 migrations no disco, 10 aplicadas**
 `card_machine_rates` vazia: as fixtures da verificação em navegador foram
 apagadas ao final.
 
-**`payment_mode` local está em `full`** nas duas trilhas, diferente de produção,
-onde está `deposit`. Para exercitar sinal ou saldo localmente, ligue e desligue à
-mão, como faz o helper `comSinal` dos grupos U, V, W e Y.
+**`payment_mode` local está em `deposit` nas duas trilhas, igual a produção** —
+o template passou a espelhá-la em 01/09.
+
+**Consequência secundária, observada e NÃO corrigida:** o helper `comSinal` dos
+grupos U, V, W e Y restaura para `'full'` **fixo**, não para o valor que
+encontrou. Isso casava com o template antes de 01/09 e não casa mais, então uma
+rodada de testes pode deixar o catálogo local divergindo — até o grupo T, que
+chama `seedTenant()` de verdade, reconciliar de volta. Nenhum teste depende do
+estado inicial, então a suíte passa nas duas ordens; fica registrado porque é a
+mesma classe de afirmação envelhecida que esta sessão veio consertar.
