@@ -1069,3 +1069,73 @@ A decisão de 2026-08-09 — *"termo não tem CRUD nem editor no admin"* — **p
 **O que isso implica, e é por isso que a AUT-1 é a mais cara das quatro:** o termo **sai de `lib/terms/` e vai para o banco**, em tabela própria; **v1 e v2 migram** para lá preservando byte a byte o que já foi aceito; a **imutabilidade é imposta pelo BANCO** (trigger ou permissão), não por disciplina de código nem por comentário pedindo para não editar — porque a disciplina de código é justamente o que a tela remove; e **`tests/x-termo.test.ts` precisa ser repensado**, já que ele fixa o sha256 do v1 **do arquivo** e, com o texto no banco, aquele hash deixa de ter o que proteger. A proteção equivalente passa a ser o teste de que uma versão publicada não pode ser alterada.
 
 **Alternativa que será tentada e precisa ser recusada:** tela que edita o texto e "lembra" de bumpar a versão. Recusada porque põe a integridade do registro jurídico na mão de quem está com pressa, e porque a falha é **silenciosa** — nada quebra no dia da edição, e o problema só aparece quando alguém for provar o que um cliente aceitou.
+
+## 2026-09-02 — Cancelar reserva passa a cancelar a cobranca pendente, e o predicado e `state='pending'`
+
+`POST /api/admin/reservations/{id}/cancel` liberava a vaga e **nao tocava no Asaas**. O comentario que morava no arquivo dizia o porque — *"isso e Fase 2: hoje nenhuma cobranca chega a existir la"* — e **envelheceu literalmente**, em duas etapas: a cobranca do valor devido passou a nascer logo apos a criacao da reserva (`charge.ts`), e a do saldo passou a nascer sob demanda em 28/08 (Fase C). Enquanto o comentario permaneceu verdadeiro-por-escrito e falso-de-fato, **o cliente de uma reserva cancelada continuava conseguindo pagar**: o QR ja estava no WhatsApp dele, o dinheiro entrava na conta do tenant para um passeio que nao ia acontecer, e o estorno era manual, com taxa que nao volta.
+
+**>>> O PREDICADO E `state = 'pending' AND asaas_payment_id IS NOT NULL`, E NAO SE RAMIFICA POR `kind`. <<<** A tentacao e escrever "cancela a cobranca do saldo", porque foi o saldo que motivou a tarefa. Estaria errado: dependendo do estado, o que esta vivo e a cobranca do valor **integral**, ou a do **sinal**, ou a do **saldo**, ou nenhuma —
+
+| reserva | cobranca viva |
+|---|---|
+| `pending_payment` (full ou deposit) | a do DEVIDO; a de saldo sequer existe (nasce sob demanda) |
+| `confirmed` + `partial` | o sinal esta PAGO e nao se toca; o saldo esta vivo SE o dono o cobrou |
+| `confirmed` + `settled` | nenhuma |
+| linha `refunded` (chargeback, Fase E) | nenhuma |
+
+— e um predicado unico cobre os quatro sem enumera-los. **Ele tambem protege a politica da secao 4-C por construcao:** cobranca `paid` nunca e cancelada, e isso **nao e o Asaas recusando, e o sistema nao pedindo**. A distincao importa porque um cancelamento tentado-e-recusado deixaria log de erro e faria alguem investigar comportamento correto.
+
+**A borda 9 e inalcançavel por este caminho**, e vale registrar para ninguem "consertar" a ausencia: quando a criacao da cobranca falha, `charge.ts` ja marca a reserva `expired`, e `expired -> cancelled` nao existe em `ALLOWED_TRANSITIONS`.
+
+## 2026-09-02 — Este e o PRIMEIRO escritor de `reservation_payments.state = 'cancelled'` do projeto
+
+Levantado durante a investigacao e registrado porque e o tipo de fato que ninguem redescobre sem procurar: o valor `'cancelled'` existia no enum `payment_state` **desde a rev 6**, aparecia nos tipos de `reservation-detail.ts`, `reservation-status.ts` e `balance-charge.ts`, tinha rotulo pronto em `PAYMENT_STATE_LABEL` (`'cancelado'`) — e **nenhum caminho de codigo o produzia**. As linhas nasciam `'pending'` e ficavam `'pending'` para sempre numa reserva cancelada. Mesma situacao em que `received_in_cash` esteve ate a Fase D.
+
+**Consequencia pratica que a verificacao em navegador expos:** o rotulo estava certo esperando um valor que nunca chegava, entao ninguem nunca tinha visto aquela linha renderizar. Ela renderizou de primeira, correta — mas o painel exibia o valor **velho** (ver a entrada da verificacao, abaixo).
+
+**A linha local descreve a NOSSA decisao, nao o estado do provedor.** Por isso **todas** as linhas pendentes sao marcadas `'cancelled'`, **inclusive aquelas cujo cancelamento no provedor falhou**. Marcar so as confirmadas deixaria o banco heterogeneo por acidente de rede — dois registros identicos em significado com valores diferentes porque um timeout caiu no meio. **E nao cega o sistema para dinheiro que entre depois:** `processCharge` **converge** para o provedor, e seu `WHERE state <> 'paid'` marca a linha como paga do mesmo jeito, disparando o `refund_pending` da secao 8-C. Verificado antes de decidir, nao depois.
+
+**`charge_stage` NAO e tocado.** Ele e vocabulario de EXIBICAO escrito por `processCharge` a partir de uma LEITURA do provedor (secao 4-B.9). Grava-lo aqui inventaria um estagio que nao lemos e, no caso da falha, afirmaria `'cancelado'` sobre uma cobranca que continua pagavel. `Z5.2` trava isso.
+
+## 2026-09-02 — O provedor NAO PODE VETAR o cancelamento, e a falha vai para a TELA em vez de para uma fila
+
+Cancelamento e **operacao local e soberana**: a vaga precisa ser liberada mesmo com o Asaas fora do ar. Mesma postura da Fase D, e pela mesma razao — a falha do provedor deixa um trabalho manual de trinta segundos no painel dele, enquanto a falha do cancelamento local deixa um horario travado que ninguem consegue vender. **As cobrancas sao tentadas TODAS, independentemente, e o relato vem depois:** abortar na primeira falha deixaria a segunda pagavel sem nem ter sido tentada, e uma cobranca cancelada e estritamente melhor que zero.
+
+**Tres desfechos possiveis para a falha, e a escolha foi a TELA.**
+
+**Descartado: fila de retentativa.** `reconcilePayments` filtra `ne(reservations.status, 'cancelled')` **por decisao explicita da secao 8-B** — justamente para nao consultar para sempre cobranca de reserva que nao existe mais. Reintroduzi-las ali desfaria aquela regra e traria de volta o ruido que a Fase C removeu. Uma fila propria seria tabela + migration + cron para um evento raro com conserto manual trivial: nao se paga.
+
+**Descartado: so logar.** E a falha surda que ja mordeu este projeto tres vezes. O dono cancela no celular, em campo, e nao le log.
+
+**Escolhido: resultado tipado (`providerFailed`) + aviso em voz alta no painel**, no padrao exato do `providerCharge: 'falhou'` da Fase D. O dono esta com a tela aberta no instante do cancelamento; e o unico momento em que a informacao chega a quem pode agir.
+
+## 2026-09-02 — O cron de expirar holds tem a mesma mecanica e NAO e o mesmo bug: `expired` VOLTA, `cancelled` e TERMINAL
+
+**Escrito porque a proxima pessoa vai olhar os dois lugares, ver "o mesmo buraco em dois cantos", e consertar o que nao esta quebrado.**
+
+`expireHolds` tambem chama `setReservationStatus` e tambem nao toca no provedor. Mecanicamente identico. **Mas cancelar a cobranca na expiracao destruiria o pagamento tardio da secao 8.3**, e a assimetria e do desenho:
+
+- **`expired` VOLTA:** `ALLOWED_TRANSITIONS.expired = ['confirmed']`. O cliente abandona o checkout, paga o QR duas horas depois, e a reserva re-confirma se a vaga estiver livre. **Isso so funciona porque a cobranca continua viva.**
+- **`cancelled` e TERMINAL:** `ALLOWED_TRANSITIONS.cancelled = []`. Dinheiro que chega depois **nunca** vira reserva — so produz `refund_pending` e estorno manual.
+
+`reconcile-payments.ts` ja declarava a mesma distincao por escrito, e agora ela tem uma segunda testemunha: a varredura exclui `cancelled` e **mantem `expired` de proposito**, *"e exatamente ali que mora o Pix tardio"*.
+
+**A cobranca viva numa reserva expirada e a FEATURE, nao o bug.** Quem for "uniformizar" os dois caminhos precisa entender que estaria removendo um caminho de recuperacao de venda, e que **nada acusaria erro**: o cliente simplesmente pagaria um QR morto, ou nao pagaria nada.
+
+## 2026-09-02 — A verificacao em navegador achou de novo o que build verde e 288 testes nao acharam (quarta vez)
+
+O padrao ja nao e coincidencia. As tres anteriores: o 400 do duplo toque (Fase C), a faixa obsoleta do Financeiro (Fase D), o texto de cartao recusado prometendo um Pix inexistente (Fase E).
+
+**O achado desta vez foi criado pela propria tarefa.** O painel, ao cancelar, aplicava um patch otimista **so no `status`** (`setDetail({...current, status: 'cancelled'})`) e nao relia o detalhe. Isso era inofensivo enquanto o cancelamento nao mexia em dinheiro: as linhas de pagamento **de fato** continuavam `'pending'`, entao "Sinal · aguardando / Saldo · aguardando" era apenas velho e ainda verdadeiro. **Com esta tarefa passou a ser FALSO** — o banco marcava `'cancelled'` e a tela seguia dizendo "aguardando", na direcao pior: o dono le que ha dinheiro a receber de um passeio que acabou de cancelar.
+
+**Corrigido com uma releitura (`setReloadToken`) somada ao patch otimista**, nao no lugar dele: o patch vira o selo na hora e a releitura corrige o resto quando chega.
+
+**A licao de metodo, que e a que fica:** os 11 casos do grupo Z verificam o **banco** e o **provedor**, e estavam certos — nenhum deles poderia ter pego isto, porque o defeito estava no estado do CLIENTE React depois da resposta. **Teste prova comportamento; navegador prova o que a pessoa le.** E o corolario novo: **uma mudanca no servidor pode transformar em mentira uma tela que nao foi tocada.** O inventario do que uma tarefa quebra nao termina nos arquivos que ela edita.
+
+## 2026-09-02 — Um teste do grupo Z passou por acidente de ordem, e a mutacao foi quem contou
+
+Os 11 casos passaram de primeira, o que pela regra de 31/08 (ampliada em 01/09 para toda regra de dinheiro) obriga a mutacao. **Nove mutacoes, todas pegas.** Mas a de numero 5 — *"aborta na primeira falha do provedor em vez de tentar todas"* — revelou um defeito no **teste**, nao no codigo: `Z4.2` escolhia a cobranca que falharia **pelo id**, e so provava alguma coisa se a ordem do `RETURNING` colocasse aquele id primeiro. Com a ordem inversa, o caso passaria com a mutacao aplicada.
+
+**Corrigido fazendo o fake falhar a PRIMEIRA chamada, qualquer que ela seja**, e assertando `calls === 2` com `cancelled.length === 1` em vez de um id fixo. O caso passou a valer para qualquer ordem que o Postgres devolva.
+
+**E a mesma classe do `U3.2` de 01/09, por outra porta:** la o cenario dependia do que outro teste tinha deixado no catalogo; aqui a asercao dependia da ordem que o banco devolveu. **Nos dois, o verde nao provava o que afirmava** — e nos dois quem contou foi um procedimento, nunca a leitura do codigo.

@@ -86,6 +86,17 @@ export function ReservationPanel({
   const [typed, setTyped] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  /**
+   * Cobrancas que continuaram PAGAVEIS no Asaas depois do cancelamento.
+   *
+   * Vive fora do bloco de confirmacao de proposito: aquele bloco some no
+   * sucesso (`setConfirming(false)`, e `canCancel` vira falso), e este aviso
+   * precisa SOBREVIVER ao sucesso — ele so existe quando o cancelamento deu
+   * certo. E a unica notificacao que o dono recebe: nao ha retentativa
+   * automatica, porque o reconciliador exclui reservas canceladas por decisao
+   * explicita (secao 8-B).
+   */
+  const [cancelWarning, setCancelWarning] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -175,6 +186,7 @@ export function ReservationPanel({
         status?: string;
         error?: string;
         detail?: string;
+        providerFailed?: number;
       };
 
       if (!response.ok) {
@@ -188,10 +200,36 @@ export function ReservationPanel({
         return;
       }
 
+      // A reserva foi cancelada e a vaga liberada, mas o Asaas nao cancelou
+      // uma ou mais cobrancas — e elas continuam PAGAVEIS. Sem este aviso o
+      // cliente cancelado paga o QR que ja tem no WhatsApp, e o dinheiro entra
+      // na conta do tenant para um passeio que nao vai acontecer, com estorno
+      // manual e taxa que nao volta. Mesmo padrao do aviso da Fase D.
+      const failed = body.providerFailed ?? 0;
+      setCancelWarning(
+        failed > 0
+          ? `Reserva cancelada e ${labels.resourcePlural.toLowerCase()} liberados, mas ${
+              failed === 1 ? 'uma cobrança continua ativa' : `${failed} cobranças continuam ativas`
+            } no Asaas. Cancele por lá, senão o cliente ainda consegue pagar.`
+          : null,
+      );
+
       // Reflete no proprio painel ANTES de avisar a grade: o dono acabou de
       // digitar CANCELAR e precisa ver a confirmacao do que aconteceu, nao um
       // painel que se fecha sozinho.
       setDetail((current) => (current ? { ...current, status: 'cancelled' } : current));
+
+      // >>> E RELE O DETALHE, PORQUE O CANCELAMENTO AGORA MEXE NOS PAGAMENTOS.
+      // ACHADO NO NAVEGADOR, nao em teste: com o patch otimista sozinho, o
+      // painel continuava exibindo "Sinal · aguardando / Saldo · aguardando"
+      // numa reserva cancelada cujas linhas o banco ja tinha marcado
+      // 'cancelled'. Antes desta tarefa aquilo era apenas velho e ainda
+      // verdadeiro (as linhas de fato ficavam 'pending' para sempre); agora
+      // seria FALSO, e falso na direcao pior — o dono lendo "aguardando"
+      // conclui que ainda ha dinheiro a receber de um passeio que cancelou.
+      // O patch otimista fica: ele vira o selo na hora, e a releitura corrige
+      // o resto quando chega.
+      setReloadToken((token) => token + 1);
       setConfirming(false);
       setTyped('');
       onCancelled();
@@ -323,6 +361,16 @@ export function ReservationPanel({
                 </span>
               )}
             </div>
+
+            {/* -- cobranca que sobreviveu ao cancelamento ------------------- */}
+            {cancelWarning && (
+              <p
+                role="alert"
+                className="rounded-md border border-amber-500/60 bg-amber-50 p-3 text-xs font-medium text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+              >
+                {cancelWarning}
+              </p>
+            )}
 
             {/* -- passeio --------------------------------------------------- */}
             <Section title="Passeio">

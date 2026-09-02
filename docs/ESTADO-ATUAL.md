@@ -1,7 +1,7 @@
 # Estado atual: Aventix
 
 > Sobrescrito a cada sessão pelo `/fim-de-sessao`. Não acumular histórico aqui.
-> Última atualização: 2026-09-01
+> Última atualização: 2026-09-02
 
 ## Enquadramento (leia antes de priorizar qualquer coisa)
 
@@ -17,16 +17,15 @@ C, D e E concluídas: Pix integral, Pix com sinal de 50% e cartão de crédito.
 O link de agendamento continua não divulgado. Nada é urgente por cliente real;
 tudo é preparação para outubro, quando sai o vídeo do **@grandecampinas**.
 
-## Branch pronta, aguardando revisão (NÃO é pendência esquecida)
+## Branch em revisão: `feat/cancelar-cobranca` (NÃO mergeada)
 
-**`feat/seed-nao-sobrescreve` está COMPLETA e NÃO MERGEADA, por decisão do dono,
-que vai revisar depois.** Um commit (`08ed115`), suíte verde, banco zerado
-testado. **Não retomar como trabalho pela metade e não refazer.**
+**`feat/seed-nao-sobrescreve` FOI MERGEADA** — `origin/main` está em `6690b2d` e
+contém o `08ed115`. O bloco que dizia o contrário aqui estava desatualizado.
 
-O que ela faz: `experiences` vira **insert-only** no seed (antes reconciliava, e
-desfazia o que o dono editava no `/admin/experiencias`), e o seed passa a
-**relatar** o que não corrige. **Ela fecha a AUT-4 e é infraestrutura das outras
-três fases** — a regra "tela primeiro, insert-only junto" depende dela existir.
+**`feat/cancelar-cobranca` está COMPLETA e aguardando sua revisão.** Fecha o
+último buraco conhecido do fluxo de dinheiro: cancelar uma reserva agora cancela
+no Asaas **toda cobrança pendente** dela. Sem migration. Suíte verde (288 casos,
+26 arquivos), lint e build limpos, verificada no navegador contra o sandbox real.
 
 ## PRÓXIMO PASSO — as quatro fases de autonomia
 
@@ -85,7 +84,25 @@ habilitados no Asaas, e a experiência TESTE desativada.
   migra, e `scripts/` nem entra na imagem standalone), e insert-only é
   estritamente mais seguro que o comportamento anterior.
 
-## O que foi entregue nesta sessão
+## O que foi entregue na sessão de 02/09
+
+**Cancelar reserva cancela a cobrança pendente** (`lib/payments/cancel-charges.ts`,
+grupo Z, seção 7.2 e bordas 12-B/12-C do CLAUDE.md). Escrita local numa transação
+única, provedor depois do commit, falha do provedor **não veta** o cancelamento e
+sobe como `providerFailed` para o painel avisar em voz alta. Primeiro escritor de
+`reservation_payments.state = 'cancelled'` do projeto.
+
+**O cron de expirar holds ficou FORA do escopo, por motivo estrutural, não por
+tempo.** `expired` volta e `cancelled` é terminal — cancelar a cobrança na
+expiração destruiria o pagamento tardio da seção 8.3. Registrado em
+`docs/DECISOES.md` porque a leitura natural é "o mesmo buraco em dois cantos".
+
+**Achado no navegador (quarta vez que ele pega o que o teste não pega):** o painel
+mantinha "Sinal · aguardando / Saldo · aguardando" numa reserva cancelada cujas
+linhas já estavam `cancelled` no banco — a mudança no servidor transformou em
+mentira uma tela que a tarefa não tinha tocado.
+
+## O que foi entregue na sessão de 01/09
 
 **Levantamento de autonomia** (`docs/LEVANTAMENTO-AUTONOMIA.md`): tudo que o dono
 não controla sozinho, em três categorias, com classificação de risco por item. É
@@ -127,10 +144,10 @@ divergência é o estado **normal e permanente**.
 pendência do agente:** produção é ambiente de homologação, o link não foi
 divulgado, e a aprovação sai numa reunião. Está no board do Orbi.
 
-**3. Cancelar reserva não cancela a cobrança de saldo no Asaas.** O cliente
-cancelado ainda consegue pagar. **Destravada:** foi adiada para depois da Fase E
-justamente porque o chargeback toca a mesma região, e agora o quadro está
-completo.
+**3. ~~Cancelar reserva não cancela a cobrança de saldo no Asaas.~~ RESOLVIDA
+em 02/09**, na branch `feat/cancelar-cobranca` — e resolvida mais larga do que
+a pendência dizia: não é só o saldo, é **toda cobrança pendente** da reserva
+(a do valor integral, a do sinal, a do saldo — o que estiver vivo).
 
 **4. Percentuais da maquininha** não enviados pelo cliente.
 
@@ -139,6 +156,8 @@ completo.
 **Verificação em navegador**
 - Conferidas: agenda, painel de detalhe, financeiro, wizard público e as três
   telas de cartão (fatura, em análise, recusado).
+- Conferido em 02/09: cancelamento de reserva com cobrança pendente (as duas
+  contagens do aviso, singular e plural), contra o sandbox real.
 - Sem conferência: experiências, horários, bloqueios, exceções, clientes e
   agendamentos.
 - Método: cookie selado com `iron-session` a partir do `SESSION_SECRET` local,
@@ -186,7 +205,8 @@ completo.
   Precedente pronto na Fase C. Reavaliar antes do vídeo.
 - Sessão sem revogação (iron-session, 8h).
 - A âncora dos testes de lead time vence em junho de 2027.
-- Cancelamento e CRUD de experiências não têm teste automatizado.
+- CRUD de experiências não tem teste automatizado. (Cancelamento passou a ter:
+  grupo Z.)
 - E-mail cortado do go-live; a tela `confirmed` é a única confirmação ao cliente.
 - Precedência duplicada entre `lib/availability.ts` e `lib/calendar.ts:getDayGrid`.
 - Chave SSH do VPS não configurada; acesso por senha de root.
@@ -207,13 +227,16 @@ cartão ser recusado. Não existe caminho, e a tela deixou de prometer um.
 
 ## Testes
 
-`npm test`: **25 arquivos, 277 casos, todos passando** — inclusive **com o banco
-zerado** (`docker compose down -v`), que semeia 21 registros e passa direto.
+`npm test`: **26 arquivos, 288 casos, todos passando**.
 
 - Grupo **V** (Fase C) e **W** (Fase D) — validados por mutação.
 - Grupo **X** (termo, 9 casos) — sha256 do v1 fixado. **Precisa ser repensado na
   AUT-1**, quando o texto sair do repositório.
 - Grupo **Y** (Fase E, 23 casos) — **todos** validados por mutação (7 mutações).
+- Grupo **Z** (cancelamento, 11 casos) — validado por **9 mutações, todas
+  pegas**. Uma delas (abortar na primeira falha do provedor) revelou que `Z4.2`
+  dependia da ordem do `RETURNING`; o caso foi reescrito para valer em qualquer
+  ordem. Mesma classe do `U3.2` de 01/09, por outra porta.
 
 ## Banco local
 

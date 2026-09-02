@@ -1124,7 +1124,34 @@ sai** no corpo. Mesmas regras de 404 e de dado sensivel.
   sistema ainda considera em aberto. Gravar antes e falhar no cancelamento deixa
   o dinheiro corretamente registrado e uma cobrança a cancelar à mão — e a tela
   é obrigada a avisar (`providerCharge: 'falhou'`).
-- `POST /api/admin/reservations/{id}/cancel` — cancela reserva, libera vagas, **remove no Asaas a cobrança de saldo pendente**, marca pagamentos `cancelled`, e-mail ao cliente. Estorno do sinal é manual (seção 8-C).
+- **`POST /api/admin/reservations/{id}/cancel`** — cancela a reserva, libera as
+  vagas e **cancela no Asaas TODA cobrança pendente dela**
+  (`lib/payments/cancel-charges.ts`). E-mail ao cliente é Fase 4. Estorno é
+  manual (seção 8-C), e a política do tenant é **não devolver** (4-C).
+
+  **>>> NÃO É SÓ O SALDO, E O PREDICADO É `state='pending'`, NUNCA `kind`. <<<**
+  Dependendo do estado, o que está vivo é a cobrança do valor **integral**, a do
+  **sinal**, a do **saldo**, ou nenhuma — `pending_payment` tem a do devido viva
+  e a de saldo sequer criada; `confirmed`+`partial` tem o sinal **pago** (que não
+  se toca) e o saldo vivo só se o dono o cobrou. Um predicado único cobre os
+  quatro casos sem enumerá-los, e **exclui por construção** o que não pode ser
+  tocado: `paid` (4-C) e `refunded` (chargeback, 4-B.9). Cobrança paga **não é
+  sequer tentada** — não é o Asaas recusando, é o sistema não pedindo.
+
+  **>>> O PROVEDOR NÃO PODE VETAR O CANCELAMENTO. <<<** A vaga é liberada mesmo
+  com o Asaas fora do ar; as cobranças são tentadas **todas, independentemente**,
+  e o relato vem depois (abortar na primeira falha deixaria a segunda pagável sem
+  ter sido tentada). As linhas locais são marcadas `cancelled` **inclusive as que
+  falharam no provedor**: a linha descreve a **nossa decisão**, não o estado dele,
+  e marcar só as confirmadas deixaria o banco heterogêneo por acidente de rede.
+  Isso não cega o sistema — `processCharge` converge e registra dinheiro que
+  entre depois, com `refund_pending`.
+
+  Resposta `200` com `paymentsCancelled`, `providerCancelled` e **`providerFailed`
+  — que a tela é OBRIGADA a exibir em voz alta quando for > 0**, porque aquelas
+  cobranças continuam pagáveis e **não há retentativa automática**: o
+  reconciliador exclui reservas canceladas por decisão explícita da seção 8-B, e
+  o aviso no painel é o que substitui a fila. `404` e `409` inalterados.
 
 ---
 
@@ -1532,7 +1559,9 @@ Um único login (o dono). Sem provider externo.
                                       # tests/x-termo.test.ts
   /terms/quadriciclo-v2.ts            # VIGENTE (secao 10). Versao nova = arquivo novo, nunca
                                       # edita o antigo
-  /jobs/expire-holds.ts               # expiracao de hold (secao 12)
+  /jobs/expire-holds.ts               # expiracao de hold (secao 12). NAO cancela a cobranca no
+                                      # provedor, DE PROPOSITO: `expired` volta e e ali que mora
+                                      # o pagamento tardio (borda 12-C)
   /jobs/reconcile-payments.ts         # job de 10 min (secao 8-B); vizinho do expire-holds, mesmo padrao
   /templates/types.ts                 # forma de um template de segmento
   /templates/quadriciclo.ts           # o template do Quadri Club (secao 11-B)
@@ -1546,6 +1575,10 @@ Um único login (o dono). Sem provider externo.
   /payments/balance-charge.ts         # cobranca do SALDO sob demanda (secao 8-D) — SERVER-ONLY.
                                       # Tres camadas de idempotencia; withBalanceLock e o
                                       # PONTO UNICO onde a trava e tomada
+  /payments/cancel-charges.ts         # cancela a reserva E as cobrancas PENDENTES dela (secao
+                                      # 7.2) — SERVER-ONLY. Predicado `state='pending'`, nunca
+                                      # `kind`. PRIMEIRO escritor de
+                                      # reservation_payments.state='cancelled' do projeto
   /payments/process.ts                # FUNCAO UNICA usada pelo webhook E pela reconciliacao.
                                       # O ramo de REVERSAO (estorno/chargeback) vem ANTES da
                                       # idempotencia, de proposito — secao 4-B.9
@@ -1559,7 +1592,8 @@ Um único login (o dono). Sem provider externo.
   /hash-password.ts                   # gera o hash bcrypt do admin (npm run auth:hash)
   /seed-demo-reservations.ts          # movimento FALSO p/ ver o admin (npm run db:seed:demo) — NUNCA em producao
 /tests                                # integracao contra o Postgres local (Vitest).
-                                      # Grupo Y = cartao e chargeback (Fase E)
+                                      # Grupo Y = cartao e chargeback (Fase E);
+                                      # Grupo Z = cancelamento e cobranca pendente
 /drizzle
 /instrumentation.ts                   # fail-fast de auth e de pagamento + agenda os crons de hold (1 min) e reconciliacao (10 min)
 /proxy.ts                             # NAO pode redirecionar /api/webhooks/*
@@ -1589,6 +1623,8 @@ vitest.config.ts
 10. **Saldo não pago no dia** → passeio é decisão do dono (regra de negócio, não do software); sistema mantém saldo `pending` e sinaliza.
 11. **Saldo pago por fora** → `receiveInCash`; reserva nunca fica com pendência invisível.
 12. **Cancelamento com sinal pago** → cobrança de saldo removida, sinal marcado para estorno manual, política do termo aplicada.
+12-B. **Cancelamento com QUALQUER cobrança pendente** → toda cobrança `pending` da reserva é cancelada no Asaas e a linha vira `cancelled`; falha do provedor **não impede** o cancelamento e sobe como `providerFailed` para a tela avisar. Ver seção 7.2.
+12-C. **>>> Reserva que EXPIRA sozinha NÃO tem a cobrança cancelada, e isso é a FEATURE. <<<** `expired` **volta** (`ALLOWED_TRANSITIONS.expired = ['confirmed']`) e é exatamente por isso que o pagamento tardio da seção 8.3 funciona: o cliente abandona, paga o QR depois, e a reserva re-confirma se a vaga estiver livre. `cancelled` é **terminal**, então dinheiro que chega depois nunca vira reserva — só estorno manual. Quem "uniformizar" `expire-holds.ts` com o cancelamento **remove um caminho de recuperação de venda, e nada acusa erro**.
 13. **Estorno integral recusado (400)** por taxa/saldo → tratar e orientar o dono; não travar o cancelamento.
 14. **Sync reserva/alocação** → só via `setReservationStatus`.
 15. **Sync reserva/pagamentos** → só via `recalcReservationPayment`.

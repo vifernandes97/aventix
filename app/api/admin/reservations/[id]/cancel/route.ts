@@ -16,15 +16,15 @@
 //    chama e traduz InvalidReservationTransitionError em 409. Duas copias da
 //    mesma regra divergem com o tempo.
 //
-// 3. Cancelar NAO mexe no dinheiro. Ver as duas notas no corpo.
+// 3. Cancelar NAO ESTORNA — mas CANCELA a cobranca pendente. Ver a nota no corpo.
 
 import { NextResponse } from 'next/server';
 
+import { cancelReservationAndCharges } from '@/lib/payments/cancel-charges';
 import { isReservationId } from '@/lib/reservation-detail';
 import {
   InvalidReservationTransitionError,
   ReservationNotFoundError,
-  setReservationStatus,
 } from '@/lib/reservations';
 
 export const dynamic = 'force-dynamic';
@@ -40,7 +40,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   }
 
   try {
-    const result = await setReservationStatus(id, 'cancelled');
+    const result = await cancelReservationAndCharges(id);
 
     // ------------------------------------------------------------------
     // FASE 4 — E-MAIL DE CANCELAMENTO ENTRA AQUI (secao 9).
@@ -49,19 +49,25 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
-    // DINHEIRO — o que esta rota deliberadamente NAO faz (secoes 8-C e 15.12):
+    // DINHEIRO — o que foi COSTURADO e o que continua deliberadamente de fora.
     //
-    //   - NAO estorna. Estorno de Pix e operacao MANUAL do dono no painel do
-    //     Asaas, porque as taxas nao voltam e um estorno integral logo apos o
-    //     recebimento pode ser recusado com 400 por saldo insuficiente na conta
-    //     do tenant. Estorno automatico e pos go-live.
-    //   - NAO remove a cobranca de saldo no Asaas nem marca pagamentos como
-    //     'cancelled'. Isso e Fase 2: hoje nenhuma cobranca chega a existir la,
-    //     e as linhas de reservation_payments nascem 'pending' e assim ficam.
+    // O comentario que vivia aqui dizia que remover a cobranca era "Fase 2,
+    // hoje nenhuma cobranca chega a existir la". Aquilo era verdade quando foi
+    // escrito e envelheceu LITERALMENTE, em duas etapas: a cobranca do valor
+    // devido nasce logo apos a criacao da reserva (`charge.ts`), e a do saldo
+    // passou a nascer sob demanda em 28/08 (Fase C). Enquanto o comentario
+    // permaneceu, o dono cancelava, a vaga era liberada, e o cliente continuava
+    // conseguindo pagar uma reserva que nao existia mais.
     //
-    // Quando a Fase 2 entrar, este e o ponto de costura: remover a cobranca de
-    // 'balance' pendente, marcar os pagamentos 'cancelled' e sinalizar "estorno
-    // pendente" se havia sinal pago.
+    //   - CANCELA no Asaas toda cobranca PENDENTE da reserva e marca as linhas
+    //     como 'cancelled' (`lib/payments/cancel-charges.ts`). Nao e so o
+    //     saldo: dependendo do estado, o que esta vivo e a cobranca do valor
+    //     integral, a do sinal, a do saldo, ou nenhuma.
+    //   - NAO estorna, e isso NAO mudou. Estorno de Pix e operacao MANUAL do
+    //     dono no painel do Asaas (secao 8-C), porque as taxas nao voltam e um
+    //     estorno integral logo apos o recebimento pode ser recusado com 400 por
+    //     saldo insuficiente na conta do tenant. A politica do tenant e nao
+    //     devolver o sinal (secao 4-C). Cobranca ja PAGA nao e sequer tocada.
     // ------------------------------------------------------------------
 
     return NextResponse.json(
@@ -71,6 +77,18 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         previousStatus: result.previousStatus,
         /** Linhas de reservation_resources que sairam do estado ativo = vagas liberadas. */
         resourcesReleased: result.resourceRowsUpdated,
+        /** Linhas de reservation_payments que sairam de 'pending'. */
+        paymentsCancelled: result.paymentsCancelled,
+        providerCancelled: result.providerCancelled,
+        /**
+         * >>> A TELA E OBRIGADA A AVISAR EM VOZ ALTA QUANDO ISTO FOR > 0. <<<
+         * A reserva esta cancelada e a vaga liberada — mas estas cobrancas
+         * continuam PAGAVEIS, e o dono e o unico que pode consertar, no painel
+         * do Asaas. Nao ha retentativa automatica, de proposito: o
+         * reconciliador exclui reservas canceladas por decisao explicita da
+         * secao 8-B, e este numero na tela e o que substitui a fila.
+         */
+        providerFailed: result.providerFailed,
       },
       { status: 200 },
     );
